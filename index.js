@@ -1,6 +1,8 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 
 // --- SERVIDOR EXPRESS PARA KEEP-ALIVE Y QR (TRUCO RENDER) ---
 const app = express();
@@ -22,6 +24,7 @@ app.get('/', (req, res) => {
                         h1 { color: #128C7E; }
                         .qr-container { background: white; padding: 20px; display: inline-block; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
                         p { margin-top: 20px; color: #555; }
+                        .btn { display: inline-block; margin-top: 20px; padding: 10px 20px; background: #d9534f; color: white; text-decoration: none; border-radius: 5px; }
                     </style>
                 </head>
                 <body>
@@ -35,7 +38,64 @@ app.get('/', (req, res) => {
             </html>
         `);
     } else {
-        res.send('<h1>¡El bot está vivo y conectado! 🤖✅</h1><p>No hay código QR pendiente. El bot está listo para usarse.</p>');
+        res.send(`
+            <html>
+                <head>
+                    <title>Bot WhatsApp - Estado</title>
+                    <style>
+                        body { font-family: sans-serif; text-align: center; padding: 50px; background-color: #f0f2f5; }
+                        h1 { color: #128C7E; }
+                        p { color: #555; }
+                        .btn { display: inline-block; margin-top: 20px; padding: 10px 20px; background: #d9534f; color: white; text-decoration: none; border-radius: 5px; }
+                        .btn:hover { background: #c9302c; }
+                    </style>
+                </head>
+                <body>
+                    <h1>¡El bot está vivo y conectado! 🤖✅</h1>
+                    <p>No hay código QR pendiente. El bot está listo para usarse.</p>
+                    <br>
+                    <p>¿Tienes problemas? ¿El bot dice conectado pero no funciona?</p>
+                    <a href="/reset-session" class="btn">Reiniciar Sesión (Generar Nuevo QR)</a>
+                </body>
+            </html>
+        `);
+    }
+});
+
+// Ruta para forzar el reseteo de la sesión
+app.get('/reset-session', async (req, res) => {
+    try {
+        console.log('Solicitud de reseteo de sesión recibida.');
+        await client.destroy();
+        console.log('Cliente destruido.');
+        
+        const sessionPath = path.join(__dirname, '.wwebjs_auth');
+        if (fs.existsSync(sessionPath)) {
+            fs.rmSync(sessionPath, { recursive: true, force: true });
+            console.log('Carpeta de sesión eliminada.');
+        }
+        
+        qrCodeData = null;
+        client.initialize();
+        console.log('Cliente reinicializado.');
+        
+        res.send(`
+            <html>
+                <head>
+                    <title>Bot Reiniciado</title>
+                    <meta http-equiv="refresh" content="10;url=/">
+                    <style>body { font-family: sans-serif; text-align: center; padding: 50px; }</style>
+                </head>
+                <body>
+                    <h1>✅ Sesión eliminada correctamente</h1>
+                    <p>El bot se está reiniciando. Serás redirigido al inicio en 10 segundos para escanear el nuevo QR.</p>
+                    <a href="/">Volver al inicio ahora</a>
+                </body>
+            </html>
+        `);
+    } catch (error) {
+        console.error('Error al resetear sesión:', error);
+        res.status(500).send('Error al reiniciar sesión: ' + error.message);
     }
 });
 
