@@ -6,7 +6,8 @@ const {
     fetchLatestBaileysVersion,
     delay,
     Browsers,
-    proto
+    proto,
+    WAMessageStubType
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const express = require('express');
@@ -14,7 +15,6 @@ const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 
 // --- POLYFILL PARA CRYPTO (Node 18/20 Fix) ---
-// Baileys necesita 'crypto' global en algunas versiones
 if (!global.crypto) {
     global.crypto = require('crypto');
 }
@@ -23,7 +23,73 @@ if (!global.crypto) {
 const app = express();
 const PORT = process.env.PORT || 3000;
 let qrCodeData = null;
-let cachedCoordenadas = []; // CACHÉ JSON
+let cachedCoordenadas = []; 
+
+// --- COLA DE MENSAJES (QUEUE) ---
+// Procesamiento secuencial para efecto "escalera"
+const messageQueue = [];
+let isProcessingQueue = false;
+
+async function processQueue(sock) {
+    if (isProcessingQueue || messageQueue.length === 0) return;
+    isProcessingQueue = true;
+
+    while (messageQueue.length > 0) {
+        const { msg, remoteJid, idToFind, idNumbers } = messageQueue.shift();
+
+        try {
+            console.log(`[QUEUE] Procesando ID: ${idToFind} para ${remoteJid}`);
+
+            // 1. Mensaje de Aceptación
+            const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+            const date = new Date();
+            const formattedDate = `${date.getDate()} de ${months[date.getMonth()]}`;
+
+            const acceptanceText = `👨‍💻 \`\`\`SOLICITUD ACEPTADA\`\`\` 👨‍💻\n\n> Buscando 🔎\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
+            
+            // Enviamos mensaje inicial
+            const sentMsg = await sock.sendMessage(remoteJid, { text: acceptanceText }, { quoted: msg });
+
+            // Delay 5s (Efecto búsqueda)
+            await delay(5000);
+
+            // Buscar en Caché
+            const found = cachedCoordenadas.find(item => item.ID === idToFind);
+
+            if (found) {
+                const lat = found.Latitud || found.lat || 'No definida';
+                const long = found.Longitud || found.long || 'No definida';
+                const finalText = `👨‍💻 \`\`\`SOLICITUD ACEPTADA\`\`\` 👨‍💻\n\n> Buscando 🔎\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}\n\n📍 *Coordenadas Encontradas* 📍\n\n🆔 *ID:* ${idToFind}\n🌍 *Latitud:* ${lat}\n🌍 *Longitud:* ${long}`;
+
+                // Intentamos EDITAR el mensaje anterior para que aparezca todo en uno
+                await sock.sendMessage(remoteJid, { 
+                    text: finalText,
+                    edit: sentMsg.key 
+                });
+                
+                // Reacción final
+                await sock.sendMessage(remoteJid, { react: { text: '👨‍💻', key: sentMsg.key } });
+                
+            } else {
+                const notFoundText = `👨‍💻 \`\`\`SOLICITUD ACEPTADA\`\`\` 👨‍💻\n\n> Buscando 🔎\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}\n\n❌ No se encontraron coordenadas para el ID: ${idToFind}`;
+                
+                await sock.sendMessage(remoteJid, { 
+                    text: notFoundText,
+                    edit: sentMsg.key 
+                });
+            }
+
+            // Pequeña pausa entre mensajes de la cola para evitar saturación
+            await delay(1000);
+
+        } catch (err) {
+            console.error(`[QUEUE] Error procesando ${idToFind}:`, err);
+        }
+    }
+
+    isProcessingQueue = false;
+}
+
 
 // --- RUTAS WEB ---
 app.get('/', (req, res) => {
@@ -219,36 +285,9 @@ async function startBot() {
                     // Simular Escribiendo
                     await sock.sendPresenceUpdate('composing', remoteJid);
 
-                    // 1. Mensaje de Aceptación
-                    const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-                    const date = new Date();
-                    const formattedDate = `${date.getDate()} de ${months[date.getMonth()]}`;
-
-                    const acceptanceText = `👨‍💻 \`\`\`SOLICITUD ACEPTADA\`\`\` 👨‍💻\n\n> Buscando 🔎\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
-                    
-                    // Enviar mensaje inicial
-                    const sentMsg = await sock.sendMessage(remoteJid, { text: acceptanceText }, { quoted: msg });
-
-                    // Delay 5s
-                    await delay(5000);
-
-                    // Buscar en Caché
-                    const found = cachedCoordenadas.find(item => item.ID === idToFind);
-
-                    if (found) {
-                        const lat = found.Latitud || found.lat || 'No definida';
-                        const long = found.Longitud || found.long || 'No definida';
-                        const finalText = `📍 *Coordenadas Encontradas* 📍\n\n🆔 *ID:* ${idToFind}\n🌍 *Latitud:* ${lat}\n🌍 *Longitud:* ${long}`;
-
-                        // Reaccionar
-                        await sock.sendMessage(remoteJid, { react: { text: '👨‍💻', key: msg.key } });
-
-                        // Responder citando el mensaje de aceptación
-                        await sock.sendMessage(remoteJid, { text: finalText }, { quoted: sentMsg });
-                        
-                    } else {
-                        await sock.sendMessage(remoteJid, { text: `❌ No se encontraron coordenadas para el ID: ${idToFind}` }, { quoted: sentMsg });
-                    }
+                    // AÑADIR A LA COLA
+                    messageQueue.push({ msg, remoteJid, idToFind, idNumbers });
+                    processQueue(sock); // Iniciar procesamiento si no está corriendo
                 }
             } catch (err) {
                 console.error('Error procesando mensaje:', err);
