@@ -57,73 +57,17 @@ app.get('/', (req, res) => {
                 <body>
                     <h1>¡El bot está vivo y conectado! 🤖✅</h1>
                     <p>No hay código QR pendiente. El bot está listo para usarse.</p>
-                    <br>
-                    <p>¿Tienes problemas? ¿El bot dice conectado pero no funciona?</p>
-                    <a href="/reset-session" class="btn">Reiniciar Sesión (Generar Nuevo QR)</a>
                 </body>
             </html>
         `);
     }
 });
 
-// Ruta para forzar el reseteo de la sesión
+// Ruta para forzar el reseteo de la sesión (SIMPLE)
 app.get('/reset-session', async (req, res) => {
-    try {
-        console.log('Solicitud de reseteo de sesión recibida.');
-        
-        // Intentar cerrar el cliente si está abierto
-        try {
-            await client.destroy();
-            console.log('Cliente destruido.');
-        } catch (err) {
-            console.error('Error al destruir cliente (continuando):', err);
-        }
-        
-        // Eliminar carpetas de sesión y caché
-        const sessionPath = path.join(__dirname, '.wwebjs_auth');
-        const cachePath = path.join(__dirname, '.wwebjs_cache');
-        
-        try {
-            if (fs.existsSync(sessionPath)) {
-                fs.rmSync(sessionPath, { recursive: true, force: true });
-                console.log('Carpeta de sesión eliminada.');
-            }
-            if (fs.existsSync(cachePath)) {
-                fs.rmSync(cachePath, { recursive: true, force: true });
-                console.log('Carpeta de caché eliminada.');
-            }
-        } catch (err) {
-            console.error('Error al eliminar archivos de sesión:', err);
-        }
-        
-        qrCodeData = null;
-        
-        res.send(`
-            <html>
-                <head>
-                    <title>Bot Reiniciando</title>
-                    <meta http-equiv="refresh" content="30;url=/">
-                    <style>body { font-family: sans-serif; text-align: center; padding: 50px; }</style>
-                </head>
-                <body>
-                    <h1>✅ Sesión eliminada correctamente</h1>
-                    <p>El servidor se está reiniciando por completo para garantizar un inicio limpio.</p>
-                    <p>Por favor, espera 30 segundos y la página se recargará automáticamente para mostrarte el nuevo código QR.</p>
-                    <a href="/">Recargar manualmente</a>
-                </body>
-            </html>
-        `);
-        
-        // Forzar reinicio del contenedor (Render lo volverá a levantar automáticamente)
-        console.log('Reiniciando proceso en 5 segundos...');
-        setTimeout(() => {
-            process.exit(0);
-        }, 5000);
-        
-    } catch (error) {
-        console.error('Error al resetear sesión:', error);
-        res.status(500).send('Error al reiniciar sesión: ' + error.message);
-    }
+    // Solo mostramos mensaje, el reseteo real debe ser manual desde Render con "Clear Cache"
+    // para evitar crashes por memoria.
+    res.send('Para reiniciar completamente, usa la opción "Manual Deploy > Clear build cache & deploy" en el panel de Render.');
 });
 
 app.listen(PORT, () => {
@@ -131,10 +75,11 @@ app.listen(PORT, () => {
 });
 // -------------------------------------------------------
 
-// Configuración del cliente con LocalAuth y argumentos de Puppeteer para estabilidad
+// Configuración del cliente con LocalAuth y argumentos de Puppeteer OPTIMIZADOS para Render (Free Tier)
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
+        headless: true,
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -142,7 +87,22 @@ const client = new Client({
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--disable-gpu'
+            '--single-process', // Importante para ahorrar RAM
+            '--disable-gpu',
+            '--disable-extensions',
+            '--disable-component-extensions-with-background-pages',
+            '--disable-default-apps',
+            '--mute-audio',
+            '--no-default-browser-check',
+            '--autoplay-policy=user-gesture-required',
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-notifications',
+            '--disable-background-networking',
+            '--disable-breakpad',
+            '--disable-component-update',
+            '--disable-domain-reliability',
+            '--disable-sync'
         ]
     }
 });
