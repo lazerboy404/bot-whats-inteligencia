@@ -1,7 +1,9 @@
-FROM node:18-slim
+FROM node:20-slim
 
-# Instalamos git por si acaso, pero NO instalamos chrome/puppeteer para ahorrar espacio
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+# Instalar dependencias del sistema necesarias
+RUN apt-get update && apt-get install -y \
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/app
 

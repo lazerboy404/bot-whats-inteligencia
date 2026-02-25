@@ -13,6 +13,12 @@ const express = require('express');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 
+// --- POLYFILL PARA CRYPTO (Node 18/20 Fix) ---
+// Baileys necesita 'crypto' global en algunas versiones
+if (!global.crypto) {
+    global.crypto = require('crypto');
+}
+
 // --- CONFIGURACIÓN SERVIDOR (Render Keep-Alive) ---
 const app = express();
 const PORT = process.env.PORT || 3000;
