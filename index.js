@@ -5,6 +5,7 @@ const {
     makeCacheableSignalKeyStore,
     fetchLatestBaileysVersion,
     delay,
+    Browsers,
     proto
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
@@ -43,6 +44,7 @@ app.get('/', (req, res) => {
                     <h1>✅ Bot Conectado y Listo</h1>
                     <p>Memoria JSON: ${cachedCoordenadas.length} registros cargados.</p>
                     <p>Uso de RAM: ${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)} MB</p>
+                    <p>Si no responde, revisa los logs en Render.</p>
                 </body>
             </html>
         `);
@@ -72,10 +74,11 @@ async function startBot() {
     // Auth State
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     const { version } = await fetchLatestBaileysVersion();
+    console.log(`Usando Baileys v${version.join('.')}`);
 
     const sock = makeWASocket({
         version,
-        logger: pino({ level: 'silent' }), // Silencioso para ahorrar logs
+        logger: pino({ level: 'info' }), // Habilitamos logs INFO para depurar
         printQRInTerminal: true, // QR en consola
         auth: {
             creds: state.creds,
@@ -83,8 +86,11 @@ async function startBot() {
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
         },
         generateHighQualityLinkPreview: true,
-        browser: ['Bot Baileys', 'Chrome', '1.0.0'], // Navegador falso
-        syncFullHistory: false // Ahorra memoria al no sincronizar todo el historial antiguo
+        // Usamos la configuración de navegador recomendada para Ubuntu/Linux (Render)
+        browser: Browsers.ubuntu('Chrome'), 
+        syncFullHistory: false, // Ahorra memoria al no sincronizar todo el historial antiguo
+        markOnlineOnConnect: true, // Marcar online al conectar
+        defaultQueryTimeoutMs: 60000, // Aumentar timeout a 60s
     });
 
     // Eventos de Conexión
@@ -98,11 +104,26 @@ async function startBot() {
 
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('Conexión cerrada. Reconectando:', shouldReconnect);
+            
+            // Loguear el error exacto
+            const errorCode = (lastDisconnect.error)?.output?.statusCode;
+            const errorReason = (lastDisconnect.error)?.output?.payload?.error || (lastDisconnect.error)?.message;
+            console.error(`Conexión cerrada. Código: ${errorCode}, Razón: ${errorReason}`);
+            console.log('¿Debería reconectar?:', shouldReconnect);
+
             if (shouldReconnect) {
-                startBot();
+                // Si es un error 515 (Stream Error), a veces es mejor esperar un poco
+                if (errorCode === 515) {
+                    console.log('Error de Stream (515). Esperando 5s antes de reintentar...');
+                    setTimeout(startBot, 5000);
+                } else {
+                    startBot();
+                }
             } else {
-                console.log('Sesión cerrada. Borra la carpeta auth_info_baileys y reinicia.');
+                console.log('Sesión cerrada permanentemente (Logged Out). Borra la carpeta auth_info_baileys y reinicia.');
+                // Opcional: Borrar carpeta automáticamente
+                fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+                startBot(); // Reiniciar para generar nuevo QR
             }
         } else if (connection === 'open') {
             console.log('✅ BOT CONECTADO A WHATSAPP');
@@ -118,94 +139,92 @@ async function startBot() {
         if (type !== 'notify') return;
 
         for (const msg of messages) {
-            if (!msg.message) continue;
-            // Ignorar mensajes propios
-            if (msg.key.fromMe) continue;
+            try {
+                if (!msg.message) continue;
+                // Ignorar mensajes propios y mensajes de estado
+                if (msg.key.fromMe) continue;
+                if (msg.message.protocolMessage) continue;
+                if (msg.message.reactionMessage) continue;
 
-            // Extraer texto
-            const msgType = Object.keys(msg.message)[0];
-            const text = msgType === 'conversation' 
-                ? msg.message.conversation 
-                : msgType === 'extendedTextMessage' 
-                    ? msg.message.extendedTextMessage.text 
-                    : '';
+                // Extraer texto
+                const msgType = Object.keys(msg.message)[0];
+                const text = msgType === 'conversation' 
+                    ? msg.message.conversation 
+                    : msgType === 'extendedTextMessage' 
+                        ? msg.message.extendedTextMessage.text 
+                        : '';
 
-            if (!text) continue;
-            const remoteJid = msg.key.remoteJid;
+                if (!text) continue;
+                const remoteJid = msg.key.remoteJid;
 
-            // --- COMANDOS ---
-            
-            // Ping
-            if (text === '.ping') {
-                await sock.readMessages([msg.key]); // Marcar leído (Blue check)
-                await sock.sendMessage(remoteJid, { text: 'pong!' }, { quoted: msg });
-            }
+                console.log(`Mensaje recibido de ${remoteJid}: ${text.substring(0, 50)}...`);
 
-            // Menu
-            if (text === '.menuprincipal') {
-                await sock.sendMessage(remoteJid, { text: 'Bot Baileys Activo y Ligero ⚡' }, { quoted: msg });
-            }
-
-            // --- BUSCADOR MC ---
-            const regex = /MC[:\s]*\d+/i;
-            const match = text.match(regex);
-
-            if (match) {
-                const idToFind = match[0].toUpperCase().replace(/[^A-Z0-9]/g, ''); // MC12345
-                const idNumbers = idToFind.replace('MC', '');
-
-                console.log(`[BUSCADOR] Solicitud: ${idToFind} de ${remoteJid}`);
-
-                if (idNumbers.length !== 5) {
-                    await sock.sendMessage(remoteJid, { text: 'ID NO EXISTE VERIFICAR .' }, { quoted: msg });
-                    continue;
-                }
-
-                // Simular Escribiendo
-                await sock.sendPresenceUpdate('composing', remoteJid);
-
-                // 1. Mensaje de Aceptación
-                const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-                const date = new Date();
-                const formattedDate = `${date.getDate()} de ${months[date.getMonth()]}`;
-
-                const acceptanceText = `👨‍💻 \`\`\`SOLICITUD ACEPTADA\`\`\` 👨‍💻\n\n> Buscando 🔎\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
+                // --- COMANDOS ---
                 
-                // Enviar mensaje inicial
-                const sentMsg = await sock.sendMessage(remoteJid, { text: acceptanceText }, { quoted: msg });
-
-                // Delay 5s
-                await delay(5000);
-
-                // Buscar en Caché
-                const found = cachedCoordenadas.find(item => item.ID === idToFind);
-
-                if (found) {
-                    const lat = found.Latitud || found.lat || 'No definida';
-                    const long = found.Longitud || found.long || 'No definida';
-                    const finalText = `📍 *Coordenadas Encontradas* 📍\n\n🆔 *ID:* ${idToFind}\n🌍 *Latitud:* ${lat}\n🌍 *Longitud:* ${long}`;
-
-                    // Reaccionar
-                    await sock.sendMessage(remoteJid, { react: { text: '👨‍💻', key: msg.key } });
-
-                    // IMPORTANTE: Baileys no permite "editar" mensajes de texto simple tan fácilmente como wwebjs en versiones antiguas,
-                    // pero sí enviar uno nuevo citando al anterior o al original.
-                    // Para mantener la consistencia con el pedido del usuario ("editar"), usaremos edit si es posible,
-                    // pero en Baileys la edición tiene quirks. Lo más seguro es enviar la respuesta citando el mensaje de "Aceptada".
-                    
-                    // Opción A: Enviar nuevo mensaje con resultado (Más seguro en Baileys)
-                    // Opción B: Intentar editar (protocolo edit). Probemos editar.
-                    await sock.sendMessage(remoteJid, { 
-                        text: finalText,
-                        edit: sentMsg.key 
-                    });
-                    
-                } else {
-                    await sock.sendMessage(remoteJid, { 
-                        text: `❌ No se encontraron coordenadas para el ID: ${idToFind}`,
-                        edit: sentMsg.key 
-                    });
+                // Ping
+                if (text === '.ping') {
+                    console.log('Respondiendo a .ping');
+                    await sock.readMessages([msg.key]); // Marcar leído (Blue check)
+                    await sock.sendMessage(remoteJid, { text: 'pong!' }, { quoted: msg });
                 }
+
+                // Menu
+                if (text === '.menuprincipal') {
+                    console.log('Respondiendo a .menuprincipal');
+                    await sock.sendMessage(remoteJid, { text: 'Bot Baileys Activo y Ligero ⚡' }, { quoted: msg });
+                }
+
+                // --- BUSCADOR MC ---
+                const regex = /MC[:\s]*\d+/i;
+                const match = text.match(regex);
+
+                if (match) {
+                    const idToFind = match[0].toUpperCase().replace(/[^A-Z0-9]/g, ''); // MC12345
+                    const idNumbers = idToFind.replace('MC', '');
+
+                    console.log(`[BUSCADOR] Solicitud: ${idToFind} de ${remoteJid}`);
+
+                    if (idNumbers.length !== 5) {
+                        await sock.sendMessage(remoteJid, { text: 'ID NO EXISTE VERIFICAR .' }, { quoted: msg });
+                        continue;
+                    }
+
+                    // Simular Escribiendo
+                    await sock.sendPresenceUpdate('composing', remoteJid);
+
+                    // 1. Mensaje de Aceptación
+                    const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+                    const date = new Date();
+                    const formattedDate = `${date.getDate()} de ${months[date.getMonth()]}`;
+
+                    const acceptanceText = `👨‍💻 \`\`\`SOLICITUD ACEPTADA\`\`\` 👨‍💻\n\n> Buscando 🔎\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
+                    
+                    // Enviar mensaje inicial
+                    const sentMsg = await sock.sendMessage(remoteJid, { text: acceptanceText }, { quoted: msg });
+
+                    // Delay 5s
+                    await delay(5000);
+
+                    // Buscar en Caché
+                    const found = cachedCoordenadas.find(item => item.ID === idToFind);
+
+                    if (found) {
+                        const lat = found.Latitud || found.lat || 'No definida';
+                        const long = found.Longitud || found.long || 'No definida';
+                        const finalText = `📍 *Coordenadas Encontradas* 📍\n\n🆔 *ID:* ${idToFind}\n🌍 *Latitud:* ${lat}\n🌍 *Longitud:* ${long}`;
+
+                        // Reaccionar
+                        await sock.sendMessage(remoteJid, { react: { text: '👨‍💻', key: msg.key } });
+
+                        // Responder citando el mensaje de aceptación
+                        await sock.sendMessage(remoteJid, { text: finalText }, { quoted: sentMsg });
+                        
+                    } else {
+                        await sock.sendMessage(remoteJid, { text: `❌ No se encontraron coordenadas para el ID: ${idToFind}` }, { quoted: sentMsg });
+                    }
+                }
+            } catch (err) {
+                console.error('Error procesando mensaje:', err);
             }
         }
     });
