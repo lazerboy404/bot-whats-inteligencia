@@ -32,6 +32,10 @@ app.get('/', (req, res) => {
                     <div class="qr-container">
                         <h2>Escanea este código:</h2>
                         <img src="https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qrCodeData)}" alt="QR Code">
+                        <p style="font-size: 12px; color: #777; margin-top: 10px; word-break: break-all;">
+                            <strong>Código Crudo (si la imagen falla, copia esto y usa un generador QR):</strong><br>
+                            ${qrCodeData}
+                        </p>
                     </div>
                     <p>Si ya lo escaneaste, espera unos segundos. Esta página se recargará sola.</p>
                 </body>
@@ -264,7 +268,11 @@ async function handleMessage(msg) {
 
 // Evento QR: Generar y mostrar el código QR en la terminal y en la web
 client.on('qr', (qr) => {
-    console.log('QR RECIBIDO', qr);
+    console.log('--------------------------------------------------------------------------------');
+    console.log('QR RECIBIDO (Copia el texto de abajo y pégalo en un generador QR):');
+    console.log(qr);
+    console.log('--------------------------------------------------------------------------------');
+    
     qrCodeData = qr; // Guardar el QR para mostrarlo en la web
     qrcode.generate(qr, { small: true });
     console.log('Escanea el código QR con tu WhatsApp o entra a la URL del bot.');
