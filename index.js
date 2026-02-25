@@ -9,6 +9,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 let qrCodeData = null; // Variable para almacenar el código QR
+let cachedCoordenadas = []; // CACHÉ: Almacenar el JSON en memoria para evitar descargas constantes
 
 app.get('/', (req, res) => {
     if (qrCodeData) {
@@ -57,6 +58,10 @@ app.get('/', (req, res) => {
                 <body>
                     <h1>¡El bot está vivo y conectado! 🤖✅</h1>
                     <p>No hay código QR pendiente. El bot está listo para usarse.</p>
+                    <p><strong>Estado del sistema:</strong></p>
+                    <ul style="list-style-type: none; padding: 0;">
+                        <li>Coordenadas en memoria: ${cachedCoordenadas.length > 0 ? '✅ Cargadas (' + cachedCoordenadas.length + ' registros)' : '❌ No cargadas (intentando...)'}</li>
+                    </ul>
                 </body>
             </html>
         `);
@@ -194,13 +199,25 @@ async function handleMessage(msg) {
             await new Promise(resolve => setTimeout(resolve, 5000)); // Espera de 5 segundos
             console.log('[DEBUG] Paso 6: Delay completado');
 
-            console.log('[BUSCADOR] Descargando JSON...');
-            const response = await fetch('https://raw.githubusercontent.com/lazerboy404/buscador-totems/main/coordenadas-script.json');
+            console.log('[BUSCADOR] Buscando en memoria caché...');
+            let data = cachedCoordenadas;
             
-            if (!response.ok) throw new Error(`Error HTTP: ${response.status}`);
-            
-            const data = await response.json();
-            console.log(`[BUSCADOR] JSON descargado. ${data.length} registros.`);
+            // Si por alguna razón la caché está vacía, intentar descargar (FALLBACK DE EMERGENCIA)
+            if (data.length === 0) {
+                console.warn('[BUSCADOR] ⚠️ Caché vacía, intentando descarga de emergencia...');
+                try {
+                    const response = await fetch('https://raw.githubusercontent.com/lazerboy404/buscador-totems/main/coordenadas-script.json');
+                    if (!response.ok) throw new Error(`Error HTTP: ${response.status}`);
+                    data = await response.json();
+                    cachedCoordenadas = data; // Guardar para la próxima
+                    console.log(`[BUSCADOR] JSON descargado y guardado. ${data.length} registros.`);
+                } catch (fetchError) {
+                    console.error('[BUSCADOR] ❌ Error en descarga de emergencia:', fetchError);
+                    throw new Error('No se pudo acceder a la base de datos de coordenadas.');
+                }
+            } else {
+                console.log(`[BUSCADOR] ✅ Usando caché (${data.length} registros).`);
+            }
 
             // Buscar el ID exacto
             const found = data.find(item => item.ID === idToFind);
@@ -272,8 +289,30 @@ client.on('message', async msg => {
     processQueue();
 });
 
+// Función para cargar las coordenadas al inicio (Caché)
+async function loadCoordenadas() {
+    console.log('[SISTEMA] Iniciando descarga de coordenadas para caché...');
+    try {
+        const response = await fetch('https://raw.githubusercontent.com/lazerboy404/buscador-totems/main/coordenadas-script.json');
+        if (!response.ok) throw new Error(`Error HTTP: ${response.status}`);
+        
+        const data = await response.json();
+        if (Array.isArray(data)) {
+            cachedCoordenadas = data;
+            console.log(`[SISTEMA] ✅ Coordenadas cargadas en memoria. Total registros: ${data.length}`);
+        } else {
+            console.error('[SISTEMA] ❌ El JSON descargado no es un array válido.');
+        }
+    } catch (error) {
+        console.error('[SISTEMA] ❌ Error fatal cargando coordenadas:', error);
+        // Reintentar en 1 minuto si falla
+        setTimeout(loadCoordenadas, 60000);
+    }
+}
+
 // Inicializar el cliente
 console.log('Iniciando cliente de WhatsApp...');
+loadCoordenadas(); // Cargar coordenadas en paralelo al inicio
 client.initialize().then(() => {
     console.log('Cliente inicializado correctamente (esperando eventos...)');
 }).catch(err => {
