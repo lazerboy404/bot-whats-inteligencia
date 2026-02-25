@@ -1,18 +1,22 @@
 {
   "name": "bot-baileys",
   "version": "1.0.0",
+  "description": "Bot de WhatsApp usando @whiskeysockets/baileys (Optinizado para Render Free)",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "whatsapp",
+    "baileys",
+    "bot"
+  ],
+  "author": "Lazerboy404",
   "license": "ISC",
-  "description": "",
   "dependencies": {
-    "express": "^5.2.1",
+    "@whiskeysockets/baileys": "^6.6.0",
+    "pino": "^9.6.0",
     "qrcode-terminal": "^0.12.0",
-    "whatsapp-web.js": "^1.34.6"
+    "express": "^5.2.1"
   }
 }
