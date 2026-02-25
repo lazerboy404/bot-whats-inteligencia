@@ -25,11 +25,67 @@ const PORT = process.env.PORT || 3000;
 let qrCodeData = null;
 let cachedCoordenadas = []; 
 
-// --- COLA DE PROCESAMIENTO (QUEUE) ---
-// La cola ahora solo maneja la EDICIÓN y búsqueda, no el envío inicial.
+// --- COLAS DE PROCESAMIENTO (QUEUES) ---
+
+// Cola 1: ACK (Aceptación Inmediata pero Segura)
+// Objetivo: Responder "SOLICITUD ACEPTADA" rápido pero sin saturar (rate-limit)
+const ackQueue = [];
+let isProcessingAck = false;
+
+// Cola 2: PROCESSING (Edición Lenta)
+// Objetivo: Esperar 5s y editar el mensaje con las coordenadas
 const processingQueue = [];
 let isProcessingQueue = false;
 
+// Procesador de ACK (Envío inicial)
+async function runAckQueue(sock) {
+    if (isProcessingAck || ackQueue.length === 0) return;
+    isProcessingAck = true;
+
+    try {
+        while (ackQueue.length > 0) {
+            const { msg, remoteJid, idToFind } = ackQueue.shift();
+            
+            try {
+                // Simular Escribiendo
+                await sock.sendPresenceUpdate('composing', remoteJid);
+                
+                // Generar texto
+                const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+                const date = new Date();
+                const formattedDate = `${date.getDate()} de ${months[date.getMonth()]}`;
+                const acceptanceText = `👨‍💻 \`\`\`SOLICITUD ACEPTADA\`\`\` 👨‍💻\n\n> Buscando 🔎\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
+
+                // ENVIAR (Con reintento básico si falla por rate-limit)
+                let sentMsg;
+                try {
+                    sentMsg = await sock.sendMessage(remoteJid, { text: acceptanceText }, { quoted: msg });
+                } catch (sendError) {
+                    console.error(`[ACK-QUEUE] Error enviando a ${idToFind}, reintentando en 1s...`, sendError);
+                    await delay(1000);
+                    sentMsg = await sock.sendMessage(remoteJid, { text: acceptanceText }, { quoted: msg });
+                }
+
+                // Si se envió correctamente, pasar a la siguiente cola
+                if (sentMsg) {
+                    processingQueue.push({ sentMsg, userMsg: msg, remoteJid, idToFind });
+                    runProcessor(sock); // Disparar la cola de edición
+                }
+
+                // Delay de seguridad entre ACKs (evita rate-overlimit en ráfagas)
+                await delay(1000); 
+
+            } catch (err) {
+                console.error(`[ACK-QUEUE] Error fatal con ID ${idToFind}:`, err);
+            }
+        }
+    } finally {
+        isProcessingAck = false;
+        if (ackQueue.length > 0) runAckQueue(sock);
+    }
+}
+
+// Procesador de EDICIÓN (Búsqueda y Resultado)
 async function runProcessor(sock) {
     if (isProcessingQueue || processingQueue.length === 0) return;
     isProcessingQueue = true;
@@ -287,24 +343,10 @@ async function startBot() {
                         continue;
                     }
 
-                    // Simular Escribiendo
-                    await sock.sendPresenceUpdate('composing', remoteJid);
-
-                    // 1. ENVIAR "SOLICITUD ACEPTADA" INMEDIATAMENTE
-                    const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-                    const date = new Date();
-                    const formattedDate = `${date.getDate()} de ${months[date.getMonth()]}`;
-
-                    const acceptanceText = `👨‍💻 \`\`\`SOLICITUD ACEPTADA\`\`\` 👨‍💻\n\n> Buscando 🔎\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
-                    
-                    const sentMsg = await sock.sendMessage(remoteJid, { text: acceptanceText }, { quoted: msg });
-
-                    // 2. AÑADIR A LA COLA DE EDICIÓN (PROCESAMIENTO DIFERIDO)
-                    processingQueue.push({ sentMsg, userMsg: msg, remoteJid, idToFind });
-                    runProcessor(sock); 
-
-                    // Pequeño delay anti-flood después de enviar respuesta inicial
-                    await delay(300);
+                    // 1. AÑADIR A LA COLA DE ACK (Envío Inicial Seguro)
+                    // Ya no enviamos directamente con await sock.sendMessage() aquí para evitar rate-limit
+                    ackQueue.push({ msg, remoteJid, idToFind, idNumbers });
+                    runAckQueue(sock);
                 }
             } catch (err) {
                 console.error('Error procesando mensaje:', err);
