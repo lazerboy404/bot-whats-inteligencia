@@ -193,6 +193,19 @@ client.on('ready', () => {
     qrCodeData = null; // Limpiar el QR una vez conectado
 });
 
+// Evento de Autenticación Fallida: Forzar reinicio si falla
+client.on('auth_failure', msg => {
+    console.error('Fallo de autenticación', msg);
+    qrCodeData = null;
+});
+
+// Evento de Desconexión
+client.on('disconnected', (reason) => {
+    console.log('Cliente desconectado', reason);
+    qrCodeData = null;
+    client.initialize(); // Reintentar conexión
+});
+
 // Manejo de mensajes: Añadir a la cola y procesar
 client.on('message', async msg => {
     messageQueue.push(msg);
