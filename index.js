@@ -153,29 +153,47 @@ async function handleMessage(msg) {
         // Validar que tenga exactamente 5 dígitos
         if (idNumbers.length !== 5) {
             console.log(`[BUSCADOR] ID inválido (longitud ${idNumbers.length}): ${idToFind}`);
-            msg.reply('ID NO EXISTE VERIFICAR .');
+            await msg.reply('ID NO EXISTE VERIFICAR .').catch(err => console.error('Error enviando reply de error:', err));
             return;
         }
 
-        // Simular 'escribiendo' mientras busca
-        await chat.sendStateTyping();
-
-        // 1. Enviar mensaje de "SOLICITUD ACEPTADA"
-        const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-        const date = new Date();
-        const day = date.getDate();
-        const month = months[date.getMonth()];
-        const formattedDate = `${day} de ${month}`;
-
-        const acceptanceMessage = `👨‍💻 \`\`\`SOLICITUD ACEPTADA\`\`\` 👨‍💻\n\n> Buscando 🔎\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
-        const sentMessage = await msg.reply(acceptanceMessage);
-
-        // 2. Simular tiempo de búsqueda para mayor realismo
-        // Volver a poner estado 'escribiendo' y esperar unos segundos
-        await chat.sendStateTyping();
-        await new Promise(resolve => setTimeout(resolve, 5000)); // Espera de 5 segundos
-
         try {
+            // Simular 'escribiendo' mientras busca
+            console.log('[DEBUG] Paso 1: Intentando sendStateTyping...');
+            await chat.sendStateTyping();
+            console.log('[DEBUG] Paso 2: sendStateTyping enviado correctamente');
+
+            // 1. Enviar mensaje de "SOLICITUD ACEPTADA"
+            const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+            const date = new Date();
+            const day = date.getDate();
+            const month = months[date.getMonth()];
+            const formattedDate = `${day} de ${month}`;
+
+            const acceptanceMessage = `👨‍💻 \`\`\`SOLICITUD ACEPTADA\`\`\` 👨‍💻\n\n> Buscando 🔎\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
+            
+            console.log('[DEBUG] Paso 3: Intentando enviar mensaje de aceptación...');
+            let sentMessage;
+            try {
+                sentMessage = await msg.reply(acceptanceMessage);
+                console.log('[DEBUG] Paso 4: Mensaje de aceptación enviado (msg.reply)');
+            } catch (replyError) {
+                console.error('[DEBUG] Error en msg.reply, intentando sendMessage directo:', replyError);
+                sentMessage = await client.sendMessage(msg.from, acceptanceMessage);
+                console.log('[DEBUG] Paso 4b: Mensaje de aceptación enviado (client.sendMessage)');
+            }
+
+            if (!sentMessage) {
+                throw new Error('No se pudo enviar el mensaje de aceptación');
+            }
+
+            // 2. Simular tiempo de búsqueda para mayor realismo
+            // Volver a poner estado 'escribiendo' y esperar unos segundos
+            console.log('[DEBUG] Paso 5: Iniciando delay de 5 segundos...');
+            await chat.sendStateTyping().catch(e => console.error('Error en segundo sendStateTyping:', e));
+            await new Promise(resolve => setTimeout(resolve, 5000)); // Espera de 5 segundos
+            console.log('[DEBUG] Paso 6: Delay completado');
+
             console.log('[BUSCADOR] Descargando JSON...');
             const response = await fetch('https://raw.githubusercontent.com/lazerboy404/buscador-totems/main/coordenadas-script.json');
             
@@ -195,19 +213,24 @@ async function handleMessage(msg) {
                 const responseText = `📍 *Coordenadas Encontradas* 📍\n\n🆔 *ID:* ${idToFind}\n🌍 *Latitud:* ${lat}\n🌍 *Longitud:* ${long}`;
 
                 // Responder editando el mensaje original de "SOLICITUD ACEPTADA"
+                console.log('[DEBUG] Paso 7: Intentando editar mensaje...');
                 await sentMessage.edit(responseText);
                 console.log('[BUSCADOR] Respuesta editada.');
 
                 // Reaccionar al mensaje original del usuario
-                await msg.react('👨‍💻');
+                await msg.react('👨‍💻').catch(e => console.error('Error al reaccionar:', e));
                 console.log('[BUSCADOR] Reacción enviada.');
             } else {
                 console.log(`[BUSCADOR] ID ${idToFind} no encontrado en el JSON.`);
                 await sentMessage.edit(`❌ No se encontraron coordenadas para el ID: ${idToFind}`);
             }
         } catch (error) {
-            console.error('[BUSCADOR] Error:', error);
-            await sentMessage.edit('Ocurrió un error al buscar las coordenadas. Por favor, intenta de nuevo más tarde.');
+            console.error('[BUSCADOR] Error general en proceso:', error);
+            if (typeof sentMessage !== 'undefined') {
+                await sentMessage.edit('Ocurrió un error al buscar las coordenadas. Por favor, intenta de nuevo más tarde.').catch(e => console.error('Error editando mensaje de error:', e));
+            } else {
+                await client.sendMessage(msg.from, 'Ocurrió un error al procesar tu solicitud.').catch(e => console.error('Error enviando mensaje de error:', e));
+            }
         }
     }
 }
