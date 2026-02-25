@@ -34,57 +34,65 @@ async function runProcessor(sock) {
     if (isProcessingQueue || processingQueue.length === 0) return;
     isProcessingQueue = true;
 
-    while (processingQueue.length > 0) {
-        const { sentMsg, userMsg, remoteJid, idToFind } = processingQueue.shift();
+    try {
+        while (processingQueue.length > 0) {
+            const { sentMsg, userMsg, remoteJid, idToFind } = processingQueue.shift();
 
-        try {
-            console.log(`[QUEUE] Procesando edición para ID: ${idToFind}`);
+            console.log(`[QUEUE] Procesando edición para ID: ${idToFind}. Pendientes en cola: ${processingQueue.length}`);
 
-            // Delay 5s (Efecto búsqueda) - Aquí ocurre la pausa "escalera"
-            await delay(5000);
+            try {
+                // Delay 5s (Efecto búsqueda) - Aquí ocurre la pausa "escalera"
+                await delay(5000);
 
-            // Buscar en Caché
-            const found = cachedCoordenadas.find(item => item.ID === idToFind);
-            
-            // Fecha dinámica
-            const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-            const date = new Date();
-            const formattedDate = `${date.getDate()} de ${months[date.getMonth()]}`;
-
-            if (found) {
-                const lat = found.Latitud || found.lat || 'No definida';
-                const long = found.Longitud || found.long || 'No definida';
+                // Buscar en Caché
+                const found = cachedCoordenadas.find(item => item.ID === idToFind);
                 
-                // Texto FINAL (Reemplaza al anterior)
-                const finalText = `📍 *Coordenadas Encontradas* 📍\n\n🆔 *ID:* ${idToFind}\n🌍 *Latitud:* ${lat}\n🌍 *Longitud:* ${long}\n\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
+                // Fecha dinámica
+                const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+                const date = new Date();
+                const formattedDate = `${date.getDate()} de ${months[date.getMonth()]}`;
 
-                // EDITAR el mensaje anterior (Reemplazo total)
-                await sock.sendMessage(remoteJid, { 
-                    text: finalText,
-                    edit: sentMsg.key 
-                });
-                
-                // REACCIÓN al mensaje del USUARIO (userMsg.key)
-                await sock.sendMessage(remoteJid, { react: { text: '👨‍💻', key: userMsg.key } });
-                
-            } else {
-                const notFoundText = `❌ No se encontraron coordenadas para el ID: ${idToFind}\n\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
-                
-                await sock.sendMessage(remoteJid, { 
-                    text: notFoundText,
-                    edit: sentMsg.key 
-                });
+                if (found) {
+                    const lat = found.Latitud || found.lat || 'No definida';
+                    const long = found.Longitud || found.long || 'No definida';
+                    
+                    // Texto FINAL (Reemplaza al anterior)
+                    const finalText = `📍 *Coordenadas Encontradas* 📍\n\n🆔 *ID:* ${idToFind}\n🌍 *Latitud:* ${lat}\n🌍 *Longitud:* ${long}\n\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
+
+                    // EDITAR el mensaje anterior (Reemplazo total)
+                    await sock.sendMessage(remoteJid, { 
+                        text: finalText,
+                        edit: sentMsg.key 
+                    });
+                    
+                    // REACCIÓN al mensaje del USUARIO (userMsg.key)
+                    await sock.sendMessage(remoteJid, { react: { text: '👨‍💻', key: userMsg.key } });
+                    
+                } else {
+                    const notFoundText = `❌ No se encontraron coordenadas para el ID: ${idToFind}\n\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
+                    
+                    await sock.sendMessage(remoteJid, { 
+                        text: notFoundText,
+                        edit: sentMsg.key 
+                    });
+                }
+
+                // Pequeña pausa entre tareas para no saturar
+                await delay(500);
+
+            } catch (err) {
+                console.error(`[QUEUE] Error procesando ${idToFind}:`, err);
+                // Si falla uno, continuamos con el siguiente. NO lanzamos error para no detener la cola.
             }
-
-            // Pequeña pausa entre tareas para no saturar
-            await delay(500);
-
-        } catch (err) {
-            console.error(`[QUEUE] Error procesando ${idToFind}:`, err);
+        }
+    } finally {
+        isProcessingQueue = false;
+        // Si quedaron elementos por alguna razón (race condition), intentamos reiniciar
+        if (processingQueue.length > 0) {
+            console.log('[QUEUE] Cola no vacía tras finalizar, reiniciando procesador...');
+            runProcessor(sock);
         }
     }
-
-    isProcessingQueue = false;
 }
 
 
@@ -294,6 +302,9 @@ async function startBot() {
                     // 2. AÑADIR A LA COLA DE EDICIÓN (PROCESAMIENTO DIFERIDO)
                     processingQueue.push({ sentMsg, userMsg: msg, remoteJid, idToFind });
                     runProcessor(sock); 
+
+                    // Pequeño delay anti-flood después de enviar respuesta inicial
+                    await delay(300);
                 }
             } catch (err) {
                 console.error('Error procesando mensaje:', err);
