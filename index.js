@@ -87,22 +87,8 @@ const client = new Client({
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--single-process', // Importante para ahorrar RAM
-            '--disable-gpu',
-            '--disable-extensions',
-            '--disable-component-extensions-with-background-pages',
-            '--disable-default-apps',
-            '--mute-audio',
-            '--no-default-browser-check',
-            '--autoplay-policy=user-gesture-required',
-            '--disable-background-timer-throttling',
-            '--disable-backgrounding-occluded-windows',
-            '--disable-notifications',
-            '--disable-background-networking',
-            '--disable-breakpad',
-            '--disable-component-update',
-            '--disable-domain-reliability',
-            '--disable-sync'
+            '--single-process', 
+            '--disable-gpu'
         ]
     }
 });
@@ -264,4 +250,9 @@ client.on('message', async msg => {
 });
 
 // Inicializar el cliente
-client.initialize();
+console.log('Iniciando cliente de WhatsApp...');
+client.initialize().then(() => {
+    console.log('Cliente inicializado correctamente (esperando eventos...)');
+}).catch(err => {
+    console.error('Error FATAL al inicializar cliente:', err);
+});
