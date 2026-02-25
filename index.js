@@ -66,33 +66,56 @@ app.get('/', (req, res) => {
 app.get('/reset-session', async (req, res) => {
     try {
         console.log('Solicitud de reseteo de sesión recibida.');
-        await client.destroy();
-        console.log('Cliente destruido.');
         
+        // Intentar cerrar el cliente si está abierto
+        try {
+            await client.destroy();
+            console.log('Cliente destruido.');
+        } catch (err) {
+            console.error('Error al destruir cliente (continuando):', err);
+        }
+        
+        // Eliminar carpetas de sesión y caché
         const sessionPath = path.join(__dirname, '.wwebjs_auth');
-        if (fs.existsSync(sessionPath)) {
-            fs.rmSync(sessionPath, { recursive: true, force: true });
-            console.log('Carpeta de sesión eliminada.');
+        const cachePath = path.join(__dirname, '.wwebjs_cache');
+        
+        try {
+            if (fs.existsSync(sessionPath)) {
+                fs.rmSync(sessionPath, { recursive: true, force: true });
+                console.log('Carpeta de sesión eliminada.');
+            }
+            if (fs.existsSync(cachePath)) {
+                fs.rmSync(cachePath, { recursive: true, force: true });
+                console.log('Carpeta de caché eliminada.');
+            }
+        } catch (err) {
+            console.error('Error al eliminar archivos de sesión:', err);
         }
         
         qrCodeData = null;
-        client.initialize();
-        console.log('Cliente reinicializado.');
         
         res.send(`
             <html>
                 <head>
-                    <title>Bot Reiniciado</title>
-                    <meta http-equiv="refresh" content="10;url=/">
+                    <title>Bot Reiniciando</title>
+                    <meta http-equiv="refresh" content="30;url=/">
                     <style>body { font-family: sans-serif; text-align: center; padding: 50px; }</style>
                 </head>
                 <body>
                     <h1>✅ Sesión eliminada correctamente</h1>
-                    <p>El bot se está reiniciando. Serás redirigido al inicio en 10 segundos para escanear el nuevo QR.</p>
-                    <a href="/">Volver al inicio ahora</a>
+                    <p>El servidor se está reiniciando por completo para garantizar un inicio limpio.</p>
+                    <p>Por favor, espera 30 segundos y la página se recargará automáticamente para mostrarte el nuevo código QR.</p>
+                    <a href="/">Recargar manualmente</a>
                 </body>
             </html>
         `);
+        
+        // Forzar reinicio del contenedor (Render lo volverá a levantar automáticamente)
+        console.log('Reiniciando proceso en 5 segundos...');
+        setTimeout(() => {
+            process.exit(0);
+        }, 5000);
+        
     } catch (error) {
         console.error('Error al resetear sesión:', error);
         res.status(500).send('Error al reiniciar sesión: ' + error.message);
