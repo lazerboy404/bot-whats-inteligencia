@@ -1,0 +1,14 @@
+# Node modules
+node_modules/
+npm-debug.log
+
+# WhatsApp Session
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Environment variables
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
