@@ -3,7 +3,7 @@ node_modules/
 npm-debug.log
 
 # WhatsApp Session
-.wwebjs_auth/
+# .wwebjs_auth/
 .wwebjs_cache/
 
 # Environment variables

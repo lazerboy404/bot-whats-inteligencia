@@ -152,6 +152,7 @@ async function handleMessage(msg) {
 
 // Evento QR: Generar y mostrar el código QR en la terminal
 client.on('qr', (qr) => {
+    console.log('QR RECIBIDO', qr);
     qrcode.generate(qr, { small: true });
     console.log('Escanea el código QR con tu WhatsApp.');
 });
