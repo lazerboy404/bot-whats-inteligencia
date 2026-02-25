@@ -2,12 +2,41 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const express = require('express');
 
-// --- SERVIDOR EXPRESS PARA KEEP-ALIVE (TRUCO RENDER) ---
+// --- SERVIDOR EXPRESS PARA KEEP-ALIVE Y QR (TRUCO RENDER) ---
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+let qrCodeData = null; // Variable para almacenar el código QR
+
 app.get('/', (req, res) => {
-    res.send('¡El bot está vivo! 🤖');
+    if (qrCodeData) {
+        // Mostrar el QR como imagen generada por una API externa (Google Charts o similar)
+        // Esto permite ver el QR directamente en el navegador
+        res.send(`
+            <html>
+                <head>
+                    <title>Bot WhatsApp - Escanear QR</title>
+                    <meta http-equiv="refresh" content="10"> <!-- Auto-recargar cada 10s -->
+                    <style>
+                        body { font-family: sans-serif; text-align: center; padding: 50px; background-color: #f0f2f5; }
+                        h1 { color: #128C7E; }
+                        .qr-container { background: white; padding: 20px; display: inline-block; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+                        p { margin-top: 20px; color: #555; }
+                    </style>
+                </head>
+                <body>
+                    <h1>🤖 Bot de WhatsApp</h1>
+                    <div class="qr-container">
+                        <h2>Escanea este código:</h2>
+                        <img src="https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qrCodeData)}" alt="QR Code">
+                    </div>
+                    <p>Si ya lo escaneaste, espera unos segundos. Esta página se recargará sola.</p>
+                </body>
+            </html>
+        `);
+    } else {
+        res.send('<h1>¡El bot está vivo y conectado! 🤖✅</h1><p>No hay código QR pendiente. El bot está listo para usarse.</p>');
+    }
 });
 
 app.listen(PORT, () => {
@@ -150,16 +179,18 @@ async function handleMessage(msg) {
     }
 }
 
-// Evento QR: Generar y mostrar el código QR en la terminal
+// Evento QR: Generar y mostrar el código QR en la terminal y en la web
 client.on('qr', (qr) => {
     console.log('QR RECIBIDO', qr);
+    qrCodeData = qr; // Guardar el QR para mostrarlo en la web
     qrcode.generate(qr, { small: true });
-    console.log('Escanea el código QR con tu WhatsApp.');
+    console.log('Escanea el código QR con tu WhatsApp o entra a la URL del bot.');
 });
 
 // Evento Ready: El bot está listo
 client.on('ready', () => {
     console.log('Bot conectado con Puppeteer exitosamente.');
+    qrCodeData = null; // Limpiar el QR una vez conectado
 });
 
 // Manejo de mensajes: Añadir a la cola y procesar
