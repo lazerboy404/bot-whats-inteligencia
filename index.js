@@ -57,6 +57,16 @@ app.get('/', (req, res) => {
     }
 });
 
+// SELF-PING PARA MANTENER ACTIVO (Render Free Tier)
+// Render Free se duerme tras 15 min de inactividad. Esto ayuda a mantenerlo despierto un poco más.
+setInterval(() => {
+    const renderUrl = process.env.RENDER_EXTERNAL_URL;
+    if (renderUrl) {
+        console.log(`[KEEP-ALIVE] Ping a ${renderUrl}`);
+        fetch(renderUrl).catch(() => {});
+    }
+}, 10 * 60 * 1000); // Cada 10 minutos
+
 app.listen(PORT, () => console.log(`Servidor iniciado en puerto ${PORT}`));
 
 // --- LÓGICA DE CACHÉ JSON (Igual que antes) ---
@@ -162,6 +172,17 @@ async function startBot() {
 
                 if (!text) continue;
                 const remoteJid = msg.key.remoteJid;
+
+                // --- ANTI-BUCLE / ANTI-SPAM ---
+                // Si el mensaje parece ser una respuesta automática de otro bot (o de este mismo), IGNORAR.
+                // Palabras clave basadas en tus logs: "⚠️NO ENCONTRADO", "COORDENADAS ASIGNADAS", "SOLICITUD ACEPTADA"
+                if (text.includes('⚠️') || 
+                    text.includes('COORDENADAS') || 
+                    text.includes('SOLICITUD ACEPTADA') ||
+                    text.includes('Buscando 🔎')) {
+                    console.log(`[ANTI-BUCLE] Ignorando mensaje de bot/spam en ${remoteJid}`);
+                    continue;
+                }
 
                 console.log(`Mensaje recibido de ${remoteJid}: ${text.substring(0, 50)}...`);
 
