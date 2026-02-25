@@ -7,17 +7,109 @@ const {
     delay,
     Browsers,
     proto,
-    WAMessageStubType
+    WAMessageStubType,
+    initAuthCreds,
+    BufferJSON
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const express = require('express');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
+const mongoose = require('mongoose');
 
 // --- POLYFILL PARA CRYPTO (Node 18/20 Fix) ---
 if (!global.crypto) {
     global.crypto = require('crypto');
 }
+
+// --- CONFIGURACIÓN MONGODB (Persistencia de Sesión) ---
+const MONGO_URL = process.env.MONGO_URL; // "mongodb+srv://..."
+let AuthModel;
+
+if (MONGO_URL) {
+    mongoose.connect(MONGO_URL)
+        .then(() => console.log('✅ Conectado a MongoDB'))
+        .catch(err => console.error('❌ Error conectando a MongoDB:', err));
+    
+    const AuthSchema = new mongoose.Schema({
+        _id: String,
+        data: String // Guardamos como JSON stringify
+    });
+    AuthModel = mongoose.model('Auth', AuthSchema);
+}
+
+// Función personalizada para Auth con MongoDB
+const useMongoAuthState = async () => {
+    const writeData = async (data, id) => {
+        try {
+            await AuthModel.updateOne(
+                { _id: id },
+                { $set: { data: JSON.stringify(data, BufferJSON.replacer) } },
+                { upsert: true }
+            );
+        } catch (err) {
+            console.error('Error escribiendo en Mongo:', err);
+        }
+    };
+
+    const readData = async (id) => {
+        try {
+            const result = await AuthModel.findOne({ _id: id });
+            if (result && result.data) {
+                return JSON.parse(result.data, BufferJSON.reviver);
+            }
+            return null;
+        } catch (err) {
+            console.error('Error leyendo de Mongo:', err);
+            return null;
+        }
+    };
+
+    const removeData = async (id) => {
+        try {
+            await AuthModel.deleteOne({ _id: id });
+        } catch (err) {
+            console.error('Error borrando de Mongo:', err);
+        }
+    };
+
+    const creds = await readData('creds') || initAuthCreds();
+
+    return {
+        state: {
+            creds,
+            keys: {
+                get: async (type, ids) => {
+                    const data = {};
+                    await Promise.all(ids.map(async id => {
+                        let value = await readData(`${type}-${id}`);
+                        if (type === 'app-state-sync-key' && value) {
+                            value = proto.Message.AppStateSyncKeyData.fromObject(value);
+                        }
+                        if (value) data[id] = value;
+                    }));
+                    return data;
+                },
+                set: async (data) => {
+                    const tasks = [];
+                    for (const category in data) {
+                        for (const id in data[category]) {
+                            const value = data[category][id];
+                            const key = `${category}-${id}`;
+                            if (value) {
+                                tasks.push(writeData(value, key));
+                            } else {
+                                tasks.push(removeData(key));
+                            }
+                        }
+                    }
+                    await Promise.all(tasks);
+                }
+            }
+        },
+        saveCreds: () => writeData(creds, 'creds')
+    };
+};
 
 // --- CONFIGURACIÓN SERVIDOR (Render Keep-Alive) ---
 const app = express();
@@ -214,8 +306,28 @@ loadCoordenadas();
 
 // --- LÓGICA DEL BOT (Baileys) ---
 async function startBot() {
-    // Auth State
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+    // Auth State: Elegir entre Mongo o Archivos
+    let state, saveCreds;
+
+    if (MONGO_URL) {
+        console.log('Using MongoDB Auth Strategy...');
+        // Definir helpers internos para MongoAuth aquí para tener acceso al scope si fuera necesario, 
+        // pero ya los definí arriba. Solo llamamos a la función.
+        // Pero espera, mi función useMongoAuthState usa AuthModel que se define asíncronamente si MONGO_URL existe.
+        // Sí, está bien.
+        
+        // Pequeño fix: useMongoAuthState devuelve { state, saveCreds }
+        // Pero mi implementación manual de arriba devolvía una promesa.
+        const auth = await useMongoAuthState();
+        state = auth.state;
+        saveCreds = auth.saveCreds;
+    } else {
+        console.log('Using FileSystem Auth Strategy...');
+        const auth = await useMultiFileAuthState('auth_info_baileys');
+        state = auth.state;
+        saveCreds = auth.saveCreds;
+    }
+
     const { version } = await fetchLatestBaileysVersion();
     console.log(`Usando Baileys v${version.join('.')}`);
 
@@ -329,23 +441,33 @@ async function startBot() {
                 }
 
                 // --- BUSCADOR MC ---
-                const regex = /MC[:\s]*\d+/i;
-                const match = text.match(regex);
+                // Soporte para múltiples IDs (ej: MC12345 MC67890)
+                // Regex global para capturar todos los patrones MC...
+                const matches = [...text.matchAll(/MC[:\s]*(\d+)/gi)];
 
-                if (match) {
-                    const idToFind = match[0].toUpperCase().replace(/[^A-Z0-9]/g, ''); // MC12345
-                    const idNumbers = idToFind.replace('MC', '');
+                if (matches.length > 0) {
+                    console.log(`[BUSCADOR] Encontrados ${matches.length} IDs en mensaje de ${remoteJid}`);
 
-                    console.log(`[BUSCADOR] Solicitud: ${idToFind} de ${remoteJid}`);
+                    for (const match of matches) {
+                        const fullMatch = match[0];
+                        const idNumbers = match[1]; // El grupo de captura (\d+)
+                        const idToFind = `MC${idNumbers}`;
 
-                    if (idNumbers.length !== 5) {
-                        await sock.sendMessage(remoteJid, { text: 'ID NO EXISTE VERIFICAR .' }, { quoted: msg });
-                        continue;
+                        // Validación de 5 dígitos
+                        if (idNumbers.length !== 5) {
+                            // Solo respondemos error si es un mensaje único, para no spammear en listas largas
+                            if (matches.length === 1) {
+                                await sock.sendMessage(remoteJid, { text: 'ID NO EXISTE VERIFICAR .' }, { quoted: msg });
+                            }
+                            console.log(`[BUSCADOR] ID inválido omitido: ${fullMatch}`);
+                            continue;
+                        }
+
+                        // 1. AÑADIR A LA COLA DE ACK (Envío Inicial Seguro)
+                        ackQueue.push({ msg, remoteJid, idToFind, idNumbers });
                     }
-
-                    // 1. AÑADIR A LA COLA DE ACK (Envío Inicial Seguro)
-                    // Ya no enviamos directamente con await sock.sendMessage() aquí para evitar rate-limit
-                    ackQueue.push({ msg, remoteJid, idToFind, idNumbers });
+                    
+                    // Iniciar procesador
                     runAckQueue(sock);
                 }
             } catch (err) {
