@@ -25,53 +25,50 @@ const PORT = process.env.PORT || 3000;
 let qrCodeData = null;
 let cachedCoordenadas = []; 
 
-// --- COLA DE MENSAJES (QUEUE) ---
-// Procesamiento secuencial para efecto "escalera"
-const messageQueue = [];
+// --- COLA DE PROCESAMIENTO (QUEUE) ---
+// La cola ahora solo maneja la EDICIÓN y búsqueda, no el envío inicial.
+const processingQueue = [];
 let isProcessingQueue = false;
 
-async function processQueue(sock) {
-    if (isProcessingQueue || messageQueue.length === 0) return;
+async function runProcessor(sock) {
+    if (isProcessingQueue || processingQueue.length === 0) return;
     isProcessingQueue = true;
 
-    while (messageQueue.length > 0) {
-        const { msg, remoteJid, idToFind, idNumbers } = messageQueue.shift();
+    while (processingQueue.length > 0) {
+        const { sentMsg, userMsg, remoteJid, idToFind } = processingQueue.shift();
 
         try {
-            console.log(`[QUEUE] Procesando ID: ${idToFind} para ${remoteJid}`);
+            console.log(`[QUEUE] Procesando edición para ID: ${idToFind}`);
 
-            // 1. Mensaje de Aceptación
-            const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-            const date = new Date();
-            const formattedDate = `${date.getDate()} de ${months[date.getMonth()]}`;
-
-            const acceptanceText = `👨‍💻 \`\`\`SOLICITUD ACEPTADA\`\`\` 👨‍💻\n\n> Buscando 🔎\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
-            
-            // Enviamos mensaje inicial
-            const sentMsg = await sock.sendMessage(remoteJid, { text: acceptanceText }, { quoted: msg });
-
-            // Delay 5s (Efecto búsqueda)
+            // Delay 5s (Efecto búsqueda) - Aquí ocurre la pausa "escalera"
             await delay(5000);
 
             // Buscar en Caché
             const found = cachedCoordenadas.find(item => item.ID === idToFind);
+            
+            // Fecha dinámica
+            const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+            const date = new Date();
+            const formattedDate = `${date.getDate()} de ${months[date.getMonth()]}`;
 
             if (found) {
                 const lat = found.Latitud || found.lat || 'No definida';
                 const long = found.Longitud || found.long || 'No definida';
-                const finalText = `👨‍💻 \`\`\`SOLICITUD ACEPTADA\`\`\` 👨‍💻\n\n> Buscando 🔎\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}\n\n📍 *Coordenadas Encontradas* 📍\n\n🆔 *ID:* ${idToFind}\n🌍 *Latitud:* ${lat}\n🌍 *Longitud:* ${long}`;
+                
+                // Texto FINAL (Reemplaza al anterior)
+                const finalText = `📍 *Coordenadas Encontradas* 📍\n\n🆔 *ID:* ${idToFind}\n🌍 *Latitud:* ${lat}\n🌍 *Longitud:* ${long}\n\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
 
-                // Intentamos EDITAR el mensaje anterior para que aparezca todo en uno
+                // EDITAR el mensaje anterior (Reemplazo total)
                 await sock.sendMessage(remoteJid, { 
                     text: finalText,
                     edit: sentMsg.key 
                 });
                 
-                // Reacción final
-                await sock.sendMessage(remoteJid, { react: { text: '👨‍💻', key: sentMsg.key } });
+                // REACCIÓN al mensaje del USUARIO (userMsg.key)
+                await sock.sendMessage(remoteJid, { react: { text: '👨‍💻', key: userMsg.key } });
                 
             } else {
-                const notFoundText = `👨‍💻 \`\`\`SOLICITUD ACEPTADA\`\`\` 👨‍💻\n\n> Buscando 🔎\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}\n\n❌ No se encontraron coordenadas para el ID: ${idToFind}`;
+                const notFoundText = `❌ No se encontraron coordenadas para el ID: ${idToFind}\n\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
                 
                 await sock.sendMessage(remoteJid, { 
                     text: notFoundText,
@@ -79,8 +76,8 @@ async function processQueue(sock) {
                 });
             }
 
-            // Pequeña pausa entre mensajes de la cola para evitar saturación
-            await delay(1000);
+            // Pequeña pausa entre tareas para no saturar
+            await delay(500);
 
         } catch (err) {
             console.error(`[QUEUE] Error procesando ${idToFind}:`, err);
@@ -285,9 +282,18 @@ async function startBot() {
                     // Simular Escribiendo
                     await sock.sendPresenceUpdate('composing', remoteJid);
 
-                    // AÑADIR A LA COLA
-                    messageQueue.push({ msg, remoteJid, idToFind, idNumbers });
-                    processQueue(sock); // Iniciar procesamiento si no está corriendo
+                    // 1. ENVIAR "SOLICITUD ACEPTADA" INMEDIATAMENTE
+                    const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+                    const date = new Date();
+                    const formattedDate = `${date.getDate()} de ${months[date.getMonth()]}`;
+
+                    const acceptanceText = `👨‍💻 \`\`\`SOLICITUD ACEPTADA\`\`\` 👨‍💻\n\n> Buscando 🔎\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
+                    
+                    const sentMsg = await sock.sendMessage(remoteJid, { text: acceptanceText }, { quoted: msg });
+
+                    // 2. AÑADIR A LA COLA DE EDICIÓN (PROCESAMIENTO DIFERIDO)
+                    processingQueue.push({ sentMsg, userMsg: msg, remoteJid, idToFind });
+                    runProcessor(sock); 
                 }
             } catch (err) {
                 console.error('Error procesando mensaje:', err);
