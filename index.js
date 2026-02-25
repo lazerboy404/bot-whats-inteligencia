@@ -174,13 +174,13 @@ async function startBot() {
                 const remoteJid = msg.key.remoteJid;
 
                 // --- ANTI-BUCLE / ANTI-SPAM ---
-                // Si el mensaje parece ser una respuesta automática de otro bot (o de este mismo), IGNORAR.
-                // Palabras clave basadas en tus logs: "⚠️NO ENCONTRADO", "COORDENADAS ASIGNADAS", "SOLICITUD ACEPTADA"
-                if (text.includes('⚠️') || 
-                    text.includes('COORDENADAS') || 
-                    text.includes('SOLICITUD ACEPTADA') ||
-                    text.includes('Buscando 🔎')) {
-                    console.log(`[ANTI-BUCLE] Ignorando mensaje de bot/spam en ${remoteJid}`);
+                // Solo ignoramos NUESTRAS PROPIAS RESPUESTAS para evitar bucles infinitos.
+                // Permitimos "⚠️" y "COORDENADAS" porque son parte del input del usuario.
+                if (text.includes('SOLICITUD ACEPTADA') ||
+                    text.includes('Buscando 🔎') ||
+                    text.includes('Cuadrilla 𝗕𝗼𝘁') ||
+                    text.includes('Coordenadas Encontradas')) {
+                    console.log(`[ANTI-BUCLE] Ignorando mensaje propio/repetido en ${remoteJid}`);
                     continue;
                 }
 
