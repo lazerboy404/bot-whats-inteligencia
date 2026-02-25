@@ -162,6 +162,8 @@ async function runAckQueue(sock) {
                 if (sentMsg) {
                     processingQueue.push({ sentMsg, userMsg: msg, remoteJid, idToFind });
                     runProcessor(sock); // Disparar la cola de edición
+                } else {
+                     console.error(`[ACK-QUEUE] Falló envío para ID ${idToFind} (MsgID: ${msg.key.id})`);
                 }
 
                 // Delay de seguridad entre ACKs (evita rate-overlimit en ráfagas)
@@ -186,7 +188,7 @@ async function runProcessor(sock) {
         while (processingQueue.length > 0) {
             const { sentMsg, userMsg, remoteJid, idToFind } = processingQueue.shift();
 
-            console.log(`[QUEUE] Procesando edición para ID: ${idToFind}. Pendientes en cola: ${processingQueue.length}`);
+            console.log(`[QUEUE] Procesando edición para ID: ${idToFind} (MsgID: ${userMsg.key.id}). Pendientes: ${processingQueue.length}`);
 
             try {
                 // Delay 5s (Efecto búsqueda) - Aquí ocurre la pausa "escalera"
