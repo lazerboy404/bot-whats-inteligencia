@@ -194,32 +194,87 @@ async function processIncomingQueue(sock) {
                 if (!text) continue;
                 const remoteJid = msg.key.remoteJid;
 
-                // --- CONTROL DE ADMIN (Cerrar/Abrir Chat) ---
-                if (text.trim() === '.cerrar' || text.trim() === '.abrir') {
-                    // Identificar quién envía (soporte para grupos y chat privado)
+                // --- CONTROL DE ADMIN Y GRUPOS ---
+                const cmd = text.trim(); // Mantener case-sensitive o usar toLowerCase() si prefieres
+
+                // 1. CONTROL DEL BOT (Solo Dueño/SuperAdmins del Bot)
+                if (cmd === '.cerrarbot' || cmd === '.abrirbot') {
+                    // Identificar quién envía
                     const sender = msg.key.participant || msg.key.remoteJid;
                     const senderNumber = sender.replace(/\D/g, ''); // Solo números
                     const adminName = msg.pushName || 'El Administrador';
 
-                    // Verificar si es admin
+                    // Verificar si es admin del BOT (lista hardcodeada)
                     if (ADMIN_NUMBERS.includes(senderNumber)) {
-                        if (text.trim() === '.cerrar') {
+                        if (cmd === '.cerrarbot') {
                             if (!isChatClosed) {
                                 isChatClosed = true;
-                                await sock.sendMessage(remoteJid, { text: `🔒 ${adminName} ha cerrado el chat.` }, { quoted: msg });
+                                await sock.sendMessage(remoteJid, { text: `🔒 ${adminName} ha cerrado el bot.` }, { quoted: msg });
                             } else {
-                                await sock.sendMessage(remoteJid, { text: '⚠️ El chat ya está cerrado.' }, { quoted: msg });
+                                await sock.sendMessage(remoteJid, { text: '⚠️ El bot ya está cerrado.' }, { quoted: msg });
                             }
-                        } else { // .abrir
+                        } else { // .abrirbot
                             if (isChatClosed) {
                                 isChatClosed = false;
-                                await sock.sendMessage(remoteJid, { text: `🔓 ${adminName} ha abierto el chat.` }, { quoted: msg });
+                                await sock.sendMessage(remoteJid, { text: `🔓 ${adminName} ha abierto el bot.` }, { quoted: msg });
                             } else {
-                                await sock.sendMessage(remoteJid, { text: '⚠️ El chat ya está abierto.' }, { quoted: msg });
+                                await sock.sendMessage(remoteJid, { text: '⚠️ El bot ya está abierto.' }, { quoted: msg });
                             }
                         }
                     } else {
                         console.log(`[AUTH] Intento de comando admin denegado a: ${senderNumber}`);
+                    }
+                    continue; // Detener procesamiento
+                }
+
+                // 2. CONTROL DEL GRUPO (Silenciar/Activar - Para Admins del Grupo)
+                if (cmd === '.silenciar' || cmd === '.activar') {
+                    // a) Validación de Entorno (Solo Grupos)
+                    if (!remoteJid.endsWith('@g.us')) {
+                        await sock.sendMessage(remoteJid, { text: '⚠️ Este comando solo funciona en grupos.' }, { quoted: msg });
+                        continue;
+                    }
+
+                    try {
+                        // Obtener metadatos del grupo
+                        const groupMetadata = await sock.groupMetadata(remoteJid);
+                        const participants = groupMetadata.participants;
+
+                        // b) Validación de Usuario (Debe ser Admin del Grupo)
+                        const sender = msg.key.participant || msg.key.remoteJid;
+                        // Normalizar ID del sender para comparar
+                        const participant = participants.find(p => p.id === sender);
+                        const isUserAdmin = participant?.admin === 'admin' || participant?.admin === 'superadmin';
+
+                        if (!isUserAdmin) {
+                             await sock.sendMessage(remoteJid, { text: '⛔ Acceso denegado: Solo los administradores pueden usar este comando.' }, { quoted: msg });
+                             continue;
+                        }
+
+                        // c) Validación del Bot (Debe ser Admin del Grupo)
+                        // El ID del bot en sock.user puede tener sufijos (ej: :12@s.whatsapp.net)
+                        const botId = sock.user?.id?.split(':')[0] || sock.user?.id;
+                        const botParticipant = participants.find(p => p.id.includes(botId)); 
+                        
+                        const isBotAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
+
+                        if (!isBotAdmin) {
+                            await sock.sendMessage(remoteJid, { text: '⚠️ Necesito ser administrador del grupo para ejecutar esta acción.' }, { quoted: msg });
+                            continue;
+                        }
+
+                        // d) Ejecutar Acción
+                        if (cmd === '.silenciar') {
+                            await sock.groupSettingUpdate(remoteJid, 'announcement');
+                            await sock.sendMessage(remoteJid, { text: '🔒 El grupo ha sido silenciado. Solo los administradores pueden enviar mensajes.' });
+                        } else { // .activar
+                            await sock.groupSettingUpdate(remoteJid, 'not_announcement');
+                            await sock.sendMessage(remoteJid, { text: '🔓 El grupo ha sido abierto. Todos los participantes pueden escribir.' });
+                        }
+
+                    } catch (err) {
+                        console.error('[GROUP ADMIN ERROR]', err);
+                        // No enviamos error al chat para no spammear si falla algo interno
                     }
                     continue; // Detener procesamiento
                 }
