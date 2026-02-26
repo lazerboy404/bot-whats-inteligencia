@@ -374,31 +374,33 @@ async function processIncomingQueue(sock) {
 
                             if (officialCandidates.length > 0) {
                                 sourceType = 'OFFICIAL';
-                                // Dentro de los oficiales, preferir español si existe
+                                // Dentro de los oficiales, preferir español si existe, PERO NO DESCARTAR INGLÉS
                                 const spanishOfficial = officialCandidates.find(r => {
                                     const text = (r.title + r.snippet).toLowerCase();
                                     return text.includes('ficha') || text.includes('técnica') || text.includes('tecnica') || text.includes('manual de usuario');
                                 });
-                                // Si hay uno en español, usarlo. Si no, usar el primero (que será inglés/global)
+                                // Si hay uno en español, usarlo. Si no, usar el PRIMER oficial (que será inglés/global)
+                                // IMPORTANTE: Esto asegura que el oficial en inglés SIEMPRE gane a un externo
                                 bestResult = spanishOfficial || officialCandidates[0];
                             } else {
                                 // 2. Prioridad: PDF en Syscom (Distribuidor)
-                                bestResult = organicResults.find(r => {
+                                const syscomResult = organicResults.find(r => {
                                     const link = r.link.toLowerCase();
                                     const title = r.title.toLowerCase();
                                     const isPdf = link.endsWith('.pdf') || title.includes('datasheet') || title.includes('ficha');
                                     return isPdf && link.includes('syscom');
                                 });
 
-                                if (bestResult) {
+                                if (syscomResult) {
+                                    bestResult = syscomResult;
                                     sourceType = 'SYSCOM';
                                 } else {
-                                    // 3. Prioridad: Cualquier PDF
+                                    // 3. Prioridad: Cualquier PDF (Externo)
                                     bestResult = organicResults.find(r => r.link.toLowerCase().endsWith('.pdf'));
                                 }
                             }
 
-                            // 4. Fallback: El primer resultado
+                            // 4. Fallback: El primer resultado orgánico (aunque no sea PDF, si no hay nada más)
                             if (!bestResult) {
                                 bestResult = organicResults[0];
                             }
