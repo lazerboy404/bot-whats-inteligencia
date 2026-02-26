@@ -307,7 +307,7 @@ async function processIncomingQueue(sock) {
                         
                         const response = await axios.post('https://google.serper.dev/search', {
                             q: query,
-                            num: 20 // Pedir más resultados para tener mejor abanico de opciones
+                            num: 50 // Pedir más resultados (Cisco/HP tienen mucha "basura" documental)
                             // Eliminamos gl: 'mx' y hl: 'es' para permitir resultados globales (inglés/oficiales)
                         }, {
                             headers: {
@@ -379,6 +379,13 @@ async function processIncomingQueue(sock) {
                                 // Esto ayuda a evitar "Installation Guide", "Quick Start Guide", "User Manual" si existe un Datasheet real.
                                 const isRealDatasheet = (r) => {
                                     const text = (r.title + r.link).toLowerCase();
+                                    
+                                    // FILTRO NEGATIVO: Si dice "Guía", "Manual", "Install", etc., NO es un datasheet puro.
+                                    // Esto penaliza documentos como "Short Guide", "Quick Start", "Hardware Installation".
+                                    const badWords = ['guide', 'guia', 'manual', 'install', 'setup', 'short', 'qsg', 'hig', 'quick', 'breve', 'usuario', 'user', 'start', 'inicio', 'montaje'];
+                                    if (badWords.some(w => text.includes(w))) return false;
+
+                                    // FILTRO POSITIVO: Debe decir explícitamente Datasheet o Ficha Técnica
                                     return text.includes('datasheet') || 
                                            text.includes('data-sheet') || 
                                            text.includes('data_sheet') || 
