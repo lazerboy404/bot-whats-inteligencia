@@ -149,6 +149,8 @@ setInterval(() => {
 // Cola 0: ENTRADA (Raw Messages) - Desacopla recepción de procesamiento
 const incomingQueue = [];
 let isProcessingIncoming = false;
+// Variable para el temporizador de Debounce/Buffer
+let incomingBufferTimeout = null;
 
 // Cola 1: ACK (Aceptación Inmediata pero Segura)
 // Objetivo: Responder "SOLICITUD ACEPTADA" rápido pero sin saturar (rate-limit)
@@ -507,8 +509,23 @@ async function startBot() {
             incomingQueue.push(msg);
         }
 
-        // Disparar procesador asíncrono (sin await para no bloquear upsert)
-        processIncomingQueue(sock);
+        // --- LÓGICA DE DEBOUNCE / BUFFER ---
+        // Si hay un temporizador corriendo, lo limpiamos (reiniciamos la cuenta atrás)
+        // Esto permite "agrupar" ráfagas. Si siguen llegando mensajes, seguimos esperando.
+        if (incomingBufferTimeout) {
+            clearTimeout(incomingBufferTimeout);
+        }
+
+        // Establecemos un nuevo temporizador. 
+        // Solo procesaremos la cola si dejan de llegar mensajes por 1000ms (1 segundo).
+        // Opcional: Podríamos poner un límite máximo de espera si quisiéramos.
+        console.log(`[BUFFER] Esperando 1.5s para estabilizar ráfaga... (Cola: ${incomingQueue.length})`);
+        
+        incomingBufferTimeout = setTimeout(() => {
+            console.log('[BUFFER] Tiempo de espera finalizado. Procesando lote acumulado.');
+            processIncomingQueue(sock);
+            incomingBufferTimeout = null;
+        }, 1500); // 1.5 segundos de espera tras el último mensaje
     });
 }
 
