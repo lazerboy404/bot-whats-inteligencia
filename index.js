@@ -154,7 +154,7 @@ let incomingBufferTimeout = null;
 
 // --- CONFIGURACIÓN DE ADMIN Y CONTROL DE CHAT ---
 // Agrega aquí los números permitidos (formato internacional sin +). Ejemplo: '5215512345678'
-const ADMIN_NUMBERS = ['525564132674', '5215564132674']; 
+const ADMIN_NUMBERS = ['525564132674', '5215564132674', '146935243604020']; 
 let isChatClosed = false;
 
 // Cola 1: ACK (Aceptación Inmediata pero Segura)
