@@ -23,23 +23,42 @@ if (!global.crypto) {
 }
 
 // --- CONFIGURACIÓN MONGODB (Persistencia de Sesión) ---
-const MONGO_URL = process.env.MONGO_URL; // "mongodb+srv://..."
+// Usa la variable de entorno o la cadena proporcionada si no existe
+const MONGO_URL = process.env.MONGO_URL || "mongodb+srv://ntcrckrs_db_user:47V0ClnDyZIELB5E@cluster0.a6trfko.mongodb.net/?appName=Cluster0";
 let AuthModel;
 
-if (MONGO_URL) {
-    mongoose.connect(MONGO_URL)
-        .then(() => console.log('✅ Conectado a MongoDB'))
-        .catch(err => console.error('❌ Error conectando a MongoDB:', err));
-    
-    const AuthSchema = new mongoose.Schema({
-        _id: String,
-        data: String // Guardamos como JSON stringify
-    });
-    AuthModel = mongoose.model('Auth', AuthSchema);
-}
+// Inicializamos el modelo SOLO UNA VEZ fuera de la función de conexión para evitar OverwriteModelError
+const initMongoModel = () => {
+    if (!AuthModel && mongoose.models.Auth) {
+        AuthModel = mongoose.model('Auth');
+    } else if (!AuthModel) {
+        const AuthSchema = new mongoose.Schema({
+            _id: String,
+            data: String // Guardamos como JSON stringify
+        });
+        AuthModel = mongoose.model('Auth', AuthSchema);
+    }
+};
+
+// Función para conectar (con reintento básico y log de éxito)
+const connectToMongo = async () => {
+    try {
+        await mongoose.connect(MONGO_URL, {
+            serverSelectionTimeoutMs: 5000 // Timeout de 5s para fallar rápido si la URL está mal
+        });
+        console.log('✅ Conectado a MongoDB con éxito');
+        initMongoModel();
+    } catch (err) {
+        console.error('❌ Error CRÍTICO conectando a MongoDB:', err);
+        throw err; // Re-lanzamos para detener el bot si la DB es obligatoria
+    }
+};
 
 // Función personalizada para Auth con MongoDB
 const useMongoAuthState = async () => {
+    // Aseguramos que AuthModel exista
+    if (!AuthModel) initMongoModel();
+
     const writeData = async (data, id) => {
         try {
             await AuthModel.updateOne(
@@ -312,17 +331,25 @@ async function startBot() {
     let state, saveCreds;
 
     if (MONGO_URL) {
-        console.log('Using MongoDB Auth Strategy...');
-        // Definir helpers internos para MongoAuth aquí para tener acceso al scope si fuera necesario, 
-        // pero ya los definí arriba. Solo llamamos a la función.
-        // Pero espera, mi función useMongoAuthState usa AuthModel que se define asíncronamente si MONGO_URL existe.
-        // Sí, está bien.
+        console.log('Intentando conectar a MongoDB...');
         
-        // Pequeño fix: useMongoAuthState devuelve { state, saveCreds }
-        // Pero mi implementación manual de arriba devolvía una promesa.
-        const auth = await useMongoAuthState();
-        state = auth.state;
-        saveCreds = auth.saveCreds;
+        try {
+            // AWAIT CRÍTICO: Esperamos a que la conexión esté lista ANTES de seguir
+            if (mongoose.connection.readyState === 0) {
+                await connectToMongo();
+            }
+            
+            const auth = await useMongoAuthState();
+            state = auth.state;
+            saveCreds = auth.saveCreds;
+            
+        } catch (mongoError) {
+            console.error('FALLO FATAL EN MONGO, USANDO ARCHIVOS LOCALES (Volátil en Render):', mongoError);
+            const auth = await useMultiFileAuthState('auth_info_baileys');
+            state = auth.state;
+            saveCreds = auth.saveCreds;
+        }
+
     } else {
         console.log('Using FileSystem Auth Strategy...');
         const auth = await useMultiFileAuthState('auth_info_baileys');
