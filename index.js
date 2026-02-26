@@ -17,6 +17,9 @@ const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const mongoose = require('mongoose');
 const axios = require('axios'); // Cliente HTTP para buscar datasheets
+const pdfParse = require('pdf-parse'); // Extraer texto de PDF
+const PDFDocument = require('pdfkit'); // Crear nuevos PDF
+const translate = require('translate-google'); // Traductor gratuito
 
 // --- CONFIGURACIÓN SERPER API (Datasheets) ---
 const SERPER_API_KEY = process.env.SERPER_API_KEY || ''; // Se espera que esté en Render
@@ -307,8 +310,8 @@ async function processIncomingQueue(sock) {
                         
                         const response = await axios.post('https://google.serper.dev/search', {
                             q: query,
-                            gl: 'mx', // Priorizar resultados de México/Latam si es relevante
-                            hl: 'es'  // Idioma español
+                            num: 20 // Pedir más resultados para tener mejor abanico de opciones
+                            // Eliminamos gl: 'mx' y hl: 'es' para permitir resultados globales (inglés/oficiales)
                         }, {
                             headers: {
                                 'X-API-KEY': process.env.SERPER_API_KEY,
@@ -356,7 +359,8 @@ async function processIncomingQueue(sock) {
                             let sourceType = 'GENERIC'; // OFFICIAL, SYSCOM, GENERIC
 
                             // 1. Prioridad: PDF en dominio oficial
-                            bestResult = organicResults.find(r => {
+                            // Primero filtramos todos los candidatos oficiales
+                            const officialCandidates = organicResults.filter(r => {
                                 const link = r.link.toLowerCase();
                                 const title = r.title.toLowerCase();
                                 const isPdf = link.endsWith('.pdf') || title.includes('datasheet') || title.includes('ficha');
@@ -364,8 +368,15 @@ async function processIncomingQueue(sock) {
                                 return isPdf && isOfficialDomain;
                             });
 
-                            if (bestResult) {
+                            if (officialCandidates.length > 0) {
                                 sourceType = 'OFFICIAL';
+                                // Dentro de los oficiales, preferir español si existe
+                                const spanishOfficial = officialCandidates.find(r => {
+                                    const text = (r.title + r.snippet).toLowerCase();
+                                    return text.includes('ficha') || text.includes('técnica') || text.includes('tecnica') || text.includes('manual de usuario');
+                                });
+                                // Si hay uno en español, usarlo. Si no, usar el primero (que será inglés/global)
+                                bestResult = spanishOfficial || officialCandidates[0];
                             } else {
                                 // 2. Prioridad: PDF en Syscom (Distribuidor)
                                 bestResult = organicResults.find(r => {
@@ -444,6 +455,124 @@ async function processIncomingQueue(sock) {
                 }
                 if (text === '.menuprincipal') {
                     await sock.sendMessage(remoteJid, { text: 'Bot Activo ⚡' }, { quoted: msg });
+                    continue;
+                }
+
+                // Comando .traducir (Genera nuevo PDF traducido)
+                if (text.startsWith('.traducir')) {
+                    // 1. Buscar URL en el mensaje citado
+                    let targetUrl = null;
+                    
+                    if (msg.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
+                        const quoted = msg.message.extendedTextMessage.contextInfo.quotedMessage;
+                        
+                        // Buscar en texto
+                        const quotedText = quoted.conversation || quoted.extendedTextMessage?.text || '';
+                        // Buscar en caption de documento/imagen
+                        const quotedCaption = quoted.documentMessage?.caption || quoted.imageMessage?.caption || '';
+                        
+                        // Regex para encontrar URLs
+                        const urlRegex = /(https?:\/\/[^\s]+)/g;
+                        const textMatch = quotedText.match(urlRegex);
+                        const captionMatch = quotedCaption.match(urlRegex);
+                        
+                        if (captionMatch) {
+                            targetUrl = captionMatch[0];
+                        } else if (textMatch) {
+                            targetUrl = textMatch[0];
+                        }
+                    }
+
+                    // 2. Si no hay citado, buscar argumento directo (.traducir https://...)
+                    if (!targetUrl) {
+                        const args = text.split(/\s+/);
+                        if (args.length > 1 && args[1].startsWith('http')) {
+                            targetUrl = args[1];
+                        }
+                    }
+
+                    if (targetUrl) {
+                        // Limpiamos la URL de caracteres extraños
+                        targetUrl = targetUrl.replace(/[)>]+$/, ''); 
+                        
+                        // Notificar inicio de proceso
+                        await sock.sendMessage(remoteJid, { text: '⏳ *Procesando traducción...* \nEsto puede tomar unos segundos mientras descargo, traduzco y regenero el PDF.' }, { quoted: msg });
+
+                        try {
+                            // 1. Descargar el PDF original
+                            const response = await axios.get(targetUrl, { responseType: 'arraybuffer' });
+                            const pdfBuffer = Buffer.from(response.data);
+
+                            // 2. Extraer texto con pdf-parse
+                            const data = await pdfParse(pdfBuffer);
+                            const originalText = data.text;
+
+                            if (!originalText || originalText.trim().length === 0) {
+                                throw new Error('PDF escaneado o sin texto extraíble');
+                            }
+
+                            // 3. Traducir texto por bloques (para evitar límites de API)
+                            const chunkSize = 3000;
+                            const chunks = [];
+                            for (let i = 0; i < originalText.length; i += chunkSize) {
+                                chunks.push(originalText.substring(i, i + chunkSize));
+                            }
+
+                            let translatedText = '';
+                            for (const chunk of chunks) {
+                                try {
+                                    // Usamos translate-google (gratuito, no oficial)
+                                    const res = await translate(chunk, { to: 'es' });
+                                    translatedText += res + '\n';
+                                    // Pequeña pausa para no saturar
+                                    await new Promise(resolve => setTimeout(resolve, 500));
+                                } catch (err) {
+                                    console.error('[TRANSLATE CHUNK ERROR]', err);
+                                    translatedText += chunk + '\n'; // Fallback: dejar original si falla
+                                }
+                            }
+
+                            // 4. Crear nuevo PDF con pdfkit
+                            const doc = new PDFDocument();
+                            const buffers = [];
+                            doc.on('data', buffers.push.bind(buffers));
+                            
+                            // Configurar fuente y escribir texto
+                            doc.fontSize(12).text(translatedText, {
+                                align: 'justify'
+                            });
+                            
+                            doc.end();
+
+                            const pdfData = await new Promise((resolve) => {
+                                doc.on('end', () => {
+                                    const pdfData = Buffer.concat(buffers);
+                                    resolve(pdfData);
+                                });
+                            });
+
+                            // 5. Enviar PDF traducido
+                            await sock.sendMessage(remoteJid, { 
+                                document: pdfData, 
+                                mimetype: 'application/pdf', 
+                                fileName: 'Ficha_Tecnica_Traducida.pdf',
+                                caption: '✅ *Traducción Completada*\n\nAquí tienes el contenido de la ficha técnica en español.\n\n> ⚠️ *Nota:* El diseño original (imágenes/tablas) se pierde en este proceso gratuito, pero el texto es fiel.'
+                            }, { quoted: msg });
+
+                        } catch (processError) {
+                            console.error('[PDF TRANSLATE ERROR]', processError);
+                            // Fallback: Enviar enlace de Google Translate Viewer si falla la generación
+                            const translateUrl = `https://translate.google.com/translate?sl=auto&tl=es&hl=es&u=${encodeURIComponent(targetUrl)}`;
+                            await sock.sendMessage(remoteJid, { 
+                                text: `⚠️ *No pude generar el archivo PDF traducido* (posiblemente es un PDF escaneado o protegido).\n\nPero aquí tienes una vista traducida online:\n👉 ${translateUrl}` 
+                            }, { quoted: msg });
+                        }
+
+                    } else {
+                        await sock.sendMessage(remoteJid, { 
+                            text: '⚠️ No encontré ningún enlace para traducir.\n\nPor favor, responde a un mensaje que tenga un enlace con `.traducir` o escribe `.traducir [LINK]`.' 
+                        }, { quoted: msg });
+                    }
                     continue;
                 }
 
