@@ -374,14 +374,53 @@ async function processIncomingQueue(sock) {
 
                             if (officialCandidates.length > 0) {
                                 sourceType = 'OFFICIAL';
-                                // Dentro de los oficiales, preferir español si existe, PERO NO DESCARTAR INGLÉS
-                                const spanishOfficial = officialCandidates.find(r => {
-                                    const text = (r.title + r.snippet).toLowerCase();
-                                    return text.includes('ficha') || text.includes('técnica') || text.includes('tecnica') || text.includes('manual de usuario');
-                                });
-                                // Si hay uno en español, usarlo. Si no, usar el PRIMER oficial (que será inglés/global)
-                                // IMPORTANTE: Esto asegura que el oficial en inglés SIEMPRE gane a un externo
-                                bestResult = spanishOfficial || officialCandidates[0];
+                                
+                                // Definir qué constituye una "Ficha Técnica Real" vs "Manual/Guía"
+                                // Esto ayuda a evitar "Installation Guide", "Quick Start Guide", "User Manual" si existe un Datasheet real.
+                                const isRealDatasheet = (r) => {
+                                    const text = (r.title + r.link).toLowerCase();
+                                    return text.includes('datasheet') || 
+                                           text.includes('data-sheet') || 
+                                           text.includes('data_sheet') || 
+                                           text.includes('spec sheet') || 
+                                           text.includes('especificaciones') ||
+                                           (text.includes('ficha') && text.includes('tecnica'));
+                                };
+
+                                // Separar candidatos en "Datasheets Puros" y "Otros (Manuales, etc)"
+                                const datasheets = officialCandidates.filter(isRealDatasheet);
+                                const others = officialCandidates.filter(r => !isRealDatasheet(r));
+
+                                // Función para preferir español
+                                const preferSpanish = (candidates) => {
+                                    return candidates.find(r => {
+                                        const text = (r.title + r.snippet).toLowerCase();
+                                        return text.includes('ficha') || text.includes('técnica') || text.includes('tecnica') || text.includes('manual de usuario') || text.includes('spanish') || text.includes('es-es') || text.includes('es_mx');
+                                    });
+                                };
+
+                                let bestOfficial = null;
+
+                                // 1. Buscar Datasheet en Español
+                                const spanishDatasheet = preferSpanish(datasheets);
+                                
+                                if (spanishDatasheet) {
+                                    bestOfficial = spanishDatasheet;
+                                } else if (datasheets.length > 0) {
+                                    // 2. Si no hay Datasheet Español, usar Datasheet Inglés (MEJOR QUE MANUAL ESPAÑOL)
+                                    bestOfficial = datasheets[0];
+                                } else {
+                                    // 3. Si no hay Datasheets, buscar Manual/Guía en Español
+                                    const spanishOther = preferSpanish(others);
+                                    if (spanishOther) {
+                                        bestOfficial = spanishOther;
+                                    } else {
+                                        // 4. Último recurso: Cualquier documento oficial (Manual Inglés)
+                                        bestOfficial = others[0];
+                                    }
+                                }
+
+                                bestResult = bestOfficial || officialCandidates[0]; // Fallback final por seguridad
                             } else {
                                 // 2. Prioridad: PDF en Syscom (Distribuidor)
                                 const syscomResult = organicResults.find(r => {
