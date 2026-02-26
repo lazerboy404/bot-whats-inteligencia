@@ -311,7 +311,7 @@ async function runProcessor(sock) {
                     const lat = found.Latitud || found.lat || 'No definida';
                     const long = found.Longitud || found.long || 'No definida';
                     
-                    const finalText = `📍 *Coordenadas Encontradas* 📍\n\n🆔 *ID:* ${idToFind}\n🌍 *Latitud:* ${lat}\n🌍 *Longitud:* ${long}\n\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
+                    const finalText = `🆔: ${idToFind}\n${lat} ${long}`;
 
                     await sock.sendMessage(remoteJid, { text: finalText, edit: sentMsg.key });
                     await sock.sendMessage(remoteJid, { react: { text: '👨‍💻', key: userMsg.key } });
