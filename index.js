@@ -16,6 +16,10 @@ const express = require('express');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const mongoose = require('mongoose');
+const axios = require('axios'); // Cliente HTTP para buscar datasheets
+
+// --- CONFIGURACIÓN SERPER API (Datasheets) ---
+const SERPER_API_KEY = process.env.SERPER_API_KEY || ''; // Se espera que esté en Render
 
 // --- POLYFILL PARA CRYPTO (Node 18/20 Fix) ---
 if (!global.crypto) {
@@ -277,6 +281,80 @@ async function processIncomingQueue(sock) {
                         // No enviamos error al chat para no spammear si falla algo interno
                     }
                     continue; // Detener procesamiento
+                }
+
+                // 3. COMANDO DATASHEET / FICHA TÉCNICA (Serper.dev)
+                // Ejemplo: .ficha Axis P3245-V
+                if (text.toLowerCase().startsWith('.ficha') || text.toLowerCase().startsWith('.datasheet')) {
+                    const model = text.split(' ').slice(1).join(' ');
+                    
+                    if (!model) {
+                        await sock.sendMessage(remoteJid, { text: '⚠️ Debes escribir el modelo. Ejemplo: `.ficha DS-2CD2043G0-I`' }, { quoted: msg });
+                        continue;
+                    }
+
+                    if (!process.env.SERPER_API_KEY) {
+                        console.error('[SERPER ERROR] No API KEY configurada');
+                        await sock.sendMessage(remoteJid, { text: '❌ Error de configuración: Falta la API Key de Serper.' }, { quoted: msg });
+                        continue;
+                    }
+
+                    await sock.sendMessage(remoteJid, { text: `🔍 Buscando ficha técnica para: *${model}*...` }, { quoted: msg });
+
+                    try {
+                        // Construir consulta: Modelo + filtros para PDF
+                        const query = `${model} datasheet OR ficha tecnica filetype:pdf`;
+                        
+                        const response = await axios.post('https://google.serper.dev/search', {
+                            q: query,
+                            gl: 'mx', // Priorizar resultados de México/Latam si es relevante
+                            hl: 'es'  // Idioma español
+                        }, {
+                            headers: {
+                                'X-API-KEY': process.env.SERPER_API_KEY,
+                                'Content-Type': 'application/json'
+                            }
+                        });
+
+                        const organicResults = response.data.organic;
+
+                        if (organicResults && organicResults.length > 0) {
+                            // Buscar el primer resultado que parezca un PDF (aunque la query ya fuerza filetype:pdf)
+                            const firstResult = organicResults[0]; // Serper suele ser muy preciso con filetype:pdf
+                            
+                            const title = firstResult.title || 'Ficha Técnica';
+                            const link = firstResult.link;
+                            const snippet = firstResult.snippet || 'Documento PDF encontrado.';
+
+                            console.log(`[SERPER] Resultado encontrado: ${title} -> ${link}`);
+
+                            const caption = `📄 *Ficha Técnica Encontrada*\n\n📌 *Modelo:* ${model}\n� *Título:* ${title}\n�🔗 *Link:* ${link}\n\n> ${snippet}`;
+
+                            // Intentar enviar el PDF directamente
+                            try {
+                                await sock.sendMessage(remoteJid, { 
+                                    document: { url: link }, 
+                                    mimetype: 'application/pdf', 
+                                    fileName: `${model.replace(/\s+/g, '_')}_Datasheet.pdf`,
+                                    caption: caption
+                                }, { quoted: msg });
+                            } catch (sendError) {
+                                console.error('[BAILEYS FILE ERROR]', sendError.message);
+                                // Fallback: Enviar solo texto con el link si falla la descarga/envío
+                                await sock.sendMessage(remoteJid, { 
+                                    text: `⚠️ No pude enviar el archivo directamente (posiblemente muy pesado o protegido), pero aquí tienes el enlace:\n\n${caption}` 
+                                }, { quoted: msg });
+                            }
+
+                        } else {
+                            await sock.sendMessage(remoteJid, { text: `❌ No encontré ninguna ficha técnica para "${model}". Intenta ser más específico.` }, { quoted: msg });
+                        }
+
+                    } catch (error) {
+                        console.error('[SERPER API ERROR]', error?.response?.data || error.message);
+                        await sock.sendMessage(remoteJid, { text: '❌ Error al buscar en internet. Intenta más tarde.' }, { quoted: msg });
+                    }
+                    continue;
                 }
 
                 // Si el chat está cerrado, ignorar mensajes (excepto los comandos de admin arriba)
