@@ -319,16 +319,86 @@ async function processIncomingQueue(sock) {
                         const organicResults = response.data.organic;
 
                         if (organicResults && organicResults.length > 0) {
-                            // Buscar el primer resultado que parezca un PDF (aunque la query ya fuerza filetype:pdf)
-                            const firstResult = organicResults[0]; // Serper suele ser muy preciso con filetype:pdf
+                            // Lista de dominios oficiales de fabricantes CCTV/Redes/TI
+                            const OFFICIAL_DOMAINS = [
+                                // CCTV & Acceso
+                                'hikvision.com', 'dahuasecurity.com', 'axis.com', 'avigilon.com', 'boschsecurity.com', 
+                                'honeywell.com', 'samsung.com', 'hanwhavision.com', 'vivotek.com', 'uniview.com',
+                                'zkteco.com', 'supremainc.com', 'assaabloy.com', 'rosslare.com', 'cdvi.com', 'hidglobal.com',
+                                'paradox.com', 'dsc.com', 'resideo.com', 'ajax.systems', 'riscogroup.com', 'garrett.com',
+                                
+                                // VMS & Software de Seguridad
+                                'genetec.com', 'milestonesys.com', 'issivs.com', 'isscctv.com',
+
+                                // Redes & Conectividad
+                                'ubnt.com', 'ui.com', 'cisco.com', 'meraki.com', 'arubanetworks.com', 'ruijienetworks.com',
+                                'mikrotik.com', 'cambiumnetworks.com', 'tplink.com', 'tp-link.com', 'netgear.com', 
+                                'grandstream.com', 'fanvil.com', 'juniper.net', 'fortinet.com', 'paloaltonetworks.com',
+                                'sonicwall.com', 'sophos.com', 'watchguard.com',
+                                
+                                // Infraestructura & Cableado
+                                'panduit.com', 'belden.com', 'commscope.com', 'siemon.com', 'legrand.com',
+                                'toten.com.cn', 'linkedpro.com', // LinkedPro es marca propia de Syscom a veces
+                                
+                                // Energía
+                                'apc.com', 'schneider-electric.com', 'tripplite.com', 'cyberpower.com', 'epcom.net',
+
+                                // Almacenamiento & Computación (Servidores/Workstations)
+                                'kingston.com', 'adata.com', 'westerndigital.com', 'wd.com', 'seagate.com', 
+                                'toshiba.com', 'sandisk.com', 'crucial.com', 'dell.com', 'delltechnologies.com', 
+                                'lenovo.com', 'hp.com', 'hpe.com',
+                                
+                                // Audio/Video & Proyección
+                                'barco.com', 'epson.com', 'benq.com', 'lg.com', 'samsung.com', 'sony.com', 'christiedigital.com'
+                            ];
+
+                            let bestResult = null;
+                            let sourceType = 'GENERIC'; // OFFICIAL, SYSCOM, GENERIC
+
+                            // 1. Prioridad: PDF en dominio oficial
+                            bestResult = organicResults.find(r => {
+                                const link = r.link.toLowerCase();
+                                const title = r.title.toLowerCase();
+                                const isPdf = link.endsWith('.pdf') || title.includes('datasheet') || title.includes('ficha');
+                                const isOfficialDomain = OFFICIAL_DOMAINS.some(d => link.includes(d));
+                                return isPdf && isOfficialDomain;
+                            });
+
+                            if (bestResult) {
+                                sourceType = 'OFFICIAL';
+                            } else {
+                                // 2. Prioridad: PDF en Syscom (Distribuidor)
+                                bestResult = organicResults.find(r => {
+                                    const link = r.link.toLowerCase();
+                                    const title = r.title.toLowerCase();
+                                    const isPdf = link.endsWith('.pdf') || title.includes('datasheet') || title.includes('ficha');
+                                    return isPdf && link.includes('syscom');
+                                });
+
+                                if (bestResult) {
+                                    sourceType = 'SYSCOM';
+                                } else {
+                                    // 3. Prioridad: Cualquier PDF
+                                    bestResult = organicResults.find(r => r.link.toLowerCase().endsWith('.pdf'));
+                                }
+                            }
+
+                            // 4. Fallback: El primer resultado
+                            if (!bestResult) {
+                                bestResult = organicResults[0];
+                            }
                             
-                            const title = firstResult.title || 'Ficha Técnica';
-                            const link = firstResult.link;
-                            const snippet = firstResult.snippet || 'Documento PDF encontrado.';
+                            const title = bestResult.title || 'Ficha Técnica';
+                            const link = bestResult.link;
+                            const snippet = bestResult.snippet || 'Documento encontrado.';
+                            
+                            let sourceTag = '⚠️ *Fuente Externa*';
+                            if (sourceType === 'OFFICIAL') sourceTag = '✅ *Fuente Oficial*';
+                            if (sourceType === 'SYSCOM') sourceTag = '🛒 *Distribuidor (Syscom)*';
 
-                            console.log(`[SERPER] Resultado encontrado: ${title} -> ${link}`);
+                            console.log(`[SERPER] Resultado seleccionado (${sourceType}): ${title} -> ${link}`);
 
-                            const caption = `📄 *Ficha Técnica Encontrada*\n\n📌 *Modelo:* ${model}\n� *Título:* ${title}\n�🔗 *Link:* ${link}\n\n> ${snippet}`;
+                            const caption = `📄 *Ficha Técnica Encontrada*\n\n📌 *Modelo:* ${model}\n${sourceTag}\n📝 *Título:* ${title}\n� *Link:* ${link}\n\n> ${snippet}`;
 
                             // Intentar enviar el PDF directamente
                             try {
