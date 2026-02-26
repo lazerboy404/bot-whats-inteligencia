@@ -138,6 +138,18 @@ let cachedCoordenadas = [];
 
 // --- COLAS DE PROCESAMIENTO (QUEUES) ---
 
+// Set para deduplicación de mensajes (Evita procesar el mismo ID dos veces)
+const processedMessageIds = new Set();
+// Limpieza periódica de IDs (cada 1 hora)
+setInterval(() => {
+    console.log(`[SISTEMA] Limpiando caché de IDs procesados (${processedMessageIds.size} eliminados)`);
+    processedMessageIds.clear();
+}, 60 * 60 * 1000);
+
+// Cola 0: ENTRADA (Raw Messages) - Desacopla recepción de procesamiento
+const incomingQueue = [];
+let isProcessingIncoming = false;
+
 // Cola 1: ACK (Aceptación Inmediata pero Segura)
 // Objetivo: Responder "SOLICITUD ACEPTADA" rápido pero sin saturar (rate-limit)
 const ackQueue = [];
@@ -148,7 +160,85 @@ let isProcessingAck = false;
 const processingQueue = [];
 let isProcessingQueue = false;
 
-// Procesador de ACK (Envío inicial)
+// --- PROCESADORES ---
+
+// 1. Procesador de ENTRADA (Filtrado y Regex)
+async function processIncomingQueue(sock) {
+    if (isProcessingIncoming || incomingQueue.length === 0) return;
+    isProcessingIncoming = true;
+
+    try {
+        while (incomingQueue.length > 0) {
+            const msg = incomingQueue.shift();
+            
+            try {
+                // Filtros básicos
+                if (!msg.message || msg.key.fromMe) continue;
+                if (msg.message.protocolMessage || msg.message.reactionMessage) continue;
+
+                // Extraer texto
+                const msgType = Object.keys(msg.message)[0];
+                const text = msgType === 'conversation' 
+                    ? msg.message.conversation 
+                    : msgType === 'extendedTextMessage' 
+                        ? msg.message.extendedTextMessage.text 
+                        : '';
+
+                if (!text) continue;
+                const remoteJid = msg.key.remoteJid;
+
+                // Anti-Bucle (Ignorar respuestas propias citadas o forwards del bot)
+                if (text.includes('SOLICITUD ACEPTADA') || text.includes('Cuadrilla 𝗕𝗼𝘁')) continue;
+
+                console.log(`[INCOMING] Procesando msg de ${remoteJid}: ${text.substring(0, 30)}...`);
+
+                // Comandos Simples
+                if (text === '.ping') {
+                    await sock.sendMessage(remoteJid, { text: 'pong!' }, { quoted: msg });
+                    continue;
+                }
+                if (text === '.menuprincipal') {
+                    await sock.sendMessage(remoteJid, { text: 'Bot Activo ⚡' }, { quoted: msg });
+                    continue;
+                }
+
+                // Lógica MC (Regex)
+                const matches = [...text.matchAll(/MC[:\s]*(\d+)/gi)];
+                if (matches.length > 0) {
+                    console.log(`[MATCH] ${matches.length} IDs encontrados en mensaje.`);
+                    
+                    for (const match of matches) {
+                        const fullMatch = match[0];
+                        const idNumbers = match[1];
+                        const idToFind = `MC${idNumbers}`;
+
+                        // Validación
+                        if (idNumbers.length !== 5) {
+                            if (matches.length === 1) {
+                                await sock.sendMessage(remoteJid, { text: 'ID INVÁLIDO (Debe ser de 5 dígitos)' }, { quoted: msg });
+                            }
+                            continue;
+                        }
+
+                        // Push a ACK Queue
+                        ackQueue.push({ msg, remoteJid, idToFind });
+                    }
+                    // Disparar siguiente cola
+                    runAckQueue(sock);
+                }
+
+            } catch (err) {
+                console.error('[INCOMING ERROR]', err);
+            }
+        }
+    } finally {
+        isProcessingIncoming = false;
+        // Doble check por si entraron mensajes mientras procesábamos
+        if (incomingQueue.length > 0) processIncomingQueue(sock);
+    }
+}
+
+// 2. Procesador de ACK (Envío inicial)
 async function runAckQueue(sock) {
     if (isProcessingAck || ackQueue.length === 0) return;
     isProcessingAck = true;
@@ -167,29 +257,26 @@ async function runAckQueue(sock) {
                 const formattedDate = `${date.getDate()} de ${months[date.getMonth()]}`;
                 const acceptanceText = `👨‍💻 \`\`\`SOLICITUD ACEPTADA\`\`\` 👨‍💻\n\n> Buscando 🔎\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
 
-                // ENVIAR (Con reintento básico si falla por rate-limit)
+                // ENVIAR
                 let sentMsg;
                 try {
                     sentMsg = await sock.sendMessage(remoteJid, { text: acceptanceText }, { quoted: msg });
                 } catch (sendError) {
-                    console.error(`[ACK-QUEUE] Error enviando a ${idToFind}, reintentando en 1s...`, sendError);
+                    console.error(`[ACK-RETRY] Error enviando a ${idToFind}, reintentando...`);
                     await delay(1000);
                     sentMsg = await sock.sendMessage(remoteJid, { text: acceptanceText }, { quoted: msg });
                 }
 
-                // Si se envió correctamente, pasar a la siguiente cola
                 if (sentMsg) {
                     processingQueue.push({ sentMsg, userMsg: msg, remoteJid, idToFind });
-                    runProcessor(sock); // Disparar la cola de edición
-                } else {
-                     console.error(`[ACK-QUEUE] Falló envío para ID ${idToFind} (MsgID: ${msg.key.id})`);
+                    runProcessor(sock); // Disparar cola de edición
                 }
 
-                // Delay de seguridad entre ACKs (evita rate-overlimit en ráfagas)
-                await delay(1000); 
+                // Delay entre ACKs para no saturar
+                await delay(800); 
 
             } catch (err) {
-                console.error(`[ACK-QUEUE] Error fatal con ID ${idToFind}:`, err);
+                console.error(`[ACK ERROR] ID ${idToFind}:`, err);
             }
         }
     } finally {
@@ -198,7 +285,7 @@ async function runAckQueue(sock) {
     }
 }
 
-// Procesador de EDICIÓN (Búsqueda y Resultado)
+// 3. Procesador de EDICIÓN (Búsqueda y Resultado)
 async function runProcessor(sock) {
     if (isProcessingQueue || processingQueue.length === 0) return;
     isProcessingQueue = true;
@@ -207,16 +294,15 @@ async function runProcessor(sock) {
         while (processingQueue.length > 0) {
             const { sentMsg, userMsg, remoteJid, idToFind } = processingQueue.shift();
 
-            console.log(`[QUEUE] Procesando edición para ID: ${idToFind} (MsgID: ${userMsg.key.id}). Pendientes: ${processingQueue.length}`);
+            console.log(`[PROCESSOR] Editando ID: ${idToFind}. Pendientes: ${processingQueue.length}`);
 
             try {
-                // Delay 5s (Efecto búsqueda) - Aquí ocurre la pausa "escalera"
+                // Delay 5s (Efecto búsqueda)
                 await delay(5000);
 
                 // Buscar en Caché
                 const found = cachedCoordenadas.find(item => item.ID === idToFind);
                 
-                // Fecha dinámica
                 const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
                 const date = new Date();
                 const formattedDate = `${date.getDate()} de ${months[date.getMonth()]}`;
@@ -225,42 +311,26 @@ async function runProcessor(sock) {
                     const lat = found.Latitud || found.lat || 'No definida';
                     const long = found.Longitud || found.long || 'No definida';
                     
-                    // Texto FINAL (Reemplaza al anterior)
                     const finalText = `📍 *Coordenadas Encontradas* 📍\n\n🆔 *ID:* ${idToFind}\n🌍 *Latitud:* ${lat}\n🌍 *Longitud:* ${long}\n\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
 
-                    // EDITAR el mensaje anterior (Reemplazo total)
-                    await sock.sendMessage(remoteJid, { 
-                        text: finalText,
-                        edit: sentMsg.key 
-                    });
-                    
-                    // REACCIÓN al mensaje del USUARIO (userMsg.key)
+                    await sock.sendMessage(remoteJid, { text: finalText, edit: sentMsg.key });
                     await sock.sendMessage(remoteJid, { react: { text: '👨‍💻', key: userMsg.key } });
                     
                 } else {
                     const notFoundText = `❌ No se encontraron coordenadas para el ID: ${idToFind}\n\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
-                    
-                    await sock.sendMessage(remoteJid, { 
-                        text: notFoundText,
-                        edit: sentMsg.key 
-                    });
+                    await sock.sendMessage(remoteJid, { text: notFoundText, edit: sentMsg.key });
                 }
 
-                // Pequeña pausa entre tareas para no saturar
+                // Pausa breve
                 await delay(500);
 
             } catch (err) {
-                console.error(`[QUEUE] Error procesando ${idToFind}:`, err);
-                // Si falla uno, continuamos con el siguiente. NO lanzamos error para no detener la cola.
+                console.error(`[PROCESSOR ERROR] ${idToFind}:`, err);
             }
         }
     } finally {
         isProcessingQueue = false;
-        // Si quedaron elementos por alguna razón (race condition), intentamos reiniciar
-        if (processingQueue.length > 0) {
-            console.log('[QUEUE] Cola no vacía tras finalizar, reiniciando procesador...');
-            runProcessor(sock);
-        }
+        if (processingQueue.length > 0) runProcessor(sock);
     }
 }
 
@@ -418,91 +488,27 @@ async function startBot() {
     // Guardar credenciales
     sock.ev.on('creds.update', saveCreds);
 
-    // Manejo de Mensajes
+    // Manejo de Mensajes (UPSERT - Entrada Cruda)
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        if (type !== 'notify') return;
+        // Log detallado de entrada
+        console.log(`[UPSERT] Recibido evento. Tipo: ${type}. Cantidad: ${messages.length}`);
 
         for (const msg of messages) {
-            try {
-                if (!msg.message) continue;
-                // Ignorar mensajes propios y mensajes de estado
-                if (msg.key.fromMe) continue;
-                if (msg.message.protocolMessage) continue;
-                if (msg.message.reactionMessage) continue;
-
-                // Extraer texto
-                const msgType = Object.keys(msg.message)[0];
-                const text = msgType === 'conversation' 
-                    ? msg.message.conversation 
-                    : msgType === 'extendedTextMessage' 
-                        ? msg.message.extendedTextMessage.text 
-                        : '';
-
-                if (!text) continue;
-                const remoteJid = msg.key.remoteJid;
-
-                // --- ANTI-BUCLE / ANTI-SPAM ---
-                // Solo ignoramos NUESTRAS PROPIAS RESPUESTAS para evitar bucles infinitos.
-                // Permitimos "⚠️" y "COORDENADAS" porque son parte del input del usuario.
-                if (text.includes('SOLICITUD ACEPTADA') ||
-                    text.includes('Buscando 🔎') ||
-                    text.includes('Cuadrilla 𝗕𝗼𝘁') ||
-                    text.includes('Coordenadas Encontradas')) {
-                    console.log(`[ANTI-BUCLE] Ignorando mensaje propio/repetido en ${remoteJid}`);
-                    continue;
-                }
-
-                console.log(`Mensaje recibido de ${remoteJid}: ${text.substring(0, 50)}...`);
-
-                // --- COMANDOS ---
-                
-                // Ping
-                if (text === '.ping') {
-                    console.log('Respondiendo a .ping');
-                    await sock.readMessages([msg.key]); // Marcar leído (Blue check)
-                    await sock.sendMessage(remoteJid, { text: 'pong!' }, { quoted: msg });
-                }
-
-                // Menu
-                if (text === '.menuprincipal') {
-                    console.log('Respondiendo a .menuprincipal');
-                    await sock.sendMessage(remoteJid, { text: 'Bot Baileys Activo y Ligero ⚡' }, { quoted: msg });
-                }
-
-                // --- BUSCADOR MC ---
-                // Soporte para múltiples IDs (ej: MC12345 MC67890)
-                // Regex global para capturar todos los patrones MC...
-                const matches = [...text.matchAll(/MC[:\s]*(\d+)/gi)];
-
-                if (matches.length > 0) {
-                    console.log(`[BUSCADOR] Encontrados ${matches.length} IDs en mensaje de ${remoteJid}`);
-
-                    for (const match of matches) {
-                        const fullMatch = match[0];
-                        const idNumbers = match[1]; // El grupo de captura (\d+)
-                        const idToFind = `MC${idNumbers}`;
-
-                        // Validación de 5 dígitos
-                        if (idNumbers.length !== 5) {
-                            // Solo respondemos error si es un mensaje único, para no spammear en listas largas
-                            if (matches.length === 1) {
-                                await sock.sendMessage(remoteJid, { text: 'ID NO EXISTE VERIFICAR .' }, { quoted: msg });
-                            }
-                            console.log(`[BUSCADOR] ID inválido omitido: ${fullMatch}`);
-                            continue;
-                        }
-
-                        // 1. AÑADIR A LA COLA DE ACK (Envío Inicial Seguro)
-                        ackQueue.push({ msg, remoteJid, idToFind, idNumbers });
-                    }
-                    
-                    // Iniciar procesador
-                    runAckQueue(sock);
-                }
-            } catch (err) {
-                console.error('Error procesando mensaje:', err);
+            // Deduplicación Crítica
+            if (processedMessageIds.has(msg.key.id)) {
+                console.log(`[DUPLICADO] ID ${msg.key.id} ya procesado. Ignorando.`);
+                continue;
             }
+            
+            // Añadir a procesados
+            processedMessageIds.add(msg.key.id);
+
+            // Push a Cola de Entrada
+            incomingQueue.push(msg);
         }
+
+        // Disparar procesador asíncrono (sin await para no bloquear upsert)
+        processIncomingQueue(sock);
     });
 }
 
