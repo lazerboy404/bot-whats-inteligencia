@@ -381,8 +381,12 @@ async function processIncomingQueue(sock) {
                                     const text = (r.title + r.link).toLowerCase();
                                     
                                     // FILTRO NEGATIVO: Si dice "Guía", "Manual", "Install", etc., NO es un datasheet puro.
-                                    // Esto penaliza documentos como "Short Guide", "Quick Start", "Hardware Installation".
-                                    const badWords = ['guide', 'guia', 'manual', 'install', 'setup', 'short', 'qsg', 'hig', 'quick', 'breve', 'usuario', 'user', 'start', 'inicio', 'montaje'];
+                                    // Esto penaliza documentos como "Short Guide", "Quick Start", "Hardware Installation", "Differences".
+                                    const badWords = [
+                                        'guide', 'guia', 'manual', 'install', 'setup', 'short', 'qsg', 'hig', 'quick', 'breve', 'usuario', 'user', 'start', 'inicio', 'montaje',
+                                        'differences', 'diferencias', 'comparison', 'comparativa', 'versus', 'vs',
+                                        'flyer', 'folleto', 'brochure', 'catalog', 'catalogo', 'list', 'lista', 'eol', 'eos', 'announcement', 'notice'
+                                    ];
                                     if (badWords.some(w => text.includes(w))) return false;
 
                                     // FILTRO POSITIVO: Debe decir explícitamente Datasheet o Ficha Técnica
