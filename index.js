@@ -152,6 +152,11 @@ let isProcessingIncoming = false;
 // Variable para el temporizador de Debounce/Buffer
 let incomingBufferTimeout = null;
 
+// --- CONFIGURACIÓN DE ADMIN Y CONTROL DE CHAT ---
+// Agrega aquí los números permitidos (formato internacional sin +). Ejemplo: '5215512345678'
+const ADMIN_NUMBERS = ['5215512345678']; 
+let isChatClosed = false;
+
 // Cola 1: ACK (Aceptación Inmediata pero Segura)
 // Objetivo: Responder "SOLICITUD ACEPTADA" rápido pero sin saturar (rate-limit)
 const ackQueue = [];
@@ -188,6 +193,41 @@ async function processIncomingQueue(sock) {
 
                 if (!text) continue;
                 const remoteJid = msg.key.remoteJid;
+
+                // --- CONTROL DE ADMIN (Cerrar/Abrir Chat) ---
+                if (text.trim() === '.cerrar' || text.trim() === '.abrir') {
+                    // Identificar quién envía (soporte para grupos y chat privado)
+                    const sender = msg.key.participant || msg.key.remoteJid;
+                    const senderNumber = sender.replace(/\D/g, ''); // Solo números
+                    const adminName = msg.pushName || 'El Administrador';
+
+                    // Verificar si es admin
+                    if (ADMIN_NUMBERS.includes(senderNumber)) {
+                        if (text.trim() === '.cerrar') {
+                            if (!isChatClosed) {
+                                isChatClosed = true;
+                                await sock.sendMessage(remoteJid, { text: `🔒 ${adminName} ha cerrado el chat.` }, { quoted: msg });
+                            } else {
+                                await sock.sendMessage(remoteJid, { text: '⚠️ El chat ya está cerrado.' }, { quoted: msg });
+                            }
+                        } else { // .abrir
+                            if (isChatClosed) {
+                                isChatClosed = false;
+                                await sock.sendMessage(remoteJid, { text: `🔓 ${adminName} ha abierto el chat.` }, { quoted: msg });
+                            } else {
+                                await sock.sendMessage(remoteJid, { text: '⚠️ El chat ya está abierto.' }, { quoted: msg });
+                            }
+                        }
+                    } else {
+                        console.log(`[AUTH] Intento de comando admin denegado a: ${senderNumber}`);
+                    }
+                    continue; // Detener procesamiento
+                }
+
+                // Si el chat está cerrado, ignorar mensajes (excepto los comandos de admin arriba)
+                if (isChatClosed) {
+                    continue;
+                }
 
                 // Anti-Bucle (Ignorar respuestas propias citadas o forwards del bot)
                 if (text.includes('SOLICITUD ACEPTADA') || text.includes('Cuadrilla 𝗕𝗼𝘁')) continue;
