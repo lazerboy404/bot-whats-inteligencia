@@ -398,9 +398,17 @@ async function processIncomingQueue(sock) {
                                            (text.includes('ficha') && text.includes('tecnica'));
                                 };
 
-                                // Separar candidatos en "Datasheets Puros" y "Otros (Manuales, etc)"
+                            // Separar candidatos en "Datasheets Puros" y "Otros (Manuales, etc)"
                                 const datasheets = officialCandidates.filter(isRealDatasheet);
                                 const others = officialCandidates.filter(r => !isRealDatasheet(r));
+
+                                // Buscar posible resultado en Syscom para comparar
+                                const syscomResult = organicResults.find(r => {
+                                    const link = r.link.toLowerCase();
+                                    const title = r.title.toLowerCase();
+                                    const isPdf = link.endsWith('.pdf') || title.includes('datasheet') || title.includes('ficha');
+                                    return isPdf && link.includes('syscom');
+                                });
 
                                 // Función para preferir español
                                 const preferSpanish = (candidates) => {
@@ -420,20 +428,35 @@ async function processIncomingQueue(sock) {
                                 } else if (datasheets.length > 0) {
                                     // 2. Si no hay Datasheet Español, usar Datasheet Inglés (MEJOR QUE MANUAL ESPAÑOL)
                                     bestOfficial = datasheets[0];
+                                } 
+                                
+                                // Si encontramos un Datasheet Oficial, nos quedamos con él.
+                                if (bestOfficial) {
+                                    bestResult = bestOfficial;
+                                    sourceType = 'OFFICIAL';
                                 } else {
-                                    // 3. Si no hay Datasheets, buscar Manual/Guía en Español
-                                    const spanishOther = preferSpanish(others);
-                                    if (spanishOther) {
-                                        bestOfficial = spanishOther;
+                                    // NO hay Datasheet Oficial Puro (solo Manuales/Guías en 'others')
+                                    
+                                    // 3. Verificar si Syscom tiene algo antes de caer en "Manuales Oficiales"
+                                    // Esto soluciona el caso Cisco: El sitio oficial llena de Guías, pero Syscom tiene la Ficha.
+                                    if (syscomResult) {
+                                        bestResult = syscomResult;
+                                        sourceType = 'SYSCOM';
                                     } else {
-                                        // 4. Último recurso: Cualquier documento oficial (Manual Inglés)
-                                        bestOfficial = others[0];
+                                        // 4. Si no hay Syscom, entonces sí usamos los Manuales/Guías Oficiales
+                                        const spanishOther = preferSpanish(others);
+                                        if (spanishOther) {
+                                            bestOfficial = spanishOther;
+                                        } else {
+                                            bestOfficial = others[0];
+                                        }
+                                        bestResult = bestOfficial || officialCandidates[0];
+                                        sourceType = 'OFFICIAL';
                                     }
                                 }
 
-                                bestResult = bestOfficial || officialCandidates[0]; // Fallback final por seguridad
                             } else {
-                                // 2. Prioridad: PDF en Syscom (Distribuidor)
+                                // 2. Prioridad: PDF en Syscom (Distribuidor) - Si no hubo NINGÚN resultado oficial
                                 const syscomResult = organicResults.find(r => {
                                     const link = r.link.toLowerCase();
                                     const title = r.title.toLowerCase();
