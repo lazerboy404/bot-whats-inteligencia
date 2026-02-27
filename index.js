@@ -344,13 +344,22 @@ async function processIncomingQueue(sock) {
                     }
 
                         // c) Validación del Bot (Debe ser Admin del Grupo)
-                        // El ID del bot en sock.user puede tener sufijos (ej: :12@s.whatsapp.net)
-                        const botId = sock.user?.id?.split(':')[0] || sock.user?.id;
-                        const botParticipant = participants.find(p => p.id.includes(botId)); 
+                        // Normalización segura de IDs para comparación (eliminar sufijos y @)
+                        const botJid = sock.user?.id;
+                        const botNumber = botJid ? botJid.split(':')[0].split('@')[0].replace(/\D/g, '') : '';
+                        
+                        const botParticipant = participants.find(p => {
+                            const pNumber = p.id.split(':')[0].split('@')[0].replace(/\D/g, '');
+                            return pNumber === botNumber;
+                        });
                         
                         const isBotAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
 
                         if (!isBotAdmin) {
+                            // Depuración temporal para ver qué está pasando si falla
+                            console.log(`[DEBUG SILENT] Bot Number: ${botNumber}`);
+                            console.log(`[DEBUG SILENT] Found Participant:`, botParticipant);
+                            
                             await sock.sendMessage(remoteJid, { text: '⚠️ Necesito ser administrador del grupo para ejecutar esta acción.' }, { quoted: msg });
                             continue;
                         }
