@@ -792,6 +792,8 @@ async function processIncomingQueue(sock) {
                         Actúa como un Auditor Técnico e Ingeniero Preventa Experto.
                         Analiza las siguientes especificaciones técnicas y busca en tu conocimiento equipos (marcas y modelos reales del mercado de seguridad electrónica, redes o IT) que cumplan AL 100% con los requisitos.
 
+                        Tu objetivo principal es recomendar hardware que se pueda comprar fácilmente con distribuidores mayoristas. Prioriza SIEMPRE buscar y mostrar primero equipos que pertenezcan al catálogo del distribuidor SYSCOM. Además, dale preferencia a estas marcas líderes: Epcom, Linkedpro, Hikvision, Dahua, Cisco, Ubiquiti, Mikrotik, Panduit, Belden, Axis, Hanwha, APC y Tripp Lite. Si sugieres un modelo, asegúrate en la medida de lo posible que sea un producto comercializado por Syscom. Usa marcas fuera de esta lista VIP solo como último recurso si ninguna otra cumple al 100% con los requisitos.
+
                         Reglas de Oro:
                         1. Cero Alucinaciones: Solo recomienda equipos que estés seguro que existen y cumplen. Si dudas, asume que NO cumple.
                         2. Comparación Estricta: Verifica voltajes, luxes, certificaciones, protocolos, temperaturas, etc.
