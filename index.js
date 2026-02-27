@@ -9,7 +9,8 @@ const {
     proto,
     WAMessageStubType,
     initAuthCreds,
-    BufferJSON
+    BufferJSON,
+    areJidsSameUser
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const express = require('express');
@@ -344,31 +345,18 @@ async function processIncomingQueue(sock) {
                     }
 
                         // c) Validación del Bot (Debe ser Admin del Grupo)
-                        // Normalización segura de IDs para comparación (eliminar sufijos y @)
-                        const botJid = sock.user?.id;
-                        const botNumber = botJid ? botJid.split(':')[0].split('@')[0].replace(/\D/g, '') : '';
-                        
-                        // Búsqueda robusta del bot en la lista de participantes
-                        let botParticipant = participants.find(p => {
-                            const pNumber = p.id.split(':')[0].split('@')[0].replace(/\D/g, '');
-                            return pNumber === botNumber;
-                        });
-
-                        // Fallback: búsqueda por inclusión si la exacta falla
-                        if (!botParticipant) {
-                            botParticipant = participants.find(p => p.id.includes(botNumber));
-                        }
+                        // Usamos areJidsSameUser para comparación estándar de Baileys (maneja sufijos y formatos)
+                        const botParticipant = participants.find(p => areJidsSameUser(p.id, sock.user.id));
                         
                         const isBotAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
 
                         if (!isBotAdmin) {
-                            // Depuración temporal para ver qué está pasando si falla
-                            console.log(`[DEBUG SILENT] Bot Number: ${botNumber}`);
-                            console.log(`[DEBUG SILENT] Found Participant:`, botParticipant);
+                            // Si falla, intentamos diagnóstico manual por si es un caso extremo de 521 vs 52
+                            // Pero mantenemos el mensaje limpio para el usuario a menos que persista el error en debug
+                            console.log(`[DEBUG SILENT] Bot ID: ${sock.user.id} - Not found in participants using areJidsSameUser`);
                             
-                            const debugMsg = `\n\n🔧 *Diagnóstico:*\nID Bot: ${botNumber || 'No detectado'}\nEncontrado: ${botParticipant ? 'SÍ' : 'NO'}\nRol: ${botParticipant?.admin || 'Miembro/Null'}`;
-
-                            await sock.sendMessage(remoteJid, { text: '⚠️ Necesito ser administrador del grupo para ejecutar esta acción.' + debugMsg }, { quoted: msg });
+                            // Mensaje de error simplificado pero claro
+                            await sock.sendMessage(remoteJid, { text: '⚠️ Necesito ser administrador del grupo para ejecutar esta acción.\n\n(No me detecto como admin en la lista de participantes)' }, { quoted: msg });
                             continue;
                         }
 
