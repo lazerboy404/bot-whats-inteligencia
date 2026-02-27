@@ -451,16 +451,17 @@ async function processIncomingQueue(sock) {
                                       `✅ *Lista Blanca:*\n${list}`;
                         } else {
                             // Modo Estricto APAGADO:
-                            // 1. .ficha siempre funciona (público)
-                            // 2. .coor solo funciona si está explícitamente en la lista (opt-in)
+                            // Comprobación de estado individual para .ficha y .coor
                             const isCoorActive = config.allowedCommands.includes('.coor');
-                            const coorStatus = isCoorActive ? '✅ ACTIVO' : '❌ INACTIVO (Requiere .add .coor)';
+                            const isFichaActive = config.allowedCommands.includes('.ficha');
+                            
+                            const coorStatus = isCoorActive ? '✅ ACTIVO' : '❌ INACTIVO';
+                            const fichaStatus = isFichaActive ? '✅ ACTIVO' : '❌ INACTIVO';
 
                             message = `⚙️ *Configuración del Grupo*\n\n` +
-                                      `🔓 *Modo Estricto: DESACTIVADO*\n` +
-                                      `✅ La mayoría de comandos son públicos, PERO algunos requieren activación manual.\n\n` +
-                                      `📜 *Estado de Comandos Especiales:*\n` +
-                                      `• *.ficha*: ✅ PÚBLICO (Siempre activo)\n` +
+                                      `🔓 *Modo Estricto: DESACTIVADO*\n\n` +
+                                      `📜 *Estado de Comandos :*\n` +
+                                      `• *.ficha*: ${fichaStatus}\n` +
                                       `• *.coor*: ${coorStatus}`;
                         }
                         
@@ -485,6 +486,14 @@ async function processIncomingQueue(sock) {
                 // 3. COMANDO DATASHEET / FICHA TÉCNICA (Serper.dev)
                 // Ejemplo: .ficha Axis P3245-V
                 if (text.toLowerCase().startsWith('.ficha') || text.toLowerCase().startsWith('.datasheet')) {
+                    
+                    // Verificación Opt-In: .ficha requiere estar permitido explícitamente (igual que .coor)
+                    const config = await getGroupConfig(remoteJid);
+                    if (!config.allowedCommands.includes('.ficha')) {
+                         // Si no está permitido, ignoramos silenciosamente
+                         continue;
+                    }
+
                     const model = text.split(' ').slice(1).join(' ');
                     
                     if (!model) {
