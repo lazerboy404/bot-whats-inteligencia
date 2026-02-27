@@ -738,17 +738,20 @@ async function processIncomingQueue(sock) {
                 
                 if (coordMatches.length > 0) {
                     let isAllowed = false;
+                    const config = await getGroupConfig(remoteJid);
+                    const isCoorEnabled = config.allowedCommands.includes('.coor');
 
-                    // 1. Si es comando explícito (.coor), SIEMPRE PERMITIR si ya pasó la whitelist arriba
+                    // 1. Si es comando explícito (.coor)
                     if (cmdBase === '.coor') {
-                        isAllowed = true;
+                        // Debe estar habilitado explícitamente (incluso en modo no estricto, para poder desactivarlo)
+                        if (isCoorEnabled) {
+                            isAllowed = true;
+                        }
                     } 
                     // 2. Si es texto normal (no comando), verificamos reglas
                     else if (!text.startsWith('.')) {
-                        const config = await getGroupConfig(remoteJid);
-                        // Si el modo estricto está APAGADO, permitir.
-                        // Si está ENCENDIDO, requerir permiso explícito.
-                        if (!config.strictMode || config.allowedCommands.includes('.coor')) {
+                        // Búsqueda implícita REQUIERE permiso explícito siempre
+                        if (isCoorEnabled) {
                              isAllowed = true;
                         }
                     }
