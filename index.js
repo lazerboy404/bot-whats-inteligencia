@@ -283,7 +283,7 @@ async function processIncomingQueue(sock) {
                 // --- FIN CONTROL PERMISOS ---
 
                 // 1. CONTROL DEL BOT (Solo Dueño/SuperAdmins del Bot)
-                if (cmdFull === '.cerrarbot' || cmdFull === '.abrirbot') {
+                if (cmdFull === '.off' || cmdFull === '.on' || cmdFull === '.cerrarbot' || cmdFull === '.abrirbot') {
                     // Identificar quién envía
                     const sender = msg.key.participant || msg.key.remoteJid;
                     const senderNumber = sender.replace(/\D/g, ''); // Solo números
@@ -291,19 +291,19 @@ async function processIncomingQueue(sock) {
 
                     // Verificar si es admin del BOT (lista hardcodeada)
                     if (ADMIN_NUMBERS.includes(senderNumber)) {
-                        if (cmd === '.cerrarbot') {
+                        if (cmdBase === '.off' || cmdBase === '.cerrarbot') {
                             if (!isChatClosed) {
                                 isChatClosed = true;
-                                await sock.sendMessage(remoteJid, { text: `🔒 ${adminName} ha cerrado el bot.` }, { quoted: msg });
+                                await sock.sendMessage(remoteJid, { text: `� ${adminName} ha desactivado el bot.` }, { quoted: msg });
                             } else {
-                                await sock.sendMessage(remoteJid, { text: '⚠️ El bot ya está cerrado.' }, { quoted: msg });
+                                await sock.sendMessage(remoteJid, { text: '⚠️ El bot ya está desactivado.' }, { quoted: msg });
                             }
-                        } else { // .abrirbot
+                        } else { // .on o .abrirbot
                             if (isChatClosed) {
                                 isChatClosed = false;
-                                await sock.sendMessage(remoteJid, { text: `🔓 ${adminName} ha abierto el bot.` }, { quoted: msg });
+                                await sock.sendMessage(remoteJid, { text: `� ${adminName} ha activado el bot.` }, { quoted: msg });
                             } else {
-                                await sock.sendMessage(remoteJid, { text: '⚠️ El bot ya está abierto.' }, { quoted: msg });
+                                await sock.sendMessage(remoteJid, { text: '⚠️ El bot ya está activado.' }, { quoted: msg });
                             }
                         }
                     } else {
