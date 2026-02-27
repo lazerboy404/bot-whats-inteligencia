@@ -264,7 +264,7 @@ async function processIncomingQueue(sock) {
 
                 // Comandos administrativos que SIEMPRE funcionan (bypass de permisos)
                 // Solo validan permisos de administrador del grupo/bot internamente
-                const ADMIN_COMMANDS = ['.config', '.add', '.remove', '.permit', '.cerrarbot', '.abrirbot', '.silenciar', '.activar'];
+                const ADMIN_COMMANDS = ['.config', '.add', '.remove', '.permit', '.off', '.on', '.silenciar', '.activar'];
 
                 // Si NO es un comando administrativo y estamos en un grupo, verificar permisos
                 if (remoteJid.endsWith('@g.us') && !ADMIN_COMMANDS.includes(cmdBase) && cmdBase.startsWith('.')) {
@@ -447,6 +447,8 @@ async function processIncomingQueue(sock) {
                             await sock.sendMessage(remoteJid, { text: `🗑️ Comando *${param}* eliminado de la lista permitida.${extraMsg}` });
                         }
                     } else if (subCmd === 'list' || subCmd === 'lista') {
+                        // Eliminado por petición del usuario (reemplazado por .permit)
+                        // Dejamos el bloque vacío o redirigimos a .permit si alguien lo usa por costumbre
                         const config = await getGroupConfig(remoteJid);
                         const status = config.isWhitelistEnabled ? '🛡️ *ACTIVADO* (Solo permitidos)' : '🔓 *DESACTIVADO* (Todos permitidos)';
                         const list = config.allowedCommands.length > 0 ? config.allowedCommands.join(', ') : '(Ninguno)';
@@ -458,7 +460,9 @@ async function processIncomingQueue(sock) {
                                   `• *.config off*: Desactiva modo estricto\n` +
                                   `• *.add .comando*: Permite un comando\n` +
                                   `• *.remove .comando*: Bloquea un comando\n` +
-                                  `• *.permit*: Ver comandos permitidos`
+                                  `• *.permit*: Ver comandos permitidos\n` +
+                                  `• *.on*: Activar bot (silencio off)\n` +
+                                  `• *.off*: Desactivar bot (silencio on)`
                         });
                     }
                     continue;
