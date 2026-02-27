@@ -1156,7 +1156,9 @@ async function startBot() {
         browser: Browsers.ubuntu('Chrome'), 
         syncFullHistory: false, // Ahorra memoria al no sincronizar todo el historial antiguo
         markOnlineOnConnect: true, // Marcar online al conectar
-        defaultQueryTimeoutMs: 60000, // Aumentar timeout a 60s
+        defaultQueryTimeoutMs: 120000, // Aumentar timeout a 120s para conexiones lentas
+        keepAliveIntervalMs: 30000, // Ping cada 30s para mantener conexión viva
+        retryRequestDelayMs: 5000, // Esperar 5s antes de reintentar peticiones fallidas
     });
 
     // Eventos de Conexión
