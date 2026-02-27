@@ -525,7 +525,7 @@ async function processIncomingQueue(sock) {
                         continue;
                     }
 
-                    await sock.sendMessage(remoteJid, { text: `🔍 Buscando ficha técnica para: *${model}*...` }, { quoted: msg });
+                    await sock.sendMessage(remoteJid, { text: `🔍🤖 Buscando ficha técnica para: *${model}*...` }, { quoted: msg });
 
                     try {
                         // Construir consulta: Modelo + filtros para PDF
@@ -749,7 +749,7 @@ async function processIncomingQueue(sock) {
                 }
 
                 // Anti-Bucle (Ignorar respuestas propias citadas o forwards del bot)
-                if (text.includes('SOLICITUD ACEPTADA') || text.includes('Cuadrilla 𝗕𝗼𝘁')) continue;
+                if (text.includes('SOLICITUD ACEPTADA') || text.includes('🤖M5-Bot')) continue;
 
                 console.log(`[INCOMING] Procesando msg de ${remoteJid}: ${text.substring(0, 30)}...`);
 
@@ -857,7 +857,7 @@ async function runAckQueue(sock) {
                 const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
                 const date = new Date();
                 const formattedDate = `${date.getDate()} de ${months[date.getMonth()]}`;
-                const acceptanceText = `🤖 \`\`\`SOLICITUD ACEPTADA\`\`\` 🤖\n\n> Buscando 🔎\n> Cuadrilla 𝗕𝗼𝘁 🤖 | ${formattedDate}`;
+                const acceptanceText = `🤖 \`\`\`SOLICITUD ACEPTADA\`\`\` 🤖\n\n> Buscando 🔎\n> 🤖M5-Bot | ${formattedDate}`;
 
                 // ENVIAR
                 let sentMsg;
@@ -919,7 +919,7 @@ async function runProcessor(sock) {
                     await sock.sendMessage(remoteJid, { react: { text: '🤖', key: userMsg.key } });
                     
                 } else {
-                    const notFoundText = `❌ No se encontraron coordenadas para el ID: ${idToFind}\n\n> Cuadrilla 𝗕𝗼𝘁 🤖 | ${formattedDate}`;
+                    const notFoundText = `❌ No se encontraron coordenadas para el ID: ${idToFind}\n\n> 🤖M5-Bot | ${formattedDate}`;
                     await sock.sendMessage(remoteJid, { text: notFoundText, edit: sentMsg.key });
                 }
 
