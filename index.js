@@ -44,6 +44,65 @@ const initMongoModel = () => {
     }
 };
 
+// --- MODELO DE CONFIGURACIÓN DE GRUPOS (Permisos) ---
+let GroupConfigModel;
+const initGroupConfigModel = () => {
+    if (!GroupConfigModel && mongoose.models.GroupConfig) {
+        GroupConfigModel = mongoose.model('GroupConfig');
+    } else if (!GroupConfigModel) {
+        const GroupConfigSchema = new mongoose.Schema({
+            remoteJid: { type: String, required: true, unique: true },
+            isWhitelistEnabled: { type: Boolean, default: false }, // false = todos permitidos (blacklist mode implicito vacío), true = solo allowedCommands
+            allowedCommands: { type: [String], default: [] }
+        });
+        GroupConfigModel = mongoose.model('GroupConfig', GroupConfigSchema);
+    }
+};
+
+// Caché en memoria para evitar consultas constantes a Mongo
+const groupConfigCache = new Map();
+
+const getGroupConfig = async (remoteJid) => {
+    if (!GroupConfigModel) initGroupConfigModel();
+    
+    // 1. Buscar en caché
+    if (groupConfigCache.has(remoteJid)) {
+        return groupConfigCache.get(remoteJid);
+    }
+
+    // 2. Buscar en Mongo
+    try {
+        let config = await GroupConfigModel.findOne({ remoteJid });
+        if (!config) {
+            // Retornar default sin guardar para no llenar la DB de basura
+            config = { isWhitelistEnabled: false, allowedCommands: [] };
+        }
+        // Guardar en caché (incluso si es default)
+        groupConfigCache.set(remoteJid, config);
+        return config;
+    } catch (err) {
+        console.error('Error obteniendo config de grupo:', err);
+        return { isWhitelistEnabled: false, allowedCommands: [] }; // Fail-open (permitir todo si falla DB)
+    }
+};
+
+const updateGroupConfig = async (remoteJid, update) => {
+    if (!GroupConfigModel) initGroupConfigModel();
+    try {
+        const config = await GroupConfigModel.findOneAndUpdate(
+            { remoteJid },
+            update,
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+        // Actualizar caché
+        groupConfigCache.set(remoteJid, config);
+        return config;
+    } catch (err) {
+        console.error('Error actualizando config de grupo:', err);
+        throw err;
+    }
+};
+
 // Función para conectar (con reintento básico y log de éxito)
 const connectToMongo = async () => {
     try {
@@ -52,6 +111,7 @@ const connectToMongo = async () => {
         });
         console.log('✅ Conectado a MongoDB con éxito');
         initMongoModel();
+        initGroupConfigModel(); // Inicializar modelo de grupos
     } catch (err) {
         console.error('❌ Error CRÍTICO conectando a MongoDB:', err);
         throw err; // Re-lanzamos para detener el bot si la DB es obligatoria
@@ -198,11 +258,32 @@ async function processIncomingQueue(sock) {
                 if (!text) continue;
                 const remoteJid = msg.key.remoteJid;
 
-                // --- CONTROL DE ADMIN Y GRUPOS ---
-                const cmd = text.trim(); // Mantener case-sensitive o usar toLowerCase() si prefieres
+                // --- CONTROL DE PERMISOS POR GRUPO (Whitelist) ---
+                const cmdFull = text.trim();
+                const cmdBase = cmdFull.split(' ')[0].toLowerCase(); // Ej: .ficha, .config
+
+                // Comandos administrativos que SIEMPRE funcionan (bypass de permisos)
+                // Solo validan permisos de administrador del grupo/bot internamente
+                const ADMIN_COMMANDS = ['.config', '.cerrarbot', '.abrirbot', '.silenciar', '.activar'];
+
+                // Si NO es un comando administrativo y estamos en un grupo, verificar permisos
+                if (remoteJid.endsWith('@g.us') && !ADMIN_COMMANDS.includes(cmdBase) && cmdBase.startsWith('.')) {
+                    const config = await getGroupConfig(remoteJid);
+                    
+                    if (config.isWhitelistEnabled) {
+                        // Si whitelist está activada, el comando DEBE estar en la lista
+                        if (!config.allowedCommands.includes(cmdBase)) {
+                            // Comando NO permitido. Ignorar silenciosamente.
+                            // console.log(`[PERMISOS] Comando ${cmdBase} bloqueado en ${remoteJid}`);
+                            continue;
+                        }
+                    }
+                }
+
+                // --- FIN CONTROL PERMISOS ---
 
                 // 1. CONTROL DEL BOT (Solo Dueño/SuperAdmins del Bot)
-                if (cmd === '.cerrarbot' || cmd === '.abrirbot') {
+                if (cmdFull === '.cerrarbot' || cmdFull === '.abrirbot') {
                     // Identificar quién envía
                     const sender = msg.key.participant || msg.key.remoteJid;
                     const senderNumber = sender.replace(/\D/g, ''); // Solo números
@@ -232,7 +313,7 @@ async function processIncomingQueue(sock) {
                 }
 
                 // 2. CONTROL DEL GRUPO (Silenciar/Activar - Para Admins del Grupo)
-                if (cmd === '.silenciar' || cmd === '.activar') {
+                if (cmdBase === '.silenciar' || cmdBase === '.activar') {
                     // a) Validación de Entorno (Solo Grupos)
                     if (!remoteJid.endsWith('@g.us')) {
                         await sock.sendMessage(remoteJid, { text: '⚠️ Este comando solo funciona en grupos.' }, { quoted: msg });
@@ -268,7 +349,7 @@ async function processIncomingQueue(sock) {
                         }
 
                         // d) Ejecutar Acción
-                        if (cmd === '.silenciar') {
+                        if (cmdBase === '.silenciar') {
                             await sock.groupSettingUpdate(remoteJid, 'announcement');
                             await sock.sendMessage(remoteJid, { text: '🔒 El grupo ha sido silenciado. Solo los administradores pueden enviar mensajes.' });
                         } else { // .activar
@@ -281,6 +362,75 @@ async function processIncomingQueue(sock) {
                         // No enviamos error al chat para no spammear si falla algo interno
                     }
                     continue; // Detener procesamiento
+                }
+
+                // 2.5 GESTIÓN DE PERMISOS (.config)
+                if (cmdBase === '.config') {
+                    if (!remoteJid.endsWith('@g.us')) {
+                        await sock.sendMessage(remoteJid, { text: '⚠️ Este comando solo funciona en grupos.' }, { quoted: msg });
+                        continue;
+                    }
+
+                    // Verificar admin
+                    const groupMetadata = await sock.groupMetadata(remoteJid);
+                    const sender = msg.key.participant || msg.key.remoteJid;
+                    const participant = groupMetadata.participants.find(p => p.id === sender);
+                    const isUserAdmin = participant?.admin === 'admin' || participant?.admin === 'superadmin';
+                    
+                    // Permitir también al "Dueño" global del bot (si está en ADMIN_NUMBERS)
+                    const senderNumber = sender.replace(/\D/g, '');
+                    const isBotOwner = ADMIN_NUMBERS.includes(senderNumber);
+
+                    if (!isUserAdmin && !isBotOwner) {
+                        await sock.sendMessage(remoteJid, { text: '⛔ Solo los administradores del grupo pueden configurar permisos.' }, { quoted: msg });
+                        continue;
+                    }
+
+                    const args = cmdFull.split(' ').slice(1);
+                    const subCmd = args[0]?.toLowerCase();
+                    const param = args[1]?.toLowerCase();
+
+                    if (subCmd === 'on' || subCmd === 'activar') {
+                        await updateGroupConfig(remoteJid, { isWhitelistEnabled: true });
+                        await sock.sendMessage(remoteJid, { text: '🛡️ *Modo Estricto ACTIVADO*\n\nSolo los comandos permitidos funcionarán en este grupo. Usa `.config add [comando]` para autorizar funciones.' });
+                    } else if (subCmd === 'off' || subCmd === 'desactivar') {
+                        await updateGroupConfig(remoteJid, { isWhitelistEnabled: false });
+                        await sock.sendMessage(remoteJid, { text: '🔓 *Modo Estricto DESACTIVADO*\n\nTodos los comandos están habilitados en este grupo.' });
+                    } else if (subCmd === 'add' || subCmd === 'agregar') {
+                        if (!param || !param.startsWith('.')) {
+                            await sock.sendMessage(remoteJid, { text: '⚠️ Debes especificar el comando empezando con punto. Ejemplo: `.config add .ficha`' });
+                        } else {
+                            const currentConfig = await getGroupConfig(remoteJid);
+                            if (!currentConfig.allowedCommands.includes(param)) {
+                                await updateGroupConfig(remoteJid, { $push: { allowedCommands: param } });
+                                await sock.sendMessage(remoteJid, { text: `✅ Comando *${param}* agregado a la lista permitida.` });
+                            } else {
+                                await sock.sendMessage(remoteJid, { text: `⚠️ El comando *${param}* ya estaba permitido.` });
+                            }
+                        }
+                    } else if (subCmd === 'remove' || subCmd === 'quitar') {
+                        if (!param) {
+                            await sock.sendMessage(remoteJid, { text: '⚠️ Ejemplo: `.config remove .ficha`' });
+                        } else {
+                            await updateGroupConfig(remoteJid, { $pull: { allowedCommands: param } });
+                            await sock.sendMessage(remoteJid, { text: `🗑️ Comando *${param}* eliminado de la lista permitida.` });
+                        }
+                    } else if (subCmd === 'list' || subCmd === 'lista') {
+                        const config = await getGroupConfig(remoteJid);
+                        const status = config.isWhitelistEnabled ? '🛡️ *ACTIVADO* (Solo permitidos)' : '🔓 *DESACTIVADO* (Todos permitidos)';
+                        const list = config.allowedCommands.length > 0 ? config.allowedCommands.join(', ') : '(Ninguno)';
+                        await sock.sendMessage(remoteJid, { text: `⚙️ *Configuración del Grupo*\n\nEstado: ${status}\n\n✅ *Comandos Permitidos:*\n${list}` });
+                    } else {
+                        await sock.sendMessage(remoteJid, { 
+                            text: `⚙️ *Ayuda de Configuración*\n\n` +
+                                  `• *.config on*: Activa modo estricto (solo whitelist)\n` +
+                                  `• *.config off*: Desactiva modo estricto (todos funcionan)\n` +
+                                  `• *.config add .comando*: Permite un comando\n` +
+                                  `• *.config remove .comando*: Bloquea un comando\n` +
+                                  `• *.config list*: Ver configuración actual`
+                        });
+                    }
+                    continue;
                 }
 
                 // 3. COMANDO DATASHEET / FICHA TÉCNICA (Serper.dev)
