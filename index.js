@@ -292,7 +292,7 @@ async function processIncomingQueue(sock) {
                 // --- FIN CONTROL PERMISOS ---
 
                 // 1. CONTROL DEL BOT (Solo Dueño/SuperAdmins del Bot)
-                if (cmdFull === '.off' || cmdFull === '.on' || cmdFull === '.cerrarbot' || cmdFull === '.abrirbot') {
+                if (cmdFull === '.off' || cmdFull === '.on') {
                     // Identificar quién envía
                     const sender = msg.key.participant || msg.key.remoteJid;
                     const senderNumber = sender.replace(/\D/g, ''); // Solo números
@@ -300,17 +300,17 @@ async function processIncomingQueue(sock) {
 
                     // Verificar si es admin del BOT (lista hardcodeada)
                     if (ADMIN_NUMBERS.includes(senderNumber)) {
-                        if (cmdBase === '.off' || cmdBase === '.cerrarbot') {
+                        if (cmdBase === '.off') {
                             if (!isChatClosed) {
                                 isChatClosed = true;
-                                await sock.sendMessage(remoteJid, { text: `� ${adminName} ha desactivado el bot.` }, { quoted: msg });
+                                await sock.sendMessage(remoteJid, { text: `🔴 ${adminName} ha desactivado el bot.` }, { quoted: msg });
                             } else {
                                 await sock.sendMessage(remoteJid, { text: '⚠️ El bot ya está desactivado.' }, { quoted: msg });
                             }
-                        } else { // .on o .abrirbot
+                        } else { // .on
                             if (isChatClosed) {
                                 isChatClosed = false;
-                                await sock.sendMessage(remoteJid, { text: `� ${adminName} ha activado el bot.` }, { quoted: msg });
+                                await sock.sendMessage(remoteJid, { text: `🟢 ${adminName} ha activado el bot.` }, { quoted: msg });
                             } else {
                                 await sock.sendMessage(remoteJid, { text: '⚠️ El bot ya está activado.' }, { quoted: msg });
                             }
