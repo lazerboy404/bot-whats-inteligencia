@@ -325,16 +325,15 @@ async function processIncomingQueue(sock) {
                         const groupMetadata = await sock.groupMetadata(remoteJid);
                         const participants = groupMetadata.participants;
 
-                        // b) Validación de Usuario (Debe ser Admin del Grupo)
-                        const sender = msg.key.participant || msg.key.remoteJid;
-                        // Normalizar ID del sender para comparar
-                        const participant = participants.find(p => p.id === sender);
-                        const isUserAdmin = participant?.admin === 'admin' || participant?.admin === 'superadmin';
+                        // b) Validación de Usuario (Solo Dueño del Bot)
+                    const sender = msg.key.participant || msg.key.remoteJid;
+                    const senderNumber = sender.replace(/\D/g, '');
+                    const isBotOwner = ADMIN_NUMBERS.includes(senderNumber);
 
-                        if (!isUserAdmin) {
-                             await sock.sendMessage(remoteJid, { text: '⛔ Acceso denegado: Solo los administradores pueden usar este comando.' }, { quoted: msg });
-                             continue;
-                        }
+                    if (!isBotOwner) {
+                         await sock.sendMessage(remoteJid, { text: '⛔ Acceso denegado: Solo el dueño del bot puede usar este comando.' }, { quoted: msg });
+                         continue;
+                    }
 
                         // c) Validación del Bot (Debe ser Admin del Grupo)
                         // El ID del bot en sock.user puede tener sufijos (ej: :12@s.whatsapp.net)
@@ -372,22 +371,13 @@ async function processIncomingQueue(sock) {
                     }
 
                     // Verificar admin
-                    const groupMetadata = await sock.groupMetadata(remoteJid);
                     const sender = msg.key.participant || msg.key.remoteJid;
-                    const participant = groupMetadata.participants.find(p => p.id === sender);
-                    const isUserAdmin = participant?.admin === 'admin' || participant?.admin === 'superadmin';
-                    
-                    // Permitir también al "Dueño" global del bot (si está en ADMIN_NUMBERS)
                     const senderNumber = sender.replace(/\D/g, '');
                     const isBotOwner = ADMIN_NUMBERS.includes(senderNumber);
 
-                    // EXCEPCIÓN: Permitir .permit a todos los usuarios para que puedan consultar qué comandos funcionan
-                    // (Opcional: Si el usuario prefiere que sea solo admin, se puede revertir. Por defecto útil para todos)
-                    // PERO, siguiendo el patrón estricto de los anteriores, lo mantendré solo admin salvo instrucción contraria.
-                    // El usuario pidió "agrega .permit para ver la lista", asumo contexto de configuración.
-                    
-                    if (!isUserAdmin && !isBotOwner) {
-                        await sock.sendMessage(remoteJid, { text: '⛔ Solo los administradores del grupo pueden configurar permisos.' }, { quoted: msg });
+                    // .permit sigue siendo público para ver qué comandos funcionan
+                    if (cmdBase !== '.permit' && !isBotOwner) {
+                        await sock.sendMessage(remoteJid, { text: '⛔ Acceso denegado: Solo el dueño del bot puede configurar permisos.' }, { quoted: msg });
                         continue;
                     }
 
@@ -465,11 +455,7 @@ async function processIncomingQueue(sock) {
                                       `✅ Actualmente TODOS los comandos están permitidos.\n\n` +
                                       `📜 *Comandos Disponibles:*\n` +
                                       `• *.ficha [modelo]* (Buscar datasheets)\n` +
-                                      `• *.coor [ID]* (Buscar coordenadas)\n` +
-                                      `• *.ping* (Test de estado)\n` +
-                                      `• *.silent / .nosilent* (Gestionar grupo)\n` +
-                                      `• *.on / .off* (Controlar bot)\n` +
-                                      `• *.config* (Configuración)`;
+                                      `• *.coor [ID]* (Buscar coordenadas)`;
                         }
                         
                         await sock.sendMessage(remoteJid, { text: message });
@@ -481,8 +467,10 @@ async function processIncomingQueue(sock) {
                                   `• *.add .comando*: Permite un comando\n` +
                                   `• *.remove .comando*: Bloquea un comando\n` +
                                   `• *.permit*: Ver comandos permitidos\n` +
-                                  `• *.on*: Activar bot (silencio off)\n` +
-                                  `• *.off*: Desactivar bot (silencio on)`
+                                  `• *.silent*: Cerrar grupo (Solo Admins)\n` +
+                                  `• *.nosilent*: Abrir grupo (Todos)\n` +
+                                  `• *.on*: Encender respuesta del Bot\n` +
+                                  `• *.off*: Apagar respuesta del Bot`
                         });
                     }
                     continue;
@@ -734,7 +722,11 @@ async function processIncomingQueue(sock) {
 
                 // Comandos Simples
                 if (text === '.ping') {
-                    await sock.sendMessage(remoteJid, { text: 'pong!' }, { quoted: msg });
+                    const sender = msg.key.participant || msg.key.remoteJid;
+                    const senderNumber = sender.replace(/\D/g, '');
+                    if (ADMIN_NUMBERS.includes(senderNumber)) {
+                        await sock.sendMessage(remoteJid, { text: 'pong!' }, { quoted: msg });
+                    }
                     continue;
                 }
 
