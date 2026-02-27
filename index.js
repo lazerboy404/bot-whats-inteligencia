@@ -733,29 +733,23 @@ async function processIncomingQueue(sock) {
 
                 // 4. COORDENADAS (.coor) y Búsqueda Implícita
                 // Busca IDs (MC12345 o 12345) en el mensaje.
-                // Funciona si:
-                // a) Es comando explícito: .coor 12345
-                // b) Es implícito (texto normal) Y el permiso .coor está habilitado en el grupo
                 
                 const coordMatches = [...text.matchAll(/(?:MC[:\s]*)?(\d{5})/gi)];
                 
                 if (coordMatches.length > 0) {
                     let isAllowed = false;
 
-                    // 1. Si es comando explícito (.coor), ya pasó la validación de permisos al inicio del flujo
+                    // 1. Si es comando explícito (.coor), SIEMPRE PERMITIR si ya pasó la whitelist arriba
                     if (cmdBase === '.coor') {
                         isAllowed = true;
                     } 
-                    // 2. Si es texto normal (no comando), verificamos si la función .coor está activa en este grupo
+                    // 2. Si es texto normal (no comando), verificamos reglas
                     else if (!text.startsWith('.')) {
                         const config = await getGroupConfig(remoteJid);
-                        
-                        // LÓGICA ACTUALIZADA: La búsqueda implícita (escanear mensajes normales)
-                        // AHORA REQUIERE EXPLÍCITAMENTE que .coor esté en la lista de permitidos.
-                        // Esto aplica SIEMPRE, independientemente de si el "Modo Estricto" está activado o no.
-                        // Cumple con: "solo si yo active los permisos con .coor previamente"
-                        if (config.allowedCommands.includes('.coor')) {
-                            isAllowed = true;
+                        // Si el modo estricto está APAGADO, permitir.
+                        // Si está ENCENDIDO, requerir permiso explícito.
+                        if (!config.strictMode || config.allowedCommands.includes('.coor')) {
+                             isAllowed = true;
                         }
                     }
 
