@@ -450,12 +450,18 @@ async function processIncomingQueue(sock) {
                                       `⛔ Solo funcionan los comandos de la lista blanca.\n\n` +
                                       `✅ *Lista Blanca:*\n${list}`;
                         } else {
+                            // Modo Estricto APAGADO:
+                            // 1. .ficha siempre funciona (público)
+                            // 2. .coor solo funciona si está explícitamente en la lista (opt-in)
+                            const isCoorActive = config.allowedCommands.includes('.coor');
+                            const coorStatus = isCoorActive ? '✅ ACTIVO' : '❌ INACTIVO (Requiere .add .coor)';
+
                             message = `⚙️ *Configuración del Grupo*\n\n` +
                                       `🔓 *Modo Estricto: DESACTIVADO*\n` +
-                                      `✅ Actualmente TODOS los comandos están permitidos.\n\n` +
-                                      `📜 *Comandos Disponibles:*\n` +
-                                      `• *.ficha [modelo]* (Buscar datasheets)\n` +
-                                      `• *.coor [ID]* (Buscar coordenadas)`;
+                                      `✅ La mayoría de comandos son públicos, PERO algunos requieren activación manual.\n\n` +
+                                      `📜 *Estado de Comandos Especiales:*\n` +
+                                      `• *.ficha*: ✅ PÚBLICO (Siempre activo)\n` +
+                                      `• *.coor*: ${coorStatus}`;
                         }
                         
                         await sock.sendMessage(remoteJid, { text: message });
