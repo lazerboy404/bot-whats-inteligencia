@@ -788,6 +788,9 @@ async function processIncomingQueue(sock) {
                         const invalidMatches = [...text.matchAll(/\b(?:M{1,2}C[:\s]*|ID[:\s]*)(\d{1,4}|\d{6,})\b/gi)];
                         if (invalidMatches.length > 0) {
                              const badId = invalidMatches[0][1];
+                             await sock.sendMessage(remoteJid, { 
+                                 react: { text: "❌", key: msg.key } 
+                             });
                              await sock.sendMessage(remoteJid, { text: `⚠️ *Formato Incorrecto*\n\nDetecté un intento de ID (${badId}) pero no tiene 5 dígitos.\nPor favor verifica el número.` }, { quoted: msg });
                              continue;
                         }
