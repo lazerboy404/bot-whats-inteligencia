@@ -687,27 +687,48 @@ async function processIncomingQueue(sock) {
                     continue;
                 }
 
-                // 4. COMANDO COORDENADAS (.coor)
-                if (cmdBase === '.coor') {
-                    // Buscar IDs de 5 dígitos en el mensaje (con o sin prefijo MC)
-                    // Ejemplo: .coor 12345 o .coor MC12345
-                    const matches = [...text.matchAll(/(?:MC[:\s]*)?(\d{5})/gi)];
-                    
-                    if (matches.length > 0) {
-                        console.log(`[MATCH] ${matches.length} IDs encontrados en comando .coor`);
-                        
-                        for (const match of matches) {
-                            const idNumbers = match[1]; // El grupo de captura son los dígitos
-                            const idToFind = `MC${idNumbers}`; // Estandarizamos a MC12345 para la búsqueda
+                // 4. COORDENADAS (.coor) y Búsqueda Implícita
+                // Busca IDs (MC12345 o 12345) en el mensaje.
+                // Funciona si:
+                // a) Es comando explícito: .coor 12345
+                // b) Es implícito (texto normal) Y el permiso .coor está habilitado en el grupo
+                
+                const coordMatches = [...text.matchAll(/(?:MC[:\s]*)?(\d{5})/gi)];
+                
+                if (coordMatches.length > 0) {
+                    let isAllowed = false;
 
-                            // Push a ACK Queue
+                    // 1. Si es comando explícito (.coor), ya pasó la validación de permisos al inicio del flujo
+                    if (cmdBase === '.coor') {
+                        isAllowed = true;
+                    } 
+                    // 2. Si es texto normal (no comando), verificamos si la función .coor está activa en este grupo
+                    else if (!text.startsWith('.')) {
+                        const config = await getGroupConfig(remoteJid);
+                        // Si whitelist está OFF, se permite (comportamiento por defecto)
+                        // Si whitelist está ON, solo si .coor está en la lista
+                        if (!config.isWhitelistEnabled || config.allowedCommands.includes('.coor')) {
+                            isAllowed = true;
+                        }
+                    }
+
+                    if (isAllowed) {
+                        console.log(`[MATCH] ${coordMatches.length} IDs encontrados (Permiso: OK)`);
+                        
+                        for (const match of coordMatches) {
+                            const idNumbers = match[1];
+                            const idToFind = `MC${idNumbers}`;
                             ackQueue.push({ msg, remoteJid, idToFind });
                         }
-                        // Disparar siguiente cola
                         runAckQueue(sock);
-                    } else {
-                        await sock.sendMessage(remoteJid, { text: '⚠️ Formato incorrecto. Debes incluir el ID de 5 dígitos. Ejemplo: `.coor 12345`' }, { quoted: msg });
+                        continue;
+                    } else if (cmdBase === '.coor') {
+                        // Si era .coor pero falló algo (raro, pero por si acaso)
+                        await sock.sendMessage(remoteJid, { text: '⚠️ No se encontraron IDs válidos.' }, { quoted: msg });
+                        continue;
                     }
+                } else if (cmdBase === '.coor') {
+                    await sock.sendMessage(remoteJid, { text: '⚠️ Formato incorrecto. Debes incluir el ID de 5 dígitos. Ejemplo: `.coor 12345`' }, { quoted: msg });
                     continue;
                 }
 
