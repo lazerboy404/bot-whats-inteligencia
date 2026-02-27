@@ -18,6 +18,7 @@ const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const mongoose = require('mongoose');
 const axios = require('axios'); // Cliente HTTP para buscar datasheets
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 // --- CONSTANTES GLOBALES DE CONFIGURACIÓN ---
 
@@ -25,10 +26,13 @@ const axios = require('axios'); // Cliente HTTP para buscar datasheets
 // Para agregar uno nuevo:
 // 1. Añade el comando a este array: ['.ficha', '.coor', '.nuevo']
 // 2. En la lógica del comando, añade: if (!config.allowedCommands.includes('.nuevo')) return;
-const OPT_IN_COMMANDS = ['.ficha', '.coor']; 
+const OPT_IN_COMMANDS = ['.ficha', '.coor', '.cumplimiento']; 
 
 // --- CONFIGURACIÓN SERPER API (Datasheets) ---
 const SERPER_API_KEY = process.env.SERPER_API_KEY || ''; // Se espera que esté en Render
+
+// --- CONFIGURACIÓN GEMINI API (Cumplimiento Técnico) ---
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || ''; // OBLIGATORIO: Poner en variables de entorno
 
 // --- POLYFILL PARA CRYPTO (Node 18/20 Fix) ---
 if (!global.crypto) {
@@ -741,6 +745,73 @@ async function processIncomingQueue(sock) {
                     } catch (error) {
                         console.error('[SERPER API ERROR]', error?.response?.data || error.message);
                         await sock.sendMessage(remoteJid, { text: '❌ Error al buscar en internet. Intenta más tarde.' }, { quoted: msg });
+                    }
+                    continue;
+                }
+
+                // 3.5 COMANDO CUMPLIMIENTO TÉCNICO (Gemini AI)
+                // Ejemplo: .cumplimiento Especificaciones...
+                if (text.toLowerCase().startsWith('.cumplimiento')) {
+                    
+                    // Verificación Opt-In
+                    const config = await getGroupConfig(remoteJid);
+                    if (!config.allowedCommands.includes('.cumplimiento')) {
+                         continue;
+                    }
+
+                    // Extraer especificaciones (todo lo que sigue al comando)
+                    // Usamos replace con regex para ser insensible a mayúsculas/minúsculas en el comando
+                    const specs = text.replace(/^\.cumplimiento\s*/i, '').trim();
+                    
+                    if (!specs) {
+                        await sock.sendMessage(remoteJid, { text: '⚠️ Debes escribir las especificaciones después del comando. Ejemplo: `.cumplimiento Cámara IP 4MP con WDR...`' }, { quoted: msg });
+                        continue;
+                    }
+
+                    if (!GEMINI_API_KEY) {
+                        console.error('[CONFIG ERROR] Falta GEMINI_API_KEY');
+                        await sock.sendMessage(remoteJid, { text: '❌ Error de configuración: El bot no tiene la API Key de Gemini configurada.' }, { quoted: msg });
+                        continue;
+                    }
+
+                    try {
+                        // 1. Estado de espera
+                        await sock.sendMessage(remoteJid, { text: '⏳ Analizando especificaciones técnicas y verificando cumplimiento estricto...' }, { quoted: msg });
+                        await sock.sendPresenceUpdate('composing', remoteJid);
+
+                        // 2. Configurar Gemini
+                        const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+                        // Usamos gemini-1.5-pro-latest o gemini-1.5-pro para razonamiento avanzado
+                        const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+
+                        const prompt = `
+                        Actúa como un Auditor Técnico e Ingeniero Preventa Experto.
+                        Analiza las siguientes especificaciones técnicas y busca en tu conocimiento equipos (marcas y modelos reales del mercado de seguridad electrónica, redes o IT) que cumplan AL 100% con los requisitos.
+
+                        Reglas de Oro:
+                        1. Cero Alucinaciones: Solo recomienda equipos que estés seguro que existen y cumplen. Si dudas, asume que NO cumple.
+                        2. Comparación Estricta: Verifica voltajes, luxes, certificaciones, protocolos, temperaturas, etc.
+                        3. Formato de Salida Estricto (Sin saludos, sin introducciones, sin texto de relleno):
+                           Devuelve SOLO la lista en este formato:
+                           "✅ [Marca Modelo] - Cumple al 100%"
+                           "❌ [Marca Modelo] - No cumple (Falta: especificar qué requisito exacto falló)"
+                        4. Lista máximo 3-5 opciones relevantes.
+
+                        Especificaciones a analizar:
+                        "${specs}"
+                        `;
+
+                        // 3. Generar respuesta
+                        const result = await model.generateContent(prompt);
+                        const response = await result.response;
+                        const textResponse = response.text();
+
+                        // 4. Enviar resultado
+                        await sock.sendMessage(remoteJid, { text: textResponse.trim() }, { quoted: msg });
+
+                    } catch (error) {
+                        console.error('[GEMINI API ERROR]', error);
+                        await sock.sendMessage(remoteJid, { text: '❌ Ocurrió un error al analizar las especificaciones. Intenta más tarde.' }, { quoted: msg });
                     }
                     continue;
                 }
