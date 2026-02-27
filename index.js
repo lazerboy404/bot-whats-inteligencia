@@ -18,6 +18,14 @@ const fs = require('fs');
 const mongoose = require('mongoose');
 const axios = require('axios'); // Cliente HTTP para buscar datasheets
 
+// --- CONSTANTES GLOBALES DE CONFIGURACIÓN ---
+
+// Lista de comandos especiales que requieren activación manual (Opt-in)
+// Para agregar uno nuevo:
+// 1. Añade el comando a este array: ['.ficha', '.coor', '.nuevo']
+// 2. En la lógica del comando, añade: if (!config.allowedCommands.includes('.nuevo')) return;
+const OPT_IN_COMMANDS = ['.ficha', '.coor']; 
+
 // --- CONFIGURACIÓN SERPER API (Datasheets) ---
 const SERPER_API_KEY = process.env.SERPER_API_KEY || ''; // Se espera que esté en Render
 
@@ -452,13 +460,7 @@ async function processIncomingQueue(sock) {
                         } else {
                             // Modo Estricto APAGADO:
                             // Comprobación dinámica de estado para comandos Opt-In
-                            // Si agregas un nuevo comando que requiera permiso explícito, añádelo a OPT_IN_COMMANDS arriba.
-                            
-                            // Lista de comandos especiales que requieren activación manual (Opt-in)
-                            // Para agregar uno nuevo:
-                            // 1. Añade el comando a este array: ['.ficha', '.coor', '.nuevo']
-                            // 2. En la lógica del comando, añade: if (!config.allowedCommands.includes('.nuevo')) return;
-                            const OPT_IN_COMMANDS = ['.ficha', '.coor']; 
+                            // La lista se define al inicio del archivo en OPT_IN_COMMANDS
                             
                             let statusList = '';
                             for (const cmd of OPT_IN_COMMANDS) {
