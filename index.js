@@ -724,12 +724,14 @@ async function processIncomingQueue(sock) {
                                     fileName: `${model.replace(/\s+/g, '_')}_Datasheet.pdf`,
                                     caption: caption
                                 }, { quoted: msg });
+                                await sock.sendMessage(remoteJid, { react: { text: '🤖', key: msg.key } });
                             } catch (sendError) {
                                 console.error('[BAILEYS FILE ERROR]', sendError.message);
                                 // Fallback: Enviar solo texto con el link si falla la descarga/envío
                                 await sock.sendMessage(remoteJid, { 
                                     text: `⚠️ No pude enviar el archivo directamente (posiblemente muy pesado o protegido), pero aquí tienes el enlace:\n\n${caption}` 
                                 }, { quoted: msg });
+                                await sock.sendMessage(remoteJid, { react: { text: '🤖', key: msg.key } });
                             }
 
                         } else {
@@ -921,6 +923,7 @@ async function runProcessor(sock) {
                 } else {
                     const notFoundText = `❌ No se encontraron coordenadas para el ID: ${idToFind}\n\n> 🤖M5-Bot | ${formattedDate}`;
                     await sock.sendMessage(remoteJid, { text: notFoundText, edit: sentMsg.key });
+                    await sock.sendMessage(remoteJid, { react: { text: '😪', key: userMsg.key } });
                 }
 
                 // Pausa breve
