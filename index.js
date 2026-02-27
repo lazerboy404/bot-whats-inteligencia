@@ -393,7 +393,11 @@ async function processIncomingQueue(sock) {
                         }
                         
                         // Terminamos aquí el bloque de silent
-                        continue;
+                    } catch (e) {
+                        console.error('Error general en comando silent:', e);
+                        await sock.sendMessage(remoteJid, { text: '❌ Ocurrió un error inesperado al intentar silenciar el grupo.' }, { quoted: msg });
+                    }
+                    continue;
                 }
 
                 // 2.5 GESTIÓN DE PERMISOS (.config, .add, .remove, .permit)
