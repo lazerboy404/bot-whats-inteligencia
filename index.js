@@ -264,7 +264,7 @@ async function processIncomingQueue(sock) {
 
                 // Comandos administrativos que SIEMPRE funcionan (bypass de permisos)
                 // Solo validan permisos de administrador del grupo/bot internamente
-                const ADMIN_COMMANDS = ['.config', '.cerrarbot', '.abrirbot', '.silenciar', '.activar'];
+                const ADMIN_COMMANDS = ['.config', '.add', '.remove', '.cerrarbot', '.abrirbot', '.silenciar', '.activar'];
 
                 // Si NO es un comando administrativo y estamos en un grupo, verificar permisos
                 if (remoteJid.endsWith('@g.us') && !ADMIN_COMMANDS.includes(cmdBase) && cmdBase.startsWith('.')) {
@@ -364,8 +364,8 @@ async function processIncomingQueue(sock) {
                     continue; // Detener procesamiento
                 }
 
-                // 2.5 GESTIÓN DE PERMISOS (.config)
-                if (cmdBase === '.config') {
+                // 2.5 GESTIÓN DE PERMISOS (.config, .add, .remove)
+                if (cmdBase === '.config' || cmdBase === '.add' || cmdBase === '.remove') {
                     if (!remoteJid.endsWith('@g.us')) {
                         await sock.sendMessage(remoteJid, { text: '⚠️ Este comando solo funciona en grupos.' }, { quoted: msg });
                         continue;
@@ -387,33 +387,57 @@ async function processIncomingQueue(sock) {
                     }
 
                     const args = cmdFull.split(' ').slice(1);
-                    const subCmd = args[0]?.toLowerCase();
-                    const param = args[1]?.toLowerCase();
+                    // Normalización de subcomandos para soportar .add y .remove directos
+                    let subCmd, param;
+
+                    if (cmdBase === '.add') {
+                        subCmd = 'add';
+                        param = args[0]?.toLowerCase(); // En .add el primer arg ya es el comando
+                    } else if (cmdBase === '.remove') {
+                        subCmd = 'remove';
+                        param = args[0]?.toLowerCase();
+                    } else {
+                        // Caso .config [subcmd] [param]
+                        subCmd = args[0]?.toLowerCase();
+                        param = args[1]?.toLowerCase();
+                    }
 
                     if (subCmd === 'on' || subCmd === 'activar') {
                         await updateGroupConfig(remoteJid, { isWhitelistEnabled: true });
-                        await sock.sendMessage(remoteJid, { text: '🛡️ *Modo Estricto ACTIVADO*\n\nSolo los comandos permitidos funcionarán en este grupo. Usa `.config add [comando]` para autorizar funciones.' });
+                        await sock.sendMessage(remoteJid, { text: '🛡️ *Modo Estricto ACTIVADO*\n\nSolo los comandos permitidos funcionarán en este grupo. Usa `.add [comando]` para autorizar funciones.' });
                     } else if (subCmd === 'off' || subCmd === 'desactivar') {
                         await updateGroupConfig(remoteJid, { isWhitelistEnabled: false });
                         await sock.sendMessage(remoteJid, { text: '🔓 *Modo Estricto DESACTIVADO*\n\nTodos los comandos están habilitados en este grupo.' });
                     } else if (subCmd === 'add' || subCmd === 'agregar') {
                         if (!param || !param.startsWith('.')) {
-                            await sock.sendMessage(remoteJid, { text: '⚠️ Debes especificar el comando empezando con punto. Ejemplo: `.config add .ficha`' });
+                            await sock.sendMessage(remoteJid, { text: '⚠️ Debes especificar el comando empezando con punto. Ejemplo: `.add .ficha`' });
                         } else {
                             const currentConfig = await getGroupConfig(remoteJid);
                             if (!currentConfig.allowedCommands.includes(param)) {
                                 await updateGroupConfig(remoteJid, { $push: { allowedCommands: param } });
-                                await sock.sendMessage(remoteJid, { text: `✅ Comando *${param}* agregado a la lista permitida.` });
+                                
+                                let extraMsg = '';
+                                if (param === '.coor') {
+                                    extraMsg = '\n\n👁️ *Ojo:* Ahora el bot también buscará coordenadas automáticamente en este grupo cuando envíen IDs.';
+                                }
+                                
+                                await sock.sendMessage(remoteJid, { text: `✅ Comando *${param}* agregado a la lista permitida.${extraMsg}` });
                             } else {
                                 await sock.sendMessage(remoteJid, { text: `⚠️ El comando *${param}* ya estaba permitido.` });
                             }
                         }
                     } else if (subCmd === 'remove' || subCmd === 'quitar') {
                         if (!param) {
-                            await sock.sendMessage(remoteJid, { text: '⚠️ Ejemplo: `.config remove .ficha`' });
+                            await sock.sendMessage(remoteJid, { text: '⚠️ Ejemplo: `.remove .ficha`' });
                         } else {
                             await updateGroupConfig(remoteJid, { $pull: { allowedCommands: param } });
-                            await sock.sendMessage(remoteJid, { text: `🗑️ Comando *${param}* eliminado de la lista permitida.` });
+                            
+                            let extraMsg = '';
+                            if (param === '.coor') {
+                                extraMsg = '\n\n🙈 *Ojo:* La búsqueda automática de coordenadas se ha desactivado en este grupo.';
+                            }
+
+                            await sock.sendMessage(remoteJid, { text: `🗑️ Comando *${param}* eliminado de la lista permitida.${extraMsg}` });
                         }
                     } else if (subCmd === 'list' || subCmd === 'lista') {
                         const config = await getGroupConfig(remoteJid);
@@ -423,10 +447,10 @@ async function processIncomingQueue(sock) {
                     } else {
                         await sock.sendMessage(remoteJid, { 
                             text: `⚙️ *Ayuda de Configuración*\n\n` +
-                                  `• *.config on*: Activa modo estricto (solo whitelist)\n` +
-                                  `• *.config off*: Desactiva modo estricto (todos funcionan)\n` +
-                                  `• *.config add .comando*: Permite un comando\n` +
-                                  `• *.config remove .comando*: Bloquea un comando\n` +
+                                  `• *.config on*: Activa modo estricto\n` +
+                                  `• *.config off*: Desactiva modo estricto\n` +
+                                  `• *.add .comando*: Permite un comando\n` +
+                                  `• *.remove .comando*: Bloquea un comando\n` +
                                   `• *.config list*: Ver configuración actual`
                         });
                     }
