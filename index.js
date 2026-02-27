@@ -264,7 +264,7 @@ async function processIncomingQueue(sock) {
 
                 // Comandos administrativos que SIEMPRE funcionan (bypass de permisos)
                 // Solo validan permisos de administrador del grupo/bot internamente
-                const ADMIN_COMMANDS = ['.config', '.add', '.remove', '.cerrarbot', '.abrirbot', '.silenciar', '.activar'];
+                const ADMIN_COMMANDS = ['.config', '.add', '.remove', '.permit', '.cerrarbot', '.abrirbot', '.silenciar', '.activar'];
 
                 // Si NO es un comando administrativo y estamos en un grupo, verificar permisos
                 if (remoteJid.endsWith('@g.us') && !ADMIN_COMMANDS.includes(cmdBase) && cmdBase.startsWith('.')) {
@@ -364,8 +364,8 @@ async function processIncomingQueue(sock) {
                     continue; // Detener procesamiento
                 }
 
-                // 2.5 GESTIÓN DE PERMISOS (.config, .add, .remove)
-                if (cmdBase === '.config' || cmdBase === '.add' || cmdBase === '.remove') {
+                // 2.5 GESTIÓN DE PERMISOS (.config, .add, .remove, .permit)
+                if (cmdBase === '.config' || cmdBase === '.add' || cmdBase === '.remove' || cmdBase === '.permit') {
                     if (!remoteJid.endsWith('@g.us')) {
                         await sock.sendMessage(remoteJid, { text: '⚠️ Este comando solo funciona en grupos.' }, { quoted: msg });
                         continue;
@@ -381,13 +381,18 @@ async function processIncomingQueue(sock) {
                     const senderNumber = sender.replace(/\D/g, '');
                     const isBotOwner = ADMIN_NUMBERS.includes(senderNumber);
 
+                    // EXCEPCIÓN: Permitir .permit a todos los usuarios para que puedan consultar qué comandos funcionan
+                    // (Opcional: Si el usuario prefiere que sea solo admin, se puede revertir. Por defecto útil para todos)
+                    // PERO, siguiendo el patrón estricto de los anteriores, lo mantendré solo admin salvo instrucción contraria.
+                    // El usuario pidió "agrega .permit para ver la lista", asumo contexto de configuración.
+                    
                     if (!isUserAdmin && !isBotOwner) {
                         await sock.sendMessage(remoteJid, { text: '⛔ Solo los administradores del grupo pueden configurar permisos.' }, { quoted: msg });
                         continue;
                     }
 
                     const args = cmdFull.split(' ').slice(1);
-                    // Normalización de subcomandos para soportar .add y .remove directos
+                    // Normalización de subcomandos para soportar .add, .remove y .permit directos
                     let subCmd, param;
 
                     if (cmdBase === '.add') {
@@ -396,6 +401,8 @@ async function processIncomingQueue(sock) {
                     } else if (cmdBase === '.remove') {
                         subCmd = 'remove';
                         param = args[0]?.toLowerCase();
+                    } else if (cmdBase === '.permit') {
+                        subCmd = 'list'; // .permit es alias de list
                     } else {
                         // Caso .config [subcmd] [param]
                         subCmd = args[0]?.toLowerCase();
@@ -451,7 +458,7 @@ async function processIncomingQueue(sock) {
                                   `• *.config off*: Desactiva modo estricto\n` +
                                   `• *.add .comando*: Permite un comando\n` +
                                   `• *.remove .comando*: Bloquea un comando\n` +
-                                  `• *.config list*: Ver configuración actual`
+                                  `• *.permit*: Ver comandos permitidos`
                         });
                     }
                     continue;
