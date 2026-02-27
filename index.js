@@ -714,7 +714,7 @@ async function processIncomingQueue(sock) {
 
                             console.log(`[SERPER] Resultado seleccionado (${sourceType}): ${title} -> ${link}`);
 
-                            const caption = `📄 *Ficha Técnica Encontrada*\n\n📌 *Modelo:* ${model}\n${sourceTag}\n📝 *Título:* ${title}\n� *Link:* ${link}\n\n> ${snippet}`;
+                            const caption = `📄 *Ficha Técnica Encontrada*\n\n📌 *Modelo:* ${model}\n${sourceTag}\n📝 *Título:* ${title}\n🔗 *Link:* ${link}\n\n> ${snippet}`;
 
                             // Intentar enviar el PDF directamente
                             try {
@@ -857,7 +857,7 @@ async function runAckQueue(sock) {
                 const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
                 const date = new Date();
                 const formattedDate = `${date.getDate()} de ${months[date.getMonth()]}`;
-                const acceptanceText = `👨‍💻 \`\`\`SOLICITUD ACEPTADA\`\`\` 👨‍💻\n\n> Buscando 🔎\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
+                const acceptanceText = `🤖 \`\`\`SOLICITUD ACEPTADA\`\`\` 🤖\n\n> Buscando 🔎\n> Cuadrilla 𝗕𝗼𝘁 🤖 | ${formattedDate}`;
 
                 // ENVIAR
                 let sentMsg;
@@ -916,10 +916,10 @@ async function runProcessor(sock) {
                     const finalText = `🆔: ${idToFind}\n${lat} ${long}`;
 
                     await sock.sendMessage(remoteJid, { text: finalText, edit: sentMsg.key });
-                    await sock.sendMessage(remoteJid, { react: { text: '👨‍💻', key: userMsg.key } });
+                    await sock.sendMessage(remoteJid, { react: { text: '🤖', key: userMsg.key } });
                     
                 } else {
-                    const notFoundText = `❌ No se encontraron coordenadas para el ID: ${idToFind}\n\n> Cuadrilla 𝗕𝗼𝘁 👨‍💻 | ${formattedDate}`;
+                    const notFoundText = `❌ No se encontraron coordenadas para el ID: ${idToFind}\n\n> Cuadrilla 𝗕𝗼𝘁 🤖 | ${formattedDate}`;
                     await sock.sendMessage(remoteJid, { text: notFoundText, edit: sentMsg.key });
                 }
 
