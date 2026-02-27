@@ -741,25 +741,38 @@ async function processIncomingQueue(sock) {
                 const isCoorEnabled = config.allowedCommands.includes('.coor');
 
                 if (isCoorEnabled) {
-                    const coordMatches = [...text.matchAll(/(?:MC[:\s]*)?(\d{5})/gi)];
+                    // Regex mejorado: \b para límites de palabra (evita matching parcial en números largos)
+                    // Deduplicación: Usamos un Set para IDs únicos en este mensaje
+                    const coordMatches = [...text.matchAll(/\b(?:MC[:\s]*)?(\d{5})\b/gi)];
 
                     if (coordMatches.length > 0) {
                         // Solo procesar si es explícitamente .coor O si es texto normal (búsqueda implícita)
-                        // Evita conflictos con otros comandos que empiecen con punto (ej: .ficha 12345)
                         if (cmdBase === '.coor' || !text.startsWith('.')) {
-                            console.log(`[MATCH] ${coordMatches.length} IDs encontrados (Permiso: OK)`);
                             
+                            const uniqueIDs = new Set();
+                            const validMatches = [];
+
                             for (const match of coordMatches) {
                                 const idNumbers = match[1];
-                                const idToFind = `MC${idNumbers}`;
-                                ackQueue.push({ msg, remoteJid, idToFind });
+                                if (!uniqueIDs.has(idNumbers)) {
+                                    uniqueIDs.add(idNumbers);
+                                    validMatches.push(idNumbers);
+                                }
                             }
-                            runAckQueue(sock);
+
+                            if (validMatches.length > 0) {
+                                console.log(`[MATCH] ${validMatches.length} IDs únicos encontrados (Permiso: OK)`);
+                                for (const idNumbers of validMatches) {
+                                    const idToFind = `MC${idNumbers}`;
+                                    ackQueue.push({ msg, remoteJid, idToFind });
+                                }
+                                runAckQueue(sock);
+                            }
                             continue;
                         }
                     } else if (cmdBase === '.coor') {
-                        // Habilitado, comando correcto, pero sin IDs
-                        await sock.sendMessage(remoteJid, { text: '⚠️ Formato incorrecto. Debes incluir el ID de 5 dígitos. Ejemplo: `.coor 12345`' }, { quoted: msg });
+                        // Habilitado, comando correcto, pero sin IDs válidos
+                        await sock.sendMessage(remoteJid, { text: '⚠️ Formato incorrecto. Debes incluir el ID de 5 dígitos (ej: 12345).' }, { quoted: msg });
                         continue;
                     }
                 }
