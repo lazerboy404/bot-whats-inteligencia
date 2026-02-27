@@ -451,18 +451,26 @@ async function processIncomingQueue(sock) {
                                       `✅ *Lista Blanca:*\n${list}`;
                         } else {
                             // Modo Estricto APAGADO:
-                            // Comprobación de estado individual para .ficha y .coor
-                            const isCoorActive = config.allowedCommands.includes('.coor');
-                            const isFichaActive = config.allowedCommands.includes('.ficha');
+                            // Comprobación dinámica de estado para comandos Opt-In
+                            // Si agregas un nuevo comando que requiera permiso explícito, añádelo a OPT_IN_COMMANDS arriba.
                             
-                            const coorStatus = isCoorActive ? '✅ ACTIVO' : '❌ INACTIVO';
-                            const fichaStatus = isFichaActive ? '✅ ACTIVO' : '❌ INACTIVO';
+                            // Lista de comandos especiales que requieren activación manual (Opt-in)
+                            // Para agregar uno nuevo:
+                            // 1. Añade el comando a este array: ['.ficha', '.coor', '.nuevo']
+                            // 2. En la lógica del comando, añade: if (!config.allowedCommands.includes('.nuevo')) return;
+                            const OPT_IN_COMMANDS = ['.ficha', '.coor']; 
+                            
+                            let statusList = '';
+                            for (const cmd of OPT_IN_COMMANDS) {
+                                const isActive = config.allowedCommands.includes(cmd);
+                                const status = isActive ? '✅ ACTIVO' : '❌ INACTIVO';
+                                statusList += `• *${cmd}*: ${status}\n`;
+                            }
 
                             message = `⚙️ *Configuración del Grupo*\n\n` +
                                       `🔓 *Modo Estricto: DESACTIVADO*\n\n` +
                                       `📜 *Estado de Comandos :*\n` +
-                                      `• *.ficha*: ${fichaStatus}\n` +
-                                      `• *.coor*: ${coorStatus}`;
+                                      statusList;
                         }
                         
                         await sock.sendMessage(remoteJid, { text: message });
