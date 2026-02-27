@@ -741,10 +741,12 @@ async function processIncomingQueue(sock) {
                 const isCoorEnabled = config.allowedCommands.includes('.coor');
 
                 if (isCoorEnabled) {
-                    // Regex mejorado: \b para límites de palabra (evita matching parcial en números largos)
-                    // Soporta prefijos MC, MMC, etc. opcionales
-                    // Deduplicación: Usamos un Set para IDs únicos en este mensaje
-                    const coordMatches = [...text.matchAll(/\b(?:M{1,2}C[:\s]*)?(\d{5})\b/gi)];
+                    // Regex mejorado: 
+                    // 1. (?<!\.) Evita coincidir con decimales de coordenadas (ej: 19.12345)
+                    // 2. \b Límite de palabra
+                    // 3. (?:[A-Z]+[:\s]*)? Soporta CUALQUIER prefijo de letras mayúsculas (MC, MMC, MCMC, ID, etc)
+                    // 4. (\d{5}) Captura exactamente 5 dígitos
+                    const coordMatches = [...text.matchAll(/(?<!\.)\b(?:[A-Z]+[:\s]*)?(\d{5})\b/gi)];
 
                     if (coordMatches.length > 0) {
                         // Solo procesar si es explícitamente .coor O si es texto normal (búsqueda implícita)
