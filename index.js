@@ -781,9 +781,7 @@ async function processIncomingQueue(sock) {
 
                         // 2. Configurar Gemini
                         const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-                        // Usamos gemini-1.5-pro-latest o gemini-1.5-pro para razonamiento avanzado
-                        const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
-
+                        
                         const prompt = `
                         Actúa como un Auditor Técnico e Ingeniero Preventa Experto.
                         Analiza las siguientes especificaciones técnicas y busca en tu conocimiento equipos (marcas y modelos reales del mercado de seguridad electrónica, redes o IT) que cumplan AL 100% con los requisitos.
@@ -801,10 +799,27 @@ async function processIncomingQueue(sock) {
                         "${specs}"
                         `;
 
-                        // 3. Generar respuesta
-                        const result = await model.generateContent(prompt);
-                        const response = await result.response;
-                        const textResponse = response.text();
+                        // 3. Generar respuesta con Retry (Intento de Fallback)
+                        let textResponse = '';
+                        try {
+                            // Intento 1: Modelo Pro (Más razonamiento)
+                            const modelPro = genAI.getGenerativeModel({ model: "gemini-1.5-pro-latest" });
+                            const result = await modelPro.generateContent(prompt);
+                            const response = await result.response;
+                            textResponse = response.text();
+                        } catch (errorPro) {
+                            console.warn('[GEMINI PRO ERROR] Falló gemini-1.5-pro-latest, intentando con gemini-1.5-flash...', errorPro.message);
+                            try {
+                                // Intento 2: Modelo Flash (Más rápido y estable)
+                                const modelFlash = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+                                const result = await modelFlash.generateContent(prompt);
+                                const response = await result.response;
+                                textResponse = response.text();
+                            } catch (errorFlash) {
+                                console.error('[GEMINI FLASH ERROR] Falló también el fallback.', errorFlash);
+                                throw errorFlash; // Re-lanzar para que el catch exterior lo maneje
+                            }
+                        }
 
                         // 4. Enviar resultado
                         await sock.sendMessage(remoteJid, { text: textResponse.trim() }, { quoted: msg });
