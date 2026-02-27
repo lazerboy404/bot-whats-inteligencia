@@ -345,35 +345,55 @@ async function processIncomingQueue(sock) {
                     }
 
                         // c) Validación del Bot (Debe ser Admin del Grupo)
-                        // Usamos areJidsSameUser para comparación estándar de Baileys (maneja sufijos y formatos)
-                        const botParticipant = participants.find(p => areJidsSameUser(p.id, sock.user.id));
+                        // Lógica mejorada: Normalización "Mexico-proof" (521 vs 52) y ejecución optimista
+                        const botId = sock.user.id;
+                        
+                        // Función local para normalizar IDs y resolver el problema del prefijo 521 (México)
+                        const normalizeJid = (jid) => {
+                            if (!jid) return '';
+                            let id = jid.split(':')[0].split('@')[0].replace(/\D/g, '');
+                            // Si es número de México (52...), estandarizamos a 52 (sin el 1 extra de 521)
+                            if (id.startsWith('521')) {
+                                id = '52' + id.slice(3);
+                            }
+                            return id;
+                        };
+
+                        const myCleanId = normalizeJid(botId);
+                        
+                        // Buscar coincidencia normalizada
+                        const botParticipant = participants.find(p => normalizeJid(p.id) === myCleanId);
                         
                         const isBotAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
 
-                        if (!isBotAdmin) {
-                            // Si falla, intentamos diagnóstico manual por si es un caso extremo de 521 vs 52
-                            // Pero mantenemos el mensaje limpio para el usuario a menos que persista el error en debug
-                            console.log(`[DEBUG SILENT] Bot ID: ${sock.user.id} - Not found in participants using areJidsSameUser`);
-                            
-                            // Mensaje de error simplificado pero claro
-                            await sock.sendMessage(remoteJid, { text: '⚠️ Necesito ser administrador del grupo para ejecutar esta acción.\n\n(No me detecto como admin en la lista de participantes)' }, { quoted: msg });
+                        // Solo detenemos SI encontramos al bot y confirmamos que NO es admin.
+                        // Si no lo encontramos (botParticipant es undefined), asumimos error de búsqueda e intentamos ejecutar igual.
+                        if (botParticipant && !isBotAdmin) {
+                            await sock.sendMessage(remoteJid, { text: '⚠️ Necesito ser administrador del grupo para ejecutar esta acción.' }, { quoted: msg });
                             continue;
                         }
 
-                        // d) Ejecutar Acción
-                        if (cmdBase === '.silent') {
-                            await sock.groupSettingUpdate(remoteJid, 'announcement');
-                            await sock.sendMessage(remoteJid, { text: '🔒 El grupo ha sido silenciado. Solo los administradores pueden enviar mensajes.' });
-                        } else { // .nosilent
-                            await sock.groupSettingUpdate(remoteJid, 'not_announcement');
-                            await sock.sendMessage(remoteJid, { text: '🔓 El grupo ha sido abierto. Todos los participantes pueden escribir.' });
+                        if (!botParticipant) {
+                            console.log(`[DEBUG SILENT] Bot no encontrado en lista (ID: ${myCleanId}). Intentando ejecución forzada...`);
                         }
 
-                    } catch (err) {
-                        console.error('[GROUP ADMIN ERROR]', err);
-                        // No enviamos error al chat para no spammear si falla algo interno
-                    }
-                    continue; // Detener procesamiento
+                        // d) Ejecutar Acción
+                        try {
+                            if (cmdBase === '.silent') {
+                                await sock.groupSettingUpdate(remoteJid, 'announcement');
+                                await sock.sendMessage(remoteJid, { text: '🔒 El grupo ha sido silenciado. Solo los administradores pueden enviar mensajes.' });
+                            } else { // .nosilent
+                                await sock.groupSettingUpdate(remoteJid, 'not_announcement');
+                                await sock.sendMessage(remoteJid, { text: '🔓 El grupo ha sido abierto. Todos los participantes pueden escribir.' });
+                            }
+                        } catch (err) {
+                            console.error('[GROUP ADMIN ERROR]', err);
+                            // Si falla la ejecución, asumimos que fue por falta de permisos
+                            await sock.sendMessage(remoteJid, { text: '❌ No pude ejecutar la orden. Verifica que el Bot sea Administrador del grupo.' }, { quoted: msg });
+                        }
+                        
+                        // Terminamos aquí el bloque de silent
+                        continue;
                 }
 
                 // 2.5 GESTIÓN DE PERMISOS (.config, .add, .remove, .permit)
