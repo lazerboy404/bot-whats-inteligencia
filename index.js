@@ -734,47 +734,36 @@ async function processIncomingQueue(sock) {
                 // 4. COORDENADAS (.coor) y Búsqueda Implícita
                 // Busca IDs (MC12345 o 12345) en el mensaje.
                 
-                const coordMatches = [...text.matchAll(/(?:MC[:\s]*)?(\d{5})/gi)];
+                // 4. COORDENADAS (.coor) y Búsqueda Implícita
+                // Busca IDs (MC12345 o 12345) en el mensaje.
                 
-                if (coordMatches.length > 0) {
-                    let isAllowed = false;
-                    const config = await getGroupConfig(remoteJid);
-                    const isCoorEnabled = config.allowedCommands.includes('.coor');
+                const config = await getGroupConfig(remoteJid);
+                const isCoorEnabled = config.allowedCommands.includes('.coor');
 
-                    // 1. Si es comando explícito (.coor)
-                    if (cmdBase === '.coor') {
-                        // Debe estar habilitado explícitamente (incluso en modo no estricto, para poder desactivarlo)
-                        if (isCoorEnabled) {
-                            isAllowed = true;
-                        }
-                    } 
-                    // 2. Si es texto normal (no comando), verificamos reglas
-                    else if (!text.startsWith('.')) {
-                        // Búsqueda implícita REQUIERE permiso explícito siempre
-                        if (isCoorEnabled) {
-                             isAllowed = true;
-                        }
-                    }
+                if (isCoorEnabled) {
+                    const coordMatches = [...text.matchAll(/(?:MC[:\s]*)?(\d{5})/gi)];
 
-                    if (isAllowed) {
-                        console.log(`[MATCH] ${coordMatches.length} IDs encontrados (Permiso: OK)`);
-                        
-                        for (const match of coordMatches) {
-                            const idNumbers = match[1];
-                            const idToFind = `MC${idNumbers}`;
-                            ackQueue.push({ msg, remoteJid, idToFind });
+                    if (coordMatches.length > 0) {
+                        // Solo procesar si es explícitamente .coor O si es texto normal (búsqueda implícita)
+                        // Evita conflictos con otros comandos que empiecen con punto (ej: .ficha 12345)
+                        if (cmdBase === '.coor' || !text.startsWith('.')) {
+                            console.log(`[MATCH] ${coordMatches.length} IDs encontrados (Permiso: OK)`);
+                            
+                            for (const match of coordMatches) {
+                                const idNumbers = match[1];
+                                const idToFind = `MC${idNumbers}`;
+                                ackQueue.push({ msg, remoteJid, idToFind });
+                            }
+                            runAckQueue(sock);
+                            continue;
                         }
-                        runAckQueue(sock);
-                        continue;
                     } else if (cmdBase === '.coor') {
-                        // Si era .coor pero falló algo (raro, pero por si acaso)
-                        await sock.sendMessage(remoteJid, { text: '⚠️ No se encontraron IDs válidos.' }, { quoted: msg });
+                        // Habilitado, comando correcto, pero sin IDs
+                        await sock.sendMessage(remoteJid, { text: '⚠️ Formato incorrecto. Debes incluir el ID de 5 dígitos. Ejemplo: `.coor 12345`' }, { quoted: msg });
                         continue;
                     }
-                } else if (cmdBase === '.coor') {
-                    await sock.sendMessage(remoteJid, { text: '⚠️ Formato incorrecto. Debes incluir el ID de 5 dígitos. Ejemplo: `.coor 12345`' }, { quoted: msg });
-                    continue;
                 }
+                // Si no está habilitado, simplemente ignoramos (tanto comando como búsqueda implícita)
 
             } catch (err) {
                 console.error('[INCOMING ERROR]', err);
