@@ -348,10 +348,16 @@ async function processIncomingQueue(sock) {
                         const botJid = sock.user?.id;
                         const botNumber = botJid ? botJid.split(':')[0].split('@')[0].replace(/\D/g, '') : '';
                         
-                        const botParticipant = participants.find(p => {
+                        // Búsqueda robusta del bot en la lista de participantes
+                        let botParticipant = participants.find(p => {
                             const pNumber = p.id.split(':')[0].split('@')[0].replace(/\D/g, '');
                             return pNumber === botNumber;
                         });
+
+                        // Fallback: búsqueda por inclusión si la exacta falla
+                        if (!botParticipant) {
+                            botParticipant = participants.find(p => p.id.includes(botNumber));
+                        }
                         
                         const isBotAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
 
@@ -360,7 +366,9 @@ async function processIncomingQueue(sock) {
                             console.log(`[DEBUG SILENT] Bot Number: ${botNumber}`);
                             console.log(`[DEBUG SILENT] Found Participant:`, botParticipant);
                             
-                            await sock.sendMessage(remoteJid, { text: '⚠️ Necesito ser administrador del grupo para ejecutar esta acción.' }, { quoted: msg });
+                            const debugMsg = `\n\n🔧 *Diagnóstico:*\nID Bot: ${botNumber || 'No detectado'}\nEncontrado: ${botParticipant ? 'SÍ' : 'NO'}\nRol: ${botParticipant?.admin || 'Miembro/Null'}`;
+
+                            await sock.sendMessage(remoteJid, { text: '⚠️ Necesito ser administrador del grupo para ejecutar esta acción.' + debugMsg }, { quoted: msg });
                             continue;
                         }
 
