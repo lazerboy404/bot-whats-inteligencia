@@ -264,7 +264,7 @@ async function processIncomingQueue(sock) {
 
                 // Comandos administrativos que SIEMPRE funcionan (bypass de permisos)
                 // Solo validan permisos de administrador del grupo/bot internamente
-                const ADMIN_COMMANDS = ['.config', '.add', '.remove', '.permit', '.off', '.on', '.silenciar', '.activar'];
+                const ADMIN_COMMANDS = ['.config', '.add', '.remove', '.permit', '.off', '.on', '.silent', '.nosilent'];
 
                 // Si NO es un comando administrativo y estamos en un grupo, verificar permisos
                 if (remoteJid.endsWith('@g.us') && !ADMIN_COMMANDS.includes(cmdBase) && cmdBase.startsWith('.')) {
@@ -313,7 +313,7 @@ async function processIncomingQueue(sock) {
                 }
 
                 // 2. CONTROL DEL GRUPO (Silenciar/Activar - Para Admins del Grupo)
-                if (cmdBase === '.silenciar' || cmdBase === '.activar') {
+                if (cmdBase === '.silent' || cmdBase === '.nosilent') {
                     // a) Validación de Entorno (Solo Grupos)
                     if (!remoteJid.endsWith('@g.us')) {
                         await sock.sendMessage(remoteJid, { text: '⚠️ Este comando solo funciona en grupos.' }, { quoted: msg });
@@ -349,10 +349,10 @@ async function processIncomingQueue(sock) {
                         }
 
                         // d) Ejecutar Acción
-                        if (cmdBase === '.silenciar') {
+                        if (cmdBase === '.silent') {
                             await sock.groupSettingUpdate(remoteJid, 'announcement');
                             await sock.sendMessage(remoteJid, { text: '🔒 El grupo ha sido silenciado. Solo los administradores pueden enviar mensajes.' });
-                        } else { // .activar
+                        } else { // .nosilent
                             await sock.groupSettingUpdate(remoteJid, 'not_announcement');
                             await sock.sendMessage(remoteJid, { text: '🔓 El grupo ha sido abierto. Todos los participantes pueden escribir.' });
                         }
@@ -450,9 +450,29 @@ async function processIncomingQueue(sock) {
                         // Eliminado por petición del usuario (reemplazado por .permit)
                         // Dejamos el bloque vacío o redirigimos a .permit si alguien lo usa por costumbre
                         const config = await getGroupConfig(remoteJid);
-                        const status = config.isWhitelistEnabled ? '🛡️ *ACTIVADO* (Solo permitidos)' : '🔓 *DESACTIVADO* (Todos permitidos)';
+                        
+                        let message = '';
                         const list = config.allowedCommands.length > 0 ? config.allowedCommands.join(', ') : '(Ninguno)';
-                        await sock.sendMessage(remoteJid, { text: `⚙️ *Configuración del Grupo*\n\nEstado: ${status}\n\n✅ *Comandos Permitidos:*\n${list}` });
+
+                        if (config.isWhitelistEnabled) {
+                            message = `⚙️ *Configuración del Grupo*\n\n` +
+                                      `🛡️ *Modo Estricto: ACTIVADO*\n` +
+                                      `⛔ Solo funcionan los comandos de la lista blanca.\n\n` +
+                                      `✅ *Lista Blanca:*\n${list}`;
+                        } else {
+                            message = `⚙️ *Configuración del Grupo*\n\n` +
+                                      `🔓 *Modo Estricto: DESACTIVADO*\n` +
+                                      `✅ Actualmente TODOS los comandos están permitidos.\n\n` +
+                                      `📜 *Comandos Disponibles:*\n` +
+                                      `• *.ficha [modelo]* (Buscar datasheets)\n` +
+                                      `• *.coor [ID]* (Buscar coordenadas)\n` +
+                                      `• *.ping* (Test de estado)\n` +
+                                      `• *.silent / .nosilent* (Gestionar grupo)\n` +
+                                      `• *.on / .off* (Controlar bot)\n` +
+                                      `• *.config* (Configuración)`;
+                        }
+                        
+                        await sock.sendMessage(remoteJid, { text: message });
                     } else {
                         await sock.sendMessage(remoteJid, { 
                             text: `⚙️ *Ayuda de Configuración*\n\n` +
@@ -717,10 +737,7 @@ async function processIncomingQueue(sock) {
                     await sock.sendMessage(remoteJid, { text: 'pong!' }, { quoted: msg });
                     continue;
                 }
-                if (text === '.menuprincipal') {
-                    await sock.sendMessage(remoteJid, { text: 'Bot Activo ⚡' }, { quoted: msg });
-                    continue;
-                }
+
 
                 // 4. COORDENADAS (.coor) y Búsqueda Implícita
                 // Busca IDs (MC12345 o 12345) en el mensaje.
