@@ -687,29 +687,28 @@ async function processIncomingQueue(sock) {
                     continue;
                 }
 
-                // Lógica MC (Regex)
-                const matches = [...text.matchAll(/MC[:\s]*(\d+)/gi)];
-                if (matches.length > 0) {
-                    console.log(`[MATCH] ${matches.length} IDs encontrados en mensaje.`);
+                // 4. COMANDO COORDENADAS (.coor)
+                if (cmdBase === '.coor') {
+                    // Buscar IDs de 5 dígitos en el mensaje (con o sin prefijo MC)
+                    // Ejemplo: .coor 12345 o .coor MC12345
+                    const matches = [...text.matchAll(/(?:MC[:\s]*)?(\d{5})/gi)];
                     
-                    for (const match of matches) {
-                        const fullMatch = match[0];
-                        const idNumbers = match[1];
-                        const idToFind = `MC${idNumbers}`;
+                    if (matches.length > 0) {
+                        console.log(`[MATCH] ${matches.length} IDs encontrados en comando .coor`);
+                        
+                        for (const match of matches) {
+                            const idNumbers = match[1]; // El grupo de captura son los dígitos
+                            const idToFind = `MC${idNumbers}`; // Estandarizamos a MC12345 para la búsqueda
 
-                        // Validación
-                        if (idNumbers.length !== 5) {
-                            if (matches.length === 1) {
-                                await sock.sendMessage(remoteJid, { text: 'ID INVÁLIDO (Debe ser de 5 dígitos)' }, { quoted: msg });
-                            }
-                            continue;
+                            // Push a ACK Queue
+                            ackQueue.push({ msg, remoteJid, idToFind });
                         }
-
-                        // Push a ACK Queue
-                        ackQueue.push({ msg, remoteJid, idToFind });
+                        // Disparar siguiente cola
+                        runAckQueue(sock);
+                    } else {
+                        await sock.sendMessage(remoteJid, { text: '⚠️ Formato incorrecto. Debes incluir el ID de 5 dígitos. Ejemplo: `.coor 12345`' }, { quoted: msg });
                     }
-                    // Disparar siguiente cola
-                    runAckQueue(sock);
+                    continue;
                 }
 
             } catch (err) {
