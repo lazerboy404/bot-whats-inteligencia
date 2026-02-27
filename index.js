@@ -742,8 +742,9 @@ async function processIncomingQueue(sock) {
 
                 if (isCoorEnabled) {
                     // Regex mejorado: \b para límites de palabra (evita matching parcial en números largos)
+                    // Soporta prefijos MC, MMC, etc. opcionales
                     // Deduplicación: Usamos un Set para IDs únicos en este mensaje
-                    const coordMatches = [...text.matchAll(/\b(?:MC[:\s]*)?(\d{5})\b/gi)];
+                    const coordMatches = [...text.matchAll(/\b(?:M{1,2}C[:\s]*)?(\d{5})\b/gi)];
 
                     if (coordMatches.length > 0) {
                         // Solo procesar si es explícitamente .coor O si es texto normal (búsqueda implícita)
