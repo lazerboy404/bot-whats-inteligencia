@@ -748,6 +748,18 @@ async function processIncomingQueue(sock) {
                     // 4. (\d{5}) Captura exactamente 5 dígitos
                     const coordMatches = [...text.matchAll(/(?<!\.)\b(?:[A-Z]+[:\s]*)?(\d{5})\b/gi)];
 
+                    // --- DETECCIÓN DE FORMATO INCORRECTO ---
+                    // Solo si NO hay matches válidos, buscamos intentos fallidos (MC + num incorrecto)
+                    // para avisar al usuario. NO avisamos por números sueltos (evita falsos positivos en chat normal)
+                    if (coordMatches.length === 0) {
+                        const invalidMatches = [...text.matchAll(/\b(?:M{1,2}C[:\s]*|ID[:\s]*)(\d{1,4}|\d{6,})\b/gi)];
+                        if (invalidMatches.length > 0) {
+                             const badId = invalidMatches[0][1];
+                             await sock.sendMessage(remoteJid, { text: `⚠️ *Formato Incorrecto*\n\nDetecté un intento de ID (${badId}) pero no tiene 5 dígitos.\nPor favor verifica el número.` }, { quoted: msg });
+                             continue;
+                        }
+                    }
+
                     if (coordMatches.length > 0) {
                         // Solo procesar si es explícitamente .coor O si es texto normal (búsqueda implícita)
                         if (cmdBase === '.coor' || !text.startsWith('.')) {
