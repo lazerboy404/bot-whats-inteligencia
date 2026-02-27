@@ -705,9 +705,12 @@ async function processIncomingQueue(sock) {
                     // 2. Si es texto normal (no comando), verificamos si la función .coor está activa en este grupo
                     else if (!text.startsWith('.')) {
                         const config = await getGroupConfig(remoteJid);
-                        // Si whitelist está OFF, se permite (comportamiento por defecto)
-                        // Si whitelist está ON, solo si .coor está en la lista
-                        if (!config.isWhitelistEnabled || config.allowedCommands.includes('.coor')) {
+                        
+                        // LÓGICA ACTUALIZADA: La búsqueda implícita (escanear mensajes normales)
+                        // AHORA REQUIERE EXPLÍCITAMENTE que .coor esté en la lista de permitidos.
+                        // Esto aplica SIEMPRE, independientemente de si el "Modo Estricto" está activado o no.
+                        // Cumple con: "solo si yo active los permisos con .coor previamente"
+                        if (config.allowedCommands.includes('.coor')) {
                             isAllowed = true;
                         }
                     }
