@@ -782,20 +782,10 @@ async function processIncomingQueue(sock) {
                         // 2. Configurar Gemini
                         const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
                         
-                        // Lista de modelos a probar en orden de preferencia (Manejo robusto de versiones y fallbacks)
-                        // Incluye versiones específicas (-001, -002) y modelos nuevos (2.0) para evitar errores 404
+                        // Lista de modelos a probar en orden de preferencia (Actualizado a Gemini 2.5)
                         const MODEL_CANDIDATES = [
-                            "gemini-1.5-pro",
-                            "gemini-1.5-pro-001",
-                            "gemini-1.5-pro-002",
-                            "gemini-1.5-pro-latest",
-                            "gemini-2.0-flash",
-                            "gemini-2.0-flash-exp",
-                            "gemini-1.5-flash",
-                            "gemini-1.5-flash-001",
-                            "gemini-1.5-flash-002",
-                            "gemini-1.5-flash-latest",
-                            "gemini-pro"
+                            "gemini-2.5-pro",
+                            "gemini-2.5-flash"
                         ];
 
                         const prompt = `
