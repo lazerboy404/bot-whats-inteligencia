@@ -275,18 +275,18 @@ async function processIncomingQueue(sock) {
                 const ADMIN_COMMANDS = ['.config', '.add', '.remove', '.permit', '.off', '.on', '.silent', '.nosilent'];
 
                 // Si NO es un comando administrativo y estamos en un grupo, verificar permisos
+                // (Bloque de Modo Estricto eliminado por solicitud del usuario - Ahora es Opt-In por comando)
+                /* 
                 if (remoteJid.endsWith('@g.us') && !ADMIN_COMMANDS.includes(cmdBase) && cmdBase.startsWith('.')) {
                     const config = await getGroupConfig(remoteJid);
                     
                     if (config.isWhitelistEnabled) {
-                        // Si whitelist está activada, el comando DEBE estar en la lista
                         if (!config.allowedCommands.includes(cmdBase)) {
-                            // Comando NO permitido. Ignorar silenciosamente.
-                            // console.log(`[PERMISOS] Comando ${cmdBase} bloqueado en ${remoteJid}`);
                             continue;
                         }
                     }
-                }
+                } 
+                */
 
                 // --- FIN CONTROL PERMISOS ---
 
@@ -407,13 +407,7 @@ async function processIncomingQueue(sock) {
                         param = args[1]?.toLowerCase();
                     }
 
-                    if (subCmd === 'on' || subCmd === 'activar') {
-                        await updateGroupConfig(remoteJid, { isWhitelistEnabled: true });
-                        await sock.sendMessage(remoteJid, { text: '🛡️ *Modo Estricto ACTIVADO*\n\nSolo los comandos permitidos funcionarán en este grupo. Usa `.add [comando]` para autorizar funciones.' });
-                    } else if (subCmd === 'off' || subCmd === 'desactivar') {
-                        await updateGroupConfig(remoteJid, { isWhitelistEnabled: false });
-                        await sock.sendMessage(remoteJid, { text: '🔓 *Modo Estricto DESACTIVADO*\n\nTodos los comandos están habilitados en este grupo.' });
-                    } else if (subCmd === 'add' || subCmd === 'agregar') {
+                    if (subCmd === 'add' || subCmd === 'agregar') {
                         if (!param || !param.startsWith('.')) {
                             await sock.sendMessage(remoteJid, { text: '⚠️ Debes especificar el comando empezando con punto. Ejemplo: `.add .ficha`' });
                         } else {
@@ -445,42 +439,27 @@ async function processIncomingQueue(sock) {
                             await sock.sendMessage(remoteJid, { text: `🗑️ Comando *${param}* eliminado de la lista permitida.${extraMsg}` });
                         }
                     } else if (subCmd === 'list' || subCmd === 'lista') {
-                        // Eliminado por petición del usuario (reemplazado por .permit)
-                        // Dejamos el bloque vacío o redirigimos a .permit si alguien lo usa por costumbre
+                        // Comprobación dinámica de estado para comandos Opt-In
                         const config = await getGroupConfig(remoteJid);
                         
-                        let message = '';
-                        const list = config.allowedCommands.length > 0 ? config.allowedCommands.join(', ') : '(Ninguno)';
-
-                        if (config.isWhitelistEnabled) {
-                            message = `⚙️ *Configuración del Grupo*\n\n` +
-                                      `🛡️ *Modo Estricto: ACTIVADO*\n` +
-                                      `⛔ Solo funcionan los comandos de la lista blanca.\n\n` +
-                                      `✅ *Lista Blanca:*\n${list}`;
-                        } else {
-                            // Modo Estricto APAGADO:
-                            // Comprobación dinámica de estado para comandos Opt-In
-                            // La lista se define al inicio del archivo en OPT_IN_COMMANDS
-                            
-                            let statusList = '';
-                            for (const cmd of OPT_IN_COMMANDS) {
-                                const isActive = config.allowedCommands.includes(cmd);
-                                const status = isActive ? '✅ ACTIVO' : '❌ INACTIVO';
-                                statusList += `• *${cmd}*: ${status}\n`;
+                        let statusList = '';
+                        for (const cmd of OPT_IN_COMMANDS) {
+                            // SOLO mostrar si está activo en el grupo
+                            if (config.allowedCommands.includes(cmd)) {
+                                statusList += `• *${cmd}*\n`;
                             }
-
-                            message = `⚙️ *Configuración del Grupo*\n\n` +
-                                      `🔓 *Modo Estricto: DESACTIVADO*\n\n` +
-                                      `📜 *Estado de Comandos :*\n` +
-                                      statusList;
                         }
+                        
+                        if (statusList === '') statusList = '(Ninguno)\n';
+
+                        const message = `⚙️ *Configuración del Grupo*\n\n` +
+                                        `✅ *Comandos Permitidos:*\n` +
+                                        statusList;
                         
                         await sock.sendMessage(remoteJid, { text: message });
                     } else {
                         await sock.sendMessage(remoteJid, { 
                             text: `⚙️ *Ayuda de Configuración*\n\n` +
-                                  `• *.config on*: Activa modo estricto\n` +
-                                  `• *.config off*: Desactiva modo estricto\n` +
                                   `• *.add .comando*: Permite un comando\n` +
                                   `• *.remove .comando*: Bloquea un comando\n` +
                                   `• *.permit*: Ver comandos permitidos\n` +
