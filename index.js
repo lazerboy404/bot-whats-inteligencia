@@ -803,8 +803,14 @@ async function processIncomingQueue(sock) {
                         FORMATO DE SALIDA ESTRICTO:
                         Omite saludos, introducciones o texto de relleno. Devuelve ÚNICAMENTE la evaluación estructurada en formato de lista para que sea fácil de leer en WhatsApp (máximo 5 opciones relevantes).
 
-                        REGLA MATEMÁTICA PARA EL PORCENTAJE:
-                        Para los equipos que no cumplen al 100%, debes contar internamente el total de requisitos solicitados y cuántos de esos sí cumple el equipo para calcular un porcentaje real y exacto.
+                        REGLA MATEMÁTICA ESTRICTA Y EXTRACCIÓN DE REQUISITOS:
+                        Debes calcular el porcentaje basándote en la cantidad total de requisitos solicitados. Para contarlos, usa esta lógica:
+
+                        Si el usuario envía una lista (viñetas, guiones o saltos de línea claros), cada viñeta cuenta como UN (1) requisito, sin importar cuántas sub-características tenga dentro.
+                        Ejemplo: Si el usuario envía 10 viñetas, el total es 10. Si un equipo cumple 8 de esas viñetas, el porcentaje es 80% (8 de 10).'
+
+                        Si el usuario envía un bloque de texto continuo (un párrafo sin formato), debes actuar como un analizador sintáctico: separa lógicamente los requisitos guiándote por las comas (,) y los puntos (.). Cada característica técnica separada por puntuación cuenta como UN (1) requisito individual.
+                        Ejemplo: Si extraes 8 requisitos de un párrafo y el equipo cumple 6, el porcentaje exacto es 75% (6 de 8).
 
                         Usa EXACTAMENTE esta estructura visual:
 
@@ -833,7 +839,7 @@ async function processIncomingQueue(sock) {
                         // Iterar sobre candidatos hasta encontrar uno que funcione
                         for (const modelName of MODEL_CANDIDATES) {
                             try {
-                                const model = genAI.getGenerativeModel({ model: modelName });
+                                const model = genAI.getGenerativeModel({ model: modelName, generationConfig: { temperature: 0 } });
                                 const result = await model.generateContent(prompt);
                                 const response = await result.response;
                                 textResponse = response.text();
