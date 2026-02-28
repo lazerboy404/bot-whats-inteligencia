@@ -801,25 +801,27 @@ async function processIncomingQueue(sock) {
                         PRIORIDAD DE MARCAS COMERCIALES: Busca PRIMERO equipos viables en catálogos de distribución mayorista (ej. Syscom) de las siguientes marcas líderes: Cisco, Ubiquiti, Mikrotik, Aruba, Fortinet, Hikvision, Dahua, Epcom, Linkedpro, Axis, Hanwha, APC, Tripp Lite, Panduit, Belden, ZKTeco, Honeywell, Bosch, Grandstream, Huawei y TP-Link. Recomienda otras marcas comerciales reconocidas solo si las anteriores fallan. Evita marcas genéricas.
                         
                         FORMATO DE SALIDA ESTRICTO:
-                        Omite saludos, introducciones o texto de relleno. Devuelve ÚNICAMENTE la evaluación estructurada en formato de lista para que sea fácil de leer en WhatsApp (máximo 5 opciones relevantes).
+                        Omite saludos, introducciones o texto de relleno. Devuelve ÚNICAMENTE la evaluación estructurada (máximo 5 opciones relevantes).
 
                         REGLA MATEMÁTICA PARA EL PORCENTAJE:
-                        Para los equipos que no cumplen al 100%, debes contar internamente el total de requisitos solicitados y cuántos de esos sí cumple el equipo para calcular un porcentaje real y exacto.
+                        Para los equipos que no cumplen al 100%, cuenta internamente el total de requisitos solicitados y cuántos sí cumple para calcular un porcentaje exacto.
 
                         Usa EXACTAMENTE esta estructura visual:
 
                         Si cumple con todo:
                         ✅ [Marca] [Modelo]
                         📊 Cumplimiento: 100%
-                        ---
 
                         Si le falta algo:
                         ❌ [Marca] [Modelo]
-                        📊 Cumplimiento: [Escribe el porcentaje exacto, ej. 85%] ([X] de [Y] requisitos cumplidos)
+                        📊 Cumplimiento: [Porcentaje exacto, ej. 85%] ([X] de [Y] requisitos cumplidos)
                         ⚠️ No cumple con:
-                        [Requisito faltante 1 detallado]
-                        [Requisito faltante 2 detallado]
-                        ---
+                        
+                        - [Requisito faltante 1 detallado]
+                        
+                        - [Requisito faltante 2 detallado]
+                        
+                        (REGLA VISUAL OBLIGATORIA: En la sección "No cumple con", CADA línea debe empezar estrictamente con un guion medio y un espacio "- " para que el formato de lista funcione. No uses solo saltos de línea).
 
                         Especificaciones a analizar:
                         "${specs}"
