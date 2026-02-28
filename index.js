@@ -836,6 +836,8 @@ async function processIncomingQueue(sock) {
 
                         // 4. Enviar resultado
                         await sock.sendMessage(remoteJid, { text: textResponse.trim() }, { quoted: msg });
+                        // Reaccionar al mensaje original indicando éxito
+                        await sock.sendMessage(remoteJid, { react: { text: '🤖', key: msg.key } });
 
                     } catch (error) {
                         console.error('[GEMINI API ERROR]', error);
