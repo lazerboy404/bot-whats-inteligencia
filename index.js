@@ -789,19 +789,21 @@ async function processIncomingQueue(sock) {
                         ];
 
                         const prompt = `
-                        Actúa como un Auditor Técnico e Ingeniero Preventa Experto.
-                        Analiza las siguientes especificaciones técnicas y busca en tu conocimiento equipos (marcas y modelos reales del mercado de seguridad electrónica, redes o IT) que cumplan AL 100% con los requisitos.
-
-                        Tu objetivo principal es recomendar hardware profesional que se pueda comprar fácilmente con distribuidores mayoristas. Dale alta prioridad a marcas líderes del mercado como: Huawei, Mikrotik, Ubiquiti, Cisco, Aruba, Fortinet, Ruckus, Cambium, Grandstream, TP-Link, Epcom, Hikvision, Dahua, Linkedpro, Axis, Hanwha, Bosch, Honeywell, ZKTeco, Panduit, Belden, APC, Tripp Lite, Intellinet, Nexxt, Dell, Lenovo, Samsung, ISS SecurOS, Milestone y otras marcas reconocidas globalmente. Aunque el catálogo de Syscom es una referencia importante, no te limites solo a él; incluye cualquier marca de renombre con presencia sólida en el mercado. Evita marcas genéricas o sin soporte.
-
-                        Reglas de Oro:
-                        1. Cero Alucinaciones: Solo recomienda equipos que estés seguro que existen y cumplen. Si dudas, asume que NO cumple.
-                        2. Comparación Estricta: Verifica voltajes, luxes, certificaciones, protocolos, temperaturas, etc.
-                        3. Formato de Salida Estricto (Sin saludos, sin introducciones, sin texto de relleno):
-                           Devuelve SOLO la lista en este formato:
-                           "✅ [Marca Modelo] - Cumple al 100%"
-                           "❌ [Marca Modelo] - No cumple (Falta: especificar qué requisito exacto falló)"
-                        4. Lista máximo 3-5 opciones relevantes.
+                        Actúa como un Auditor Técnico e Ingeniero Preventa Experto de nivel Senior. Tu tarea es analizar las especificaciones técnicas proporcionadas y encontrar equipos reales del mercado que cumplan AL 100% con TODOS los requisitos.
+                        
+                        METODOLOGÍA DE ANÁLISIS (OBLIGATORIA):
+                        Desglosa internamente el texto del usuario en una lista de verificación (checklist) rigurosa (ej. resolución, luxes, certificaciones, voltajes, temperaturas).
+                        Cruza esa lista con tu base de conocimientos técnicos.
+                        Si un equipo cumple con 9 de 10 requisitos, automáticamente se considera ❌ NO CUMPLE.
+                        
+                        REGLA DE CERO ALUCINACIONES: Si en tu memoria técnica no tienes la certeza absoluta de que un modelo específico posee una característica puntual (por ejemplo, dudas si tiene protección IK10 o si soporta OSPF), asume obligatoriamente que NO LO TIENE y márcalo con ❌. No asumas ni inventes especificaciones para forzar un resultado positivo.
+                        
+                        PRIORIDAD DE MARCAS COMERCIALES: Busca PRIMERO equipos viables en catálogos de distribución mayorista (ej. Syscom) de las siguientes marcas líderes: Cisco, Ubiquiti, Mikrotik, Aruba, Fortinet, Hikvision, Dahua, Epcom, Linkedpro, Axis, Hanwha, APC, Tripp Lite, Panduit, Belden, ZKTeco, Honeywell, Bosch, Grandstream, Huawei y TP-Link. Recomienda otras marcas comerciales reconocidas solo si las anteriores fallan. Evita marcas genéricas.
+                        
+                        FORMATO DE SALIDA ESTRICTO: Omite saludos, introducciones o texto de relleno. No imprimas tu proceso mental, ve directo a los resultados. Devuelve ÚNICAMENTE una lista (máximo 5 opciones relevantes) usando exactamente esta estructura:
+                        
+                        ✅ [Marca] [Modelo] - Cumple al 100%
+                        ❌ [Marca] [Modelo] - No cumple (Falta: [Especifica exactamente la carencia, ej. "No cuenta con armadura de acero corrugado" o "Solo soporta H.264"])
 
                         Especificaciones a analizar:
                         "${specs}"
