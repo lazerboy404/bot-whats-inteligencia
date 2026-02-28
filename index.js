@@ -816,9 +816,7 @@ async function processIncomingQueue(sock) {
                         ❌ [Marca] [Modelo]
                         📊 Cumplimiento: [Escribe el porcentaje exacto, ej. 85%] ([X] de [Y] requisitos cumplidos)
                         ⚠️ No cumple con:
-                        
                         - [Requisito faltante 1 detallado]
-                        
                         - [Requisito faltante 2 detallado]
                         
                         (REGLA VISUAL OBLIGATORIA: En la sección "No cumple con", CADA línea debe empezar estrictamente con un guion medio y un espacio "- " para que el formato de lista funcione. No uses solo saltos de línea).
