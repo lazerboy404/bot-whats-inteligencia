@@ -260,6 +260,27 @@ async function processIncomingQueue(sock) {
                 if (!msg.message || msg.key.fromMe) continue;
                 if (msg.message.protocolMessage || msg.message.reactionMessage) continue;
 
+                // --- FILTRO DE ANTIGÜEDAD (Evita responder mensajes viejos tras desconexión) ---
+                // Si el mensaje tiene más de 2 minutos de antigüedad, lo ignoramos.
+                // Esto permite procesar el "mensaje perdido" si fue reciente, pero evita spam de días anteriores.
+                if (msg.messageTimestamp) {
+                    // Baileys puede entregar timestamp como número (segundos) o Long (objeto)
+                    const timestamp = typeof msg.messageTimestamp === 'number' 
+                        ? msg.messageTimestamp 
+                        : msg.messageTimestamp.low; // .low para Long objects
+                    
+                    const msgTime = timestamp * 1000; // Convertir a ms
+                    const now = Date.now();
+                    const age = now - msgTime;
+
+                    // Umbral: 2 minutos (120,000 ms)
+                    // Si el bot se despierta y el mensaje tiene menos de 2 min, lo atiende.
+                    if (age > 2 * 60 * 1000) { 
+                        console.log(`[IGNORADO] Mensaje antiguo descartado. Antigüedad: ${(age/1000).toFixed(0)}s`);
+                        continue; 
+                    }
+                }
+
                 // Extraer texto
                 const msgType = Object.keys(msg.message)[0];
                 const text = msgType === 'conversation' 
