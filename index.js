@@ -1214,8 +1214,51 @@ async function startBot() {
         } else if (connection === 'open') {
             console.log('✅ BOT CONECTADO A WHATSAPP');
             qrCodeData = null;
+            
+            // --- KICKSTART DE COLAS (IMPORTANTE) ---
+            // Si el bot se reconecta, asegúrate de procesar cualquier mensaje pendiente
+            console.log('[SISTEMA] Reiniciando procesadores de cola tras conexión...');
+            processIncomingQueue(sock);
+            if (ackQueue.length > 0) runAckQueue(sock);
+            if (processingQueue.length > 0) runProcessor(sock);
         }
     });
+
+    // --- LÓGICA DE ANTI-SLEEP & KEEP-ALIVE EXTRA ---
+    // Detecta si la PC se suspendió o si el proceso se congeló
+    let lastTime = Date.now();
+    const antiSleepInterval = setInterval(() => {
+        const currentTime = Date.now();
+        const diff = currentTime - lastTime;
+        lastTime = currentTime;
+
+        // Si la diferencia es mayor a 15s (el intervalo es 5s), hubo suspensión o lag severo
+        if (diff > 15000) {
+            console.log(`[SISTEMA] ⚠️ Detectada suspensión/lag del sistema por ${(diff/1000).toFixed(1)}s.`);
+            
+            // Si estamos conectados, forzamos reconexión para refrescar el socket
+            // Esto arregla el problema de "el primer mensaje no funciona"
+            if (sock?.ws?.isOpen) {
+                console.log('[SISTEMA] Forzando reconexión preventiva para evitar socket muerto...');
+                sock.end(new Error('System Suspended - Force Reconnect'));
+                clearInterval(antiSleepInterval); // Limpiamos este intervalo (startBot creará uno nuevo)
+            }
+        }
+    }, 5000);
+
+    // Keep-Alive de Aplicación (Presence Update)
+    // Envía una señal de "disponible" cada 10 min para mantener la sesión activa en los servidores de WA
+    const presenceInterval = setInterval(async () => {
+        if (sock?.ws?.isOpen) {
+            try {
+                await sock.sendPresenceUpdate('available');
+                console.log('[KEEP-ALIVE] Presencia actualizada (available)');
+            } catch (e) {
+                console.error('[KEEP-ALIVE] Error actualizando presencia:', e);
+            }
+        }
+    }, 10 * 60 * 1000);
+
 
     // Guardar credenciales
     sock.ev.on('creds.update', saveCreds);
