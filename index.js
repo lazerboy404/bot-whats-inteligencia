@@ -1,1326 +1,904 @@
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    DisconnectReason,
-    makeCacheableSignalKeyStore,
-    fetchLatestBaileysVersion,
-    delay,
-    Browsers,
-    proto,
-    WAMessageStubType,
-    initAuthCreds,
-    BufferJSON,
-    areJidsSameUser
-} = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers, downloadContentFromMessage } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const express = require('express');
-const qrcode = require('qrcode-terminal');
-const fs = require('fs');
 const mongoose = require('mongoose');
-const axios = require('axios'); // Cliente HTTP para buscar datasheets
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-// --- CONSTANTES GLOBALES DE CONFIGURACIÓN ---
-
-// Lista de comandos especiales que requieren activación manual (Opt-in)
-// Para agregar uno nuevo:
-// 1. Añade el comando a este array: ['.ficha', '.coor', '.nuevo']
-// 2. En la lógica del comando, añade: if (!config.allowedCommands.includes('.nuevo')) return;
-const OPT_IN_COMMANDS = ['.ficha', '.coor', '.cumplimiento']; 
-
-// --- CONFIGURACIÓN SERPER API (Datasheets) ---
-const SERPER_API_KEY = process.env.SERPER_API_KEY || ''; // Se espera que esté en Render
-
-// --- CONFIGURACIÓN GEMINI API (Cumplimiento Técnico) ---
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || ''; // OBLIGATORIO: Poner en variables de entorno
-
-// --- POLYFILL PARA CRYPTO (Node 18/20 Fix) ---
-if (!global.crypto) {
-    global.crypto = require('crypto');
-}
-
-// --- CONFIGURACIÓN MONGODB (Persistencia de Sesión) ---
-// Usa la variable de entorno o la cadena proporcionada si no existe
-const MONGO_URL = process.env.MONGO_URL || "mongodb+srv://ntcrckrs_db_user:47V0ClnDyZIELB5E@cluster0.a6trfko.mongodb.net/?appName=Cluster0";
-let AuthModel;
-
-// Inicializamos el modelo SOLO UNA VEZ fuera de la función de conexión para evitar OverwriteModelError
-const initMongoModel = () => {
-    if (!AuthModel && mongoose.models.Auth) {
-        AuthModel = mongoose.model('Auth');
-    } else if (!AuthModel) {
-        const AuthSchema = new mongoose.Schema({
-            _id: String,
-            data: String // Guardamos como JSON stringify
-        });
-        AuthModel = mongoose.model('Auth', AuthSchema);
-    }
-};
-
-// --- MODELO DE CONFIGURACIÓN DE GRUPOS (Permisos) ---
-let GroupConfigModel;
-const initGroupConfigModel = () => {
-    if (!GroupConfigModel && mongoose.models.GroupConfig) {
-        GroupConfigModel = mongoose.model('GroupConfig');
-    } else if (!GroupConfigModel) {
-        const GroupConfigSchema = new mongoose.Schema({
-            remoteJid: { type: String, required: true, unique: true },
-            isWhitelistEnabled: { type: Boolean, default: false }, // false = todos permitidos (blacklist mode implicito vacío), true = solo allowedCommands
-            allowedCommands: { type: [String], default: [] }
-        });
-        GroupConfigModel = mongoose.model('GroupConfig', GroupConfigSchema);
-    }
-};
-
-// Caché en memoria para evitar consultas constantes a Mongo
-const groupConfigCache = new Map();
-
-const getGroupConfig = async (remoteJid) => {
-    if (!GroupConfigModel) initGroupConfigModel();
-    
-    // 1. Buscar en caché
-    if (groupConfigCache.has(remoteJid)) {
-        return groupConfigCache.get(remoteJid);
-    }
-
-    // 2. Buscar en Mongo
-    try {
-        let config = await GroupConfigModel.findOne({ remoteJid });
-        if (!config) {
-            // Retornar default sin guardar para no llenar la DB de basura
-            config = { isWhitelistEnabled: false, allowedCommands: [] };
-        }
-        // Guardar en caché (incluso si es default)
-        groupConfigCache.set(remoteJid, config);
-        return config;
-    } catch (err) {
-        console.error('Error obteniendo config de grupo:', err);
-        return { isWhitelistEnabled: false, allowedCommands: [] }; // Fail-open (permitir todo si falla DB)
-    }
-};
-
-const updateGroupConfig = async (remoteJid, update) => {
-    if (!GroupConfigModel) initGroupConfigModel();
-    try {
-        const config = await GroupConfigModel.findOneAndUpdate(
-            { remoteJid },
-            update,
-            { upsert: true, new: true, setDefaultsOnInsert: true }
-        );
-        // Actualizar caché
-        groupConfigCache.set(remoteJid, config);
-        return config;
-    } catch (err) {
-        console.error('Error actualizando config de grupo:', err);
-        throw err;
-    }
-};
-
-// Función para conectar (con reintento básico y log de éxito)
-const connectToMongo = async () => {
-    try {
-        await mongoose.connect(MONGO_URL, {
-            serverSelectionTimeoutMs: 5000 // Timeout de 5s para fallar rápido si la URL está mal
-        });
-        console.log('✅ Conectado a MongoDB con éxito');
-        initMongoModel();
-        initGroupConfigModel(); // Inicializar modelo de grupos
-    } catch (err) {
-        console.error('❌ Error CRÍTICO conectando a MongoDB:', err);
-        throw err; // Re-lanzamos para detener el bot si la DB es obligatoria
-    }
-};
-
-// Función personalizada para Auth con MongoDB
-const useMongoAuthState = async () => {
-    // Aseguramos que AuthModel exista
-    if (!AuthModel) initMongoModel();
-
-    const writeData = async (data, id) => {
-        try {
-            await AuthModel.updateOne(
-                { _id: id },
-                { $set: { data: JSON.stringify(data, BufferJSON.replacer) } },
-                { upsert: true }
-            );
-        } catch (err) {
-            console.error('Error escribiendo en Mongo:', err);
-        }
-    };
-
-    const readData = async (id) => {
-        try {
-            const result = await AuthModel.findOne({ _id: id });
-            if (result && result.data) {
-                return JSON.parse(result.data, BufferJSON.reviver);
-            }
-            return null;
-        } catch (err) {
-            console.error('Error leyendo de Mongo:', err);
-            return null;
-        }
-    };
-
-    const removeData = async (id) => {
-        try {
-            await AuthModel.deleteOne({ _id: id });
-        } catch (err) {
-            console.error('Error borrando de Mongo:', err);
-        }
-    };
-
-    const creds = await readData('creds') || initAuthCreds();
-
-    return {
-        state: {
-            creds,
-            keys: {
-                get: async (type, ids) => {
-                    const data = {};
-                    await Promise.all(ids.map(async id => {
-                        let value = await readData(`${type}-${id}`);
-                        if (type === 'app-state-sync-key' && value) {
-                            value = proto.Message.AppStateSyncKeyData.fromObject(value);
-                        }
-                        if (value) data[id] = value;
-                    }));
-                    return data;
-                },
-                set: async (data) => {
-                    const tasks = [];
-                    for (const category in data) {
-                        for (const id in data[category]) {
-                            const value = data[category][id];
-                            const key = `${category}-${id}`;
-                            if (value) {
-                                tasks.push(writeData(value, key));
-                            } else {
-                                tasks.push(removeData(key));
-                            }
-                        }
-                    }
-                    await Promise.all(tasks);
-                }
-            }
-        },
-        saveCreds: () => writeData(creds, 'creds')
-    };
-};
-
-// --- CONFIGURACIÓN SERVIDOR (Render Keep-Alive) ---
 const app = express();
 const PORT = process.env.PORT || 3000;
 let qrCodeData = null;
-let cachedCoordenadas = []; 
 
-// --- COLAS DE PROCESAMIENTO (QUEUES) ---
+const MONGO_URL = process.env.MONGO_URL || '';
+const ADMIN_PHONE = '5564132674';
+const ADMIN_NUMBER_VARIANTS = new Set(['5564132674', '525564132674', '5215564132674']);
+const reportCooldownByUser = new Map();
+const reportReferenceMap = new Map();
+let ModRecordModel = null;
+let isMongoReady = false;
+const GROUP_INVITE_REGEX = /(chat\.whatsapp\.com\/[a-zA-Z0-9]{20,}|wa\.me\/joinlink\/)/i;
 
-// Set para deduplicación de mensajes (Evita procesar el mismo ID dos veces)
-const processedMessageIds = new Set();
-// Limpieza periódica de IDs (cada 1 hora)
-setInterval(() => {
-    console.log(`[SISTEMA] Limpiando caché de IDs procesados (${processedMessageIds.size} eliminados)`);
-    processedMessageIds.clear();
-}, 60 * 60 * 1000);
+const COUNTRY_BY_DIAL_CODE = {
+    '1': 'Estados Unidos/Canadá',
+    '7': 'Rusia/Kazajistán',
+    '20': 'Egipto',
+    '27': 'Sudáfrica',
+    '30': 'Grecia',
+    '31': 'Países Bajos',
+    '32': 'Bélgica',
+    '33': 'Francia',
+    '34': 'España',
+    '39': 'Italia',
+    '40': 'Rumania',
+    '41': 'Suiza',
+    '43': 'Austria',
+    '44': 'Reino Unido',
+    '45': 'Dinamarca',
+    '46': 'Suecia',
+    '47': 'Noruega',
+    '48': 'Polonia',
+    '49': 'Alemania',
+    '51': 'Perú',
+    '52': 'México',
+    '53': 'Cuba',
+    '54': 'Argentina',
+    '55': 'Brasil',
+    '56': 'Chile',
+    '57': 'Colombia',
+    '58': 'Venezuela',
+    '60': 'Malasia',
+    '61': 'Australia',
+    '62': 'Indonesia',
+    '63': 'Filipinas',
+    '64': 'Nueva Zelanda',
+    '65': 'Singapur',
+    '66': 'Tailandia',
+    '81': 'Japón',
+    '82': 'Corea del Sur',
+    '84': 'Vietnam',
+    '86': 'China',
+    '90': 'Turquía',
+    '91': 'India',
+    '92': 'Pakistán',
+    '93': 'Afganistán',
+    '94': 'Sri Lanka',
+    '95': 'Myanmar',
+    '98': 'Irán',
+    '211': 'Sudán del Sur',
+    '212': 'Marruecos',
+    '213': 'Argelia',
+    '216': 'Túnez',
+    '218': 'Libia',
+    '220': 'Gambia',
+    '221': 'Senegal',
+    '222': 'Mauritania',
+    '223': 'Malí',
+    '224': 'Guinea',
+    '225': 'Costa de Marfil',
+    '226': 'Burkina Faso',
+    '227': 'Níger',
+    '228': 'Togo',
+    '229': 'Benín',
+    '230': 'Mauricio',
+    '231': 'Liberia',
+    '232': 'Sierra Leona',
+    '233': 'Ghana',
+    '234': 'Nigeria',
+    '235': 'Chad',
+    '236': 'República Centroafricana',
+    '237': 'Camerún',
+    '238': 'Cabo Verde',
+    '239': 'Santo Tomé y Príncipe',
+    '240': 'Guinea Ecuatorial',
+    '241': 'Gabón',
+    '242': 'República del Congo',
+    '243': 'República Democrática del Congo',
+    '244': 'Angola',
+    '245': 'Guinea-Bisáu',
+    '246': 'Territorio Británico del Océano Índico',
+    '248': 'Seychelles',
+    '249': 'Sudán',
+    '250': 'Ruanda',
+    '251': 'Etiopía',
+    '252': 'Somalia',
+    '253': 'Yibuti',
+    '254': 'Kenia',
+    '255': 'Tanzania',
+    '256': 'Uganda',
+    '257': 'Burundi',
+    '258': 'Mozambique',
+    '260': 'Zambia',
+    '261': 'Madagascar',
+    '262': 'Reunión/Mayotte',
+    '263': 'Zimbabue',
+    '264': 'Namibia',
+    '265': 'Malaui',
+    '266': 'Lesoto',
+    '267': 'Botsuana',
+    '268': 'Esuatini',
+    '269': 'Comoras',
+    '290': 'Santa Elena',
+    '291': 'Eritrea',
+    '297': 'Aruba',
+    '298': 'Islas Feroe',
+    '299': 'Groenlandia',
+    '350': 'Gibraltar',
+    '351': 'Portugal',
+    '352': 'Luxemburgo',
+    '353': 'Irlanda',
+    '354': 'Islandia',
+    '355': 'Albania',
+    '356': 'Malta',
+    '357': 'Chipre',
+    '358': 'Finlandia',
+    '359': 'Bulgaria',
+    '370': 'Lituania',
+    '371': 'Letonia',
+    '372': 'Estonia',
+    '373': 'Moldavia',
+    '374': 'Armenia',
+    '375': 'Bielorrusia',
+    '376': 'Andorra',
+    '377': 'Mónaco',
+    '378': 'San Marino',
+    '380': 'Ucrania',
+    '381': 'Serbia',
+    '382': 'Montenegro',
+    '383': 'Kosovo',
+    '385': 'Croacia',
+    '386': 'Eslovenia',
+    '387': 'Bosnia y Herzegovina',
+    '389': 'Macedonia del Norte',
+    '420': 'República Checa',
+    '421': 'Eslovaquia',
+    '423': 'Liechtenstein',
+    '500': 'Islas Malvinas',
+    '501': 'Belice',
+    '502': 'Guatemala',
+    '503': 'El Salvador',
+    '504': 'Honduras',
+    '505': 'Nicaragua',
+    '506': 'Costa Rica',
+    '507': 'Panamá',
+    '508': 'San Pedro y Miquelón',
+    '509': 'Haití',
+    '590': 'Guadalupe/San Martín/San Bartolomé',
+    '591': 'Bolivia',
+    '592': 'Guyana',
+    '593': 'Ecuador',
+    '594': 'Guayana Francesa',
+    '595': 'Paraguay',
+    '596': 'Martinica',
+    '597': 'Surinam',
+    '598': 'Uruguay',
+    '599': 'Curazao/Caribe Neerlandés',
+    '670': 'Timor Oriental',
+    '672': 'Territorios Australianos Externos',
+    '673': 'Brunéi',
+    '674': 'Nauru',
+    '675': 'Papúa Nueva Guinea',
+    '676': 'Tonga',
+    '677': 'Islas Salomón',
+    '678': 'Vanuatu',
+    '679': 'Fiyi',
+    '680': 'Palaos',
+    '681': 'Wallis y Futuna',
+    '682': 'Islas Cook',
+    '683': 'Niue',
+    '685': 'Samoa',
+    '686': 'Kiribati',
+    '687': 'Nueva Caledonia',
+    '688': 'Tuvalu',
+    '689': 'Polinesia Francesa',
+    '690': 'Tokelau',
+    '691': 'Micronesia',
+    '692': 'Islas Marshall',
+    '850': 'Corea del Norte',
+    '852': 'Hong Kong',
+    '853': 'Macao',
+    '855': 'Camboya',
+    '856': 'Laos',
+    '880': 'Bangladés',
+    '886': 'Taiwán',
+    '960': 'Maldivas',
+    '961': 'Líbano',
+    '962': 'Jordania',
+    '963': 'Siria',
+    '964': 'Irak',
+    '965': 'Kuwait',
+    '966': 'Arabia Saudita',
+    '967': 'Yemen',
+    '968': 'Omán',
+    '970': 'Palestina',
+    '971': 'Emiratos Árabes Unidos',
+    '972': 'Israel',
+    '973': 'Baréin',
+    '974': 'Catar',
+    '975': 'Bután',
+    '976': 'Mongolia',
+    '977': 'Nepal',
+    '992': 'Tayikistán',
+    '993': 'Turkmenistán',
+    '994': 'Azerbaiyán',
+    '995': 'Georgia',
+    '996': 'Kirguistán',
+    '998': 'Uzbekistán'
+};
 
-// Cola 0: ENTRADA (Raw Messages) - Desacopla recepción de procesamiento
-const incomingQueue = [];
-let isProcessingIncoming = false;
-// Variable para el temporizador de Debounce/Buffer
-let incomingBufferTimeout = null;
+const SORTED_DIAL_CODES = Object.keys(COUNTRY_BY_DIAL_CODE).sort((a, b) => b.length - a.length);
 
-// --- CONFIGURACIÓN DE ADMIN Y CONTROL DE CHAT ---
-// Agrega aquí los números permitidos (formato internacional sin +). Ejemplo: '5215512345678'
-const ADMIN_NUMBERS = ['525564132674', '5215564132674', '146935243604020']; 
-let isChatClosed = false;
+function cleanDigits(value) {
+    return String(value || '').replace(/\D/g, '');
+}
 
-// Cola 1: ACK (Aceptación Inmediata pero Segura)
-// Objetivo: Responder "SOLICITUD ACEPTADA" rápido pero sin saturar (rate-limit)
-const ackQueue = [];
-let isProcessingAck = false;
+function normalizePhoneForCompare(value) {
+    const digits = cleanDigits(value);
+    if (digits.startsWith('521')) {
+        return `52${digits.slice(3)}`;
+    }
+    return digits;
+}
 
-// Cola 2: PROCESSING (Edición Lenta)
-// Objetivo: Esperar 5s y editar el mensaje con las coordenadas
-const processingQueue = [];
-let isProcessingQueue = false;
+function getNumberFromJid(jid) {
+    return cleanDigits(String(jid || '').split('@')[0].split(':')[0]);
+}
 
-// --- PROCESADORES ---
+function toJid(number) {
+    return `${cleanDigits(number)}@s.whatsapp.net`;
+}
 
-// 1. Procesador de ENTRADA (Filtrado y Regex)
-async function processIncomingQueue(sock) {
-    if (isProcessingIncoming || incomingQueue.length === 0) return;
-    isProcessingIncoming = true;
+function getAdminJid() {
+    const base = cleanDigits(ADMIN_PHONE);
+    if (base.length === 10) {
+        return toJid(`52${base}`);
+    }
+    return toJid(base);
+}
+
+function isOwnerByNumber(number) {
+    const normalized = normalizePhoneForCompare(number);
+    return ADMIN_NUMBER_VARIANTS.has(normalized) || ADMIN_NUMBER_VARIANTS.has(cleanDigits(number));
+}
+
+function getCountryFromNumber(number) {
+    const normalized = normalizePhoneForCompare(number);
+    for (const code of SORTED_DIAL_CODES) {
+        if (normalized.startsWith(code)) {
+            return COUNTRY_BY_DIAL_CODE[code];
+        }
+    }
+    return 'un país no identificado';
+}
+
+function sanitizeText(value, maxLength = 3500) {
+    const plain = String(value ?? '')
+        .replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\u024F\u1E00-\u1EFF]/g, '')
+        .trim();
+    if (plain.length <= maxLength) {
+        return plain;
+    }
+    return `${plain.slice(0, maxLength)}...`;
+}
+
+function hasGroupInviteLink(text) {
+    return GROUP_INVITE_REGEX.test(String(text || ''));
+}
+
+async function streamToBuffer(stream) {
+    const chunks = [];
+    for await (const chunk of stream) {
+        chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
+}
+
+function getMainMessageObject(message) {
+    if (!message) return null;
+    if (message.ephemeralMessage?.message) return message.ephemeralMessage.message;
+    if (message.viewOnceMessage?.message) return message.viewOnceMessage.message;
+    if (message.viewOnceMessageV2?.message) return message.viewOnceMessageV2.message;
+    if (message.viewOnceMessageV2Extension?.message) return message.viewOnceMessageV2Extension.message;
+    return message;
+}
+
+function extractTextFromMessage(message) {
+    const body = getMainMessageObject(message);
+    if (!body) return '';
+    if (body.conversation) return sanitizeText(body.conversation);
+    if (body.extendedTextMessage?.text) return sanitizeText(body.extendedTextMessage.text);
+    if (body.imageMessage?.caption) return sanitizeText(body.imageMessage.caption);
+    if (body.videoMessage?.caption) return sanitizeText(body.videoMessage.caption);
+    if (body.documentMessage?.caption) return sanitizeText(body.documentMessage.caption);
+    if (body.buttonsResponseMessage?.selectedButtonId) return sanitizeText(body.buttonsResponseMessage.selectedButtonId);
+    if (body.listResponseMessage?.singleSelectReply?.selectedRowId) return sanitizeText(body.listResponseMessage.singleSelectReply.selectedRowId);
+    return '';
+}
+
+function getContextInfoFromMessage(message) {
+    const body = getMainMessageObject(message);
+    if (!body) return null;
+    const type = Object.keys(body)[0];
+    if (!type) return null;
+    return body[type]?.contextInfo || null;
+}
+
+function getQuotedPayload(message) {
+    const contextInfo = getContextInfoFromMessage(message);
+    if (!contextInfo) return null;
+    return {
+        contextInfo,
+        quotedMessage: contextInfo.quotedMessage || null,
+        quotedParticipant: contextInfo.participant || null,
+        quotedStanzaId: contextInfo.stanzaId || null
+    };
+}
+
+function describeQuotedContent(quotedMessage) {
+    const payload = getMainMessageObject(quotedMessage);
+    if (!payload) return { mediaType: 'desconocido', text: '', raw: '' };
+    const mediaType = Object.keys(payload)[0] || 'desconocido';
+    const text = extractTextFromMessage(payload);
+    const raw = sanitizeText(JSON.stringify(payload));
+    return { mediaType, text, raw };
+}
+
+function parseTargetFromTextOrMention(msg, text) {
+    const contextInfo = getContextInfoFromMessage(msg.message);
+    const mentioned = contextInfo?.mentionedJid || [];
+    if (mentioned.length > 0) {
+        return mentioned[0];
+    }
+
+    const arg = sanitizeText(text).split(/\s+/).slice(1).find(Boolean);
+    if (!arg) return null;
+    if (arg.includes('@s.whatsapp.net')) {
+        return arg;
+    }
+    const digits = cleanDigits(arg);
+    if (digits.length >= 8) {
+        return toJid(digits);
+    }
+    return null;
+}
+
+function parseTargetFromReportText(text) {
+    const match = String(text || '').match(/ID infractor:\s*([0-9]+@s\.whatsapp\.net)/i);
+    if (match?.[1]) return match[1];
+    return null;
+}
+
+function parseGroupFromReportText(text) {
+    const match = String(text || '').match(/Grupo:\s*([0-9\-]+@g\.us)/i);
+    if (match?.[1]) return match[1];
+    return null;
+}
+
+function getRulesText() {
+    return [
+        '📌 *Reglas básicas del grupo:*',
+        '1) Respeto total entre miembros.',
+        '2) Prohibidos insultos, amenazas o acoso.',
+        '3) No spam, cadenas ni contenido ofensivo.',
+        '4) Evita compartir datos personales de terceros.',
+        '5) Sigue indicaciones de los administradores.'
+    ].join('\n');
+}
+
+async function ensureMongo() {
+    if (isMongoReady) {
+        return true;
+    }
+    if (!MONGO_URL) {
+        console.error('MONGO_URL no está configurado. Moderación desactivada.');
+        return false;
+    }
+    if (mongoose.connection.readyState === 0) {
+        await mongoose.connect(MONGO_URL, { serverSelectionTimeoutMS: 5000 });
+    }
+
+    if (!mongoose.models.ModRecord) {
+        const schema = new mongoose.Schema({
+            userId: { type: String, required: true, unique: true, index: true },
+            advertencias: { type: Number, default: 0 },
+            motivos: { type: [String], default: [] },
+            isBanned: { type: Boolean, default: false },
+            intentosReingreso: { type: Number, default: 0 },
+            ultimaActividad: { type: Date, default: null }
+        });
+        schema.index({ userId: 1 });
+        schema.index({ ultimaActividad: 1 });
+        ModRecordModel = mongoose.model('ModRecord', schema, 'mod_records');
+    } else {
+        ModRecordModel = mongoose.model('ModRecord');
+    }
+
+    isMongoReady = true;
+    return true;
+}
+
+async function upsertModRecord(userId, update) {
+    return ModRecordModel.findOneAndUpdate(
+        { userId },
+        update,
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+}
+
+async function getModRecord(userId) {
+    return ModRecordModel.findOne({ userId }).lean();
+}
+
+function touchLastActivityAsync(userId) {
+    if (!isMongoReady || !userId) {
+        return;
+    }
+    upsertModRecord(userId, { $set: { ultimaActividad: new Date() } }).catch(() => {});
+}
+
+async function sendPrivateAdminMessage(sock, text) {
+    const adminJid = getAdminJid();
+    await sock.sendMessage(adminJid, { text: sanitizeText(text, 9000) });
+}
+
+async function isGroupAdmin(sock, groupJid, userJid) {
+    const metadata = await sock.groupMetadata(groupJid);
+    const normalizedTarget = normalizePhoneForCompare(getNumberFromJid(userJid));
+    const participant = metadata.participants.find((p) => {
+        const current = normalizePhoneForCompare(getNumberFromJid(p.id));
+        return current === normalizedTarget;
+    });
+    return participant?.admin === 'admin' || participant?.admin === 'superadmin';
+}
+
+async function senderIsAuthorizedAdmin(sock, msg, remoteJid) {
+    const senderJid = msg.key.participant || msg.key.remoteJid;
+    const senderNumber = getNumberFromJid(senderJid);
+    if (isOwnerByNumber(senderNumber)) {
+        return true;
+    }
+    if (!remoteJid.endsWith('@g.us')) {
+        return false;
+    }
+    return isGroupAdmin(sock, remoteJid, senderJid);
+}
+
+async function sendWelcome(sock, groupJid, participantJid) {
+    const number = getNumberFromJid(participantJid);
+    const mention = `@${number}`;
+    const country = getCountryFromNumber(number);
+    const welcomeText = `Hola ${mention}, nos saludas desde ${country}. ¡Bienvenido al grupo!\n\n${getRulesText()}`;
+
+    let profileUrl = null;
+    try {
+        profileUrl = await sock.profilePictureUrl(participantJid, 'image');
+    } catch (error) {
+        profileUrl = null;
+    }
+
+    if (profileUrl) {
+        await sock.sendMessage(groupJid, {
+            image: { url: profileUrl },
+            caption: welcomeText,
+            mentions: [participantJid]
+        });
+        return;
+    }
+
+    await sock.sendMessage(groupJid, {
+        text: welcomeText,
+        mentions: [participantJid]
+    });
+}
+
+async function handleReportCommand(sock, msg, text, remoteJid) {
+    if (!remoteJid.endsWith('@g.us')) {
+        await sock.sendMessage(remoteJid, { text: 'Este comando solo funciona en grupos.' }, { quoted: msg });
+        return;
+    }
+    const senderJid = msg.key.participant || msg.key.remoteJid;
+    const senderKey = normalizePhoneForCompare(getNumberFromJid(senderJid));
+    const now = Date.now();
+    const last = reportCooldownByUser.get(senderKey) || 0;
+    if (now - last < 60000) {
+        const wait = Math.ceil((60000 - (now - last)) / 1000);
+        await sock.sendMessage(remoteJid, { text: `Debes esperar ${wait}s para usar .reporte de nuevo.` }, { quoted: msg });
+        return;
+    }
+
+    const quoted = getQuotedPayload(msg.message);
+    if (!quoted?.quotedParticipant || !quoted?.quotedMessage) {
+        await sock.sendMessage(remoteJid, { text: 'Para usar .reporte debes responder a un mensaje.' }, { quoted: msg });
+        return;
+    }
+
+    if (await isGroupAdmin(sock, remoteJid, quoted.quotedParticipant)) {
+        await sock.sendMessage(remoteJid, { text: 'No puedes reportar a un administrador del grupo.' }, { quoted: msg });
+        return;
+    }
+
+    reportCooldownByUser.set(senderKey, now);
+    const detail = describeQuotedContent(quoted.quotedMessage);
+    const reporterId = msg.key.participant || msg.key.remoteJid;
+    const offenderId = quoted.quotedParticipant;
+    const motive = sanitizeText(text).split(/\s+/).slice(1).join(' ');
+    const cleanMotive = motive || 'Sin motivo adicional.';
+
+    const reportText = [
+        '🧾 REPORTE FORENSE',
+        `Grupo: ${remoteJid}`,
+        `Reportante: ${reporterId}`,
+        `ID infractor: ${offenderId}`,
+        `Motivo: ${cleanMotive}`,
+        `Tipo de contenido: ${detail.mediaType}`,
+        `Texto citado: ${detail.text || '(sin texto visible)'}`,
+        `Contenido crudo: ${detail.raw || '(sin contenido)'}`
+    ].join('\n');
+
+    const sentReport = await sock.sendMessage(getAdminJid(), { text: reportText });
+    reportReferenceMap.set(sentReport.key.id, { offenderJid: offenderId, groupJid: remoteJid });
+    await sock.sendMessage(getAdminJid(), { text: `.advertir ${offenderId}` });
+    await sock.sendMessage(remoteJid, { text: '✅ Reporte recibido. Evidencia preservada y enviada a administración.' }, { quoted: msg });
+}
+
+async function resolveTargetForModeration(msg, text) {
+    const fromTextOrMention = parseTargetFromTextOrMention(msg, text);
+    if (fromTextOrMention) {
+        return { targetJid: fromTextOrMention, source: 'directo', groupFromReport: null };
+    }
+
+    const quoted = getQuotedPayload(msg.message);
+    if (!quoted) {
+        return { targetJid: null, source: null, groupFromReport: null };
+    }
+
+    const messageText = extractTextFromMessage(msg.message);
+    if (messageText.toLowerCase().startsWith('.advertir') || messageText.toLowerCase().startsWith('.unban')) {
+        if (quoted.quotedStanzaId && reportReferenceMap.has(quoted.quotedStanzaId)) {
+            const data = reportReferenceMap.get(quoted.quotedStanzaId);
+            return { targetJid: data.offenderJid, source: 'reporte', groupFromReport: data.groupJid };
+        }
+        const quotedText = extractTextFromMessage(quoted.quotedMessage || {});
+        const parsedTarget = parseTargetFromReportText(quotedText);
+        const parsedGroup = parseGroupFromReportText(quotedText);
+        if (parsedTarget) {
+            return { targetJid: parsedTarget, source: 'reporte', groupFromReport: parsedGroup };
+        }
+    }
+
+    if (quoted.quotedParticipant) {
+        return { targetJid: quoted.quotedParticipant, source: 'respuesta', groupFromReport: null };
+    }
+    return { targetJid: null, source: null, groupFromReport: null };
+}
+
+async function handleWarnCommand(sock, msg, text, remoteJid) {
+    const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
+    if (!isAuthorized) {
+        await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
+        return;
+    }
+    if (!isMongoReady) {
+        await sock.sendMessage(remoteJid, { text: 'Moderación no disponible: MongoDB no está conectado.' }, { quoted: msg });
+        return;
+    }
+
+    const resolved = await resolveTargetForModeration(msg, text);
+    if (!resolved.targetJid) {
+        await sock.sendMessage(remoteJid, { text: 'Usa .advertir con mención, ID o respondiendo al reporte.' }, { quoted: msg });
+        return;
+    }
+
+    const currentGroup = remoteJid.endsWith('@g.us') ? remoteJid : resolved.groupFromReport;
+    if (currentGroup && await isGroupAdmin(sock, currentGroup, resolved.targetJid)) {
+        await sock.sendMessage(remoteJid, { text: 'No puedes advertir a un administrador del grupo.' }, { quoted: msg });
+        return;
+    }
+
+    const senderJid = msg.key.participant || msg.key.remoteJid;
+    const reason = `Advertencia por ${senderJid} en ${new Date().toISOString()}`;
+    const mention = `@${getNumberFromJid(resolved.targetJid)}`;
+    const result = await applyWarning(sock, resolved.targetJid, currentGroup, reason);
+
+    if (result.warningCount < 3) {
+        await sock.sendMessage(remoteJid, {
+            text: `⚠️ ${mention}, has sido advertido ([${result.warningCount}]/3). Se ha registrado la evidencia.`,
+            mentions: [resolved.targetJid]
+        }, { quoted: msg });
+        return;
+    }
+
+    const resultText = result.kicked
+        ? `⛔ ${mention} alcanzó 3/3 advertencias y fue expulsado automáticamente.`
+        : `⛔ ${mention} alcanzó 3/3 advertencias y quedó marcado como baneado. No pude expulsarlo automáticamente.`;
+    await sock.sendMessage(remoteJid, { text: resultText, mentions: [resolved.targetJid] }, { quoted: msg });
+}
+
+async function handleUnbanCommand(sock, msg, text, remoteJid) {
+    const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
+    if (!isAuthorized) {
+        await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
+        return;
+    }
+    if (!isMongoReady) {
+        await sock.sendMessage(remoteJid, { text: 'Moderación no disponible: MongoDB no está conectado.' }, { quoted: msg });
+        return;
+    }
+
+    const resolved = await resolveTargetForModeration(msg, text);
+    if (!resolved.targetJid) {
+        await sock.sendMessage(remoteJid, { text: 'Usa .unban con mención, ID o respondiendo al reporte.' }, { quoted: msg });
+        return;
+    }
+
+    await upsertModRecord(resolved.targetJid, {
+        $set: { isBanned: false, advertencias: 0 }
+    });
+
+    const mention = `@${getNumberFromJid(resolved.targetJid)}`;
+    await sock.sendMessage(remoteJid, {
+        text: `✅ ${mention} fue desbaneado y su contador de advertencias se reinició.`,
+        mentions: [resolved.targetJid]
+    }, { quoted: msg });
+}
+
+async function handleStickerCommand(sock, msg, remoteJid) {
+    const quoted = getQuotedPayload(msg.message);
+    if (!quoted?.quotedMessage) {
+        await sock.sendMessage(remoteJid, { text: 'Para usar .sticker debes responder a una imagen.' }, { quoted: msg });
+        return;
+    }
+
+    const quotedBody = getMainMessageObject(quoted.quotedMessage);
+    const imageMessage = quotedBody?.imageMessage;
+    if (!imageMessage) {
+        await sock.sendMessage(remoteJid, { text: 'El mensaje citado no contiene una imagen válida.' }, { quoted: msg });
+        return;
+    }
 
     try {
-        while (incomingQueue.length > 0) {
-            const msg = incomingQueue.shift();
-            
-            try {
-                // Filtros básicos
-                if (!msg.message || msg.key.fromMe) continue;
-                if (msg.message.protocolMessage || msg.message.reactionMessage) continue;
-
-                // --- FILTRO DE ANTIGÜEDAD (Evita responder mensajes viejos tras desconexión) ---
-                // Si el mensaje tiene más de 2 minutos de antigüedad, lo ignoramos.
-                // Esto permite procesar el "mensaje perdido" si fue reciente, pero evita spam de días anteriores.
-                if (msg.messageTimestamp) {
-                    // Baileys puede entregar timestamp como número (segundos) o Long (objeto)
-                    const timestamp = typeof msg.messageTimestamp === 'number' 
-                        ? msg.messageTimestamp 
-                        : msg.messageTimestamp.low; // .low para Long objects
-                    
-                    const msgTime = timestamp * 1000; // Convertir a ms
-                    const now = Date.now();
-                    const age = now - msgTime;
-
-                    // Umbral: 2 minutos (120,000 ms)
-                    // Si el bot se despierta y el mensaje tiene menos de 2 min, lo atiende.
-                    if (age > 2 * 60 * 1000) { 
-                        console.log(`[IGNORADO] Mensaje antiguo descartado. Antigüedad: ${(age/1000).toFixed(0)}s`);
-                        continue; 
-                    }
-                }
-
-                // Extraer texto
-                const msgType = Object.keys(msg.message)[0];
-                const text = msgType === 'conversation' 
-                    ? msg.message.conversation 
-                    : msgType === 'extendedTextMessage' 
-                        ? msg.message.extendedTextMessage.text 
-                        : '';
-
-                if (!text) continue;
-                const remoteJid = msg.key.remoteJid;
-
-                // --- CONTROL DE PERMISOS POR GRUPO (Whitelist) ---
-                const cmdFull = text.trim();
-                const cmdBase = cmdFull.split(' ')[0].toLowerCase(); // Ej: .ficha, .config
-
-                // Comandos administrativos que SIEMPRE funcionan (bypass de permisos)
-                // Solo validan permisos de administrador del grupo/bot internamente
-                const ADMIN_COMMANDS = ['.config', '.add', '.remove', '.permit', '.off', '.on', '.silent', '.nosilent'];
-
-                // Si NO es un comando administrativo y estamos en un grupo, verificar permisos
-                // (Bloque de Modo Estricto eliminado por solicitud del usuario - Ahora es Opt-In por comando)
-                /* 
-                if (remoteJid.endsWith('@g.us') && !ADMIN_COMMANDS.includes(cmdBase) && cmdBase.startsWith('.')) {
-                    const config = await getGroupConfig(remoteJid);
-                    
-                    if (config.isWhitelistEnabled) {
-                        if (!config.allowedCommands.includes(cmdBase)) {
-                            continue;
-                        }
-                    }
-                } 
-                */
-
-                // --- FIN CONTROL PERMISOS ---
-
-                // 1. CONTROL DEL BOT (Solo Dueño/SuperAdmins del Bot)
-                if (cmdFull === '.off' || cmdFull === '.on') {
-                    // Identificar quién envía
-                    const sender = msg.key.participant || msg.key.remoteJid;
-                    const senderNumber = sender.replace(/\D/g, ''); // Solo números
-                    const adminName = msg.pushName || 'El Administrador';
-
-                    // Verificar si es admin del BOT (lista hardcodeada)
-                    if (ADMIN_NUMBERS.includes(senderNumber)) {
-                        if (cmdBase === '.off') {
-                            if (!isChatClosed) {
-                                isChatClosed = true;
-                                await sock.sendMessage(remoteJid, { text: `🔴 ${adminName} ha desactivado el bot.` }, { quoted: msg });
-                            } else {
-                                await sock.sendMessage(remoteJid, { text: '⚠️ El bot ya está desactivado.' }, { quoted: msg });
-                            }
-                        } else { // .on
-                            if (isChatClosed) {
-                                isChatClosed = false;
-                                await sock.sendMessage(remoteJid, { text: `🟢 ${adminName} ha activado el bot.` }, { quoted: msg });
-                            } else {
-                                await sock.sendMessage(remoteJid, { text: '⚠️ El bot ya está activado.' }, { quoted: msg });
-                            }
-                        }
-                    } else {
-                        console.log(`[AUTH] Intento de comando admin denegado a: ${senderNumber}`);
-                    }
-                    continue; // Detener procesamiento
-                }
-
-                // 2. CONTROL DEL GRUPO (Silenciar/Activar - Para Admins del Grupo)
-                if (cmdBase === '.silent' || cmdBase === '.nosilent') {
-                    // a) Validación de Entorno (Solo Grupos)
-                    if (!remoteJid.endsWith('@g.us')) {
-                        await sock.sendMessage(remoteJid, { text: '⚠️ Este comando solo funciona en grupos.' }, { quoted: msg });
-                        continue;
-                    }
-
-                    try {
-                        // Obtener metadatos del grupo
-                        const groupMetadata = await sock.groupMetadata(remoteJid);
-                        const participants = groupMetadata.participants;
-
-                        // b) Validación de Usuario (Solo Dueño del Bot)
-                    const sender = msg.key.participant || msg.key.remoteJid;
-                    const senderNumber = sender.replace(/\D/g, '');
-                    const isBotOwner = ADMIN_NUMBERS.includes(senderNumber);
-
-                    if (!isBotOwner) {
-                         await sock.sendMessage(remoteJid, { text: '⛔ Acceso denegado: Solo el dueño del bot puede usar este comando.' }, { quoted: msg });
-                         continue;
-                    }
-
-                        // c) Validación del Bot (Debe ser Admin del Grupo)
-                        // Lógica mejorada: Normalización "Mexico-proof" (521 vs 52) y ejecución optimista
-                        const botId = sock.user.id;
-                        
-                        // Función local para normalizar IDs y resolver el problema del prefijo 521 (México)
-                        const normalizeJid = (jid) => {
-                            if (!jid) return '';
-                            let id = jid.split(':')[0].split('@')[0].replace(/\D/g, '');
-                            // Si es número de México (52...), estandarizamos a 52 (sin el 1 extra de 521)
-                            if (id.startsWith('521')) {
-                                id = '52' + id.slice(3);
-                            }
-                            return id;
-                        };
-
-                        const myCleanId = normalizeJid(botId);
-                        
-                        // Buscar coincidencia normalizada
-                        const botParticipant = participants.find(p => normalizeJid(p.id) === myCleanId);
-                        
-                        const isBotAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin';
-
-                        // Solo detenemos SI encontramos al bot y confirmamos que NO es admin.
-                        // Si no lo encontramos (botParticipant es undefined), asumimos error de búsqueda e intentamos ejecutar igual.
-                        if (botParticipant && !isBotAdmin) {
-                            await sock.sendMessage(remoteJid, { text: '⚠️ Necesito ser administrador del grupo para ejecutar esta acción.' }, { quoted: msg });
-                            continue;
-                        }
-
-                        if (!botParticipant) {
-                            console.log(`[DEBUG SILENT] Bot no encontrado en lista (ID: ${myCleanId}). Intentando ejecución forzada...`);
-                        }
-
-                        // d) Ejecutar Acción
-                        try {
-                            if (cmdBase === '.silent') {
-                                await sock.groupSettingUpdate(remoteJid, 'announcement');
-                                await sock.sendMessage(remoteJid, { text: '🔒 El grupo ha sido silenciado. Solo los administradores pueden enviar mensajes.' });
-                            } else { // .nosilent
-                                await sock.groupSettingUpdate(remoteJid, 'not_announcement');
-                                await sock.sendMessage(remoteJid, { text: '🔓 El grupo ha sido abierto. Todos los participantes pueden escribir.' });
-                            }
-                        } catch (err) {
-                            console.error('[GROUP ADMIN ERROR]', err);
-                            // Si falla la ejecución, asumimos que fue por falta de permisos
-                            await sock.sendMessage(remoteJid, { text: '❌ No pude ejecutar la orden. Verifica que el Bot sea Administrador del grupo.' }, { quoted: msg });
-                        }
-                        
-                        // Terminamos aquí el bloque de silent
-                    } catch (e) {
-                        console.error('Error general en comando silent:', e);
-                        await sock.sendMessage(remoteJid, { text: '❌ Ocurrió un error inesperado al intentar silenciar el grupo.' }, { quoted: msg });
-                    }
-                    continue;
-                }
-
-                // 2.5 GESTIÓN DE PERMISOS (.config, .add, .remove, .permit)
-                if (cmdBase === '.config' || cmdBase === '.add' || cmdBase === '.remove' || cmdBase === '.permit') {
-                    if (!remoteJid.endsWith('@g.us')) {
-                        await sock.sendMessage(remoteJid, { text: '⚠️ Este comando solo funciona en grupos.' }, { quoted: msg });
-                        continue;
-                    }
-
-                    // Verificar admin
-                    const sender = msg.key.participant || msg.key.remoteJid;
-                    const senderNumber = sender.replace(/\D/g, '');
-                    const isBotOwner = ADMIN_NUMBERS.includes(senderNumber);
-
-                    // .permit sigue siendo público para ver qué comandos funcionan
-                    if (cmdBase !== '.permit' && !isBotOwner) {
-                        await sock.sendMessage(remoteJid, { text: '⛔ Acceso denegado: Solo el dueño del bot puede configurar permisos.' }, { quoted: msg });
-                        continue;
-                    }
-
-                    const args = cmdFull.split(' ').slice(1);
-                    // Normalización de subcomandos para soportar .add, .remove y .permit directos
-                    let subCmd, param;
-
-                    if (cmdBase === '.add') {
-                        subCmd = 'add';
-                        param = args[0]?.toLowerCase(); // En .add el primer arg ya es el comando
-                    } else if (cmdBase === '.remove') {
-                        subCmd = 'remove';
-                        param = args[0]?.toLowerCase();
-                    } else if (cmdBase === '.permit') {
-                        subCmd = 'list'; // .permit es alias de list
-                    } else {
-                        // Caso .config [subcmd] [param]
-                        subCmd = args[0]?.toLowerCase();
-                        param = args[1]?.toLowerCase();
-                    }
-
-                    if (subCmd === 'add' || subCmd === 'agregar') {
-                        if (!param || !param.startsWith('.')) {
-                            await sock.sendMessage(remoteJid, { text: '⚠️ Debes especificar el comando empezando con punto. Ejemplo: `.add .ficha`' });
-                        } else {
-                            const currentConfig = await getGroupConfig(remoteJid);
-                            if (!currentConfig.allowedCommands.includes(param)) {
-                                await updateGroupConfig(remoteJid, { $push: { allowedCommands: param } });
-                                
-                                let extraMsg = '';
-                                if (param === '.coor') {
-                                    extraMsg = '\n\n👁️ *Ojo:* Ahora el bot también buscará coordenadas automáticamente en este grupo cuando envíen IDs.';
-                                }
-                                
-                                await sock.sendMessage(remoteJid, { text: `✅ Comando *${param}* agregado a la lista permitida.${extraMsg}` });
-                            } else {
-                                await sock.sendMessage(remoteJid, { text: `⚠️ El comando *${param}* ya estaba permitido.` });
-                            }
-                        }
-                    } else if (subCmd === 'remove' || subCmd === 'quitar') {
-                        if (!param) {
-                            await sock.sendMessage(remoteJid, { text: '⚠️ Ejemplo: `.remove .ficha`' });
-                        } else {
-                            await updateGroupConfig(remoteJid, { $pull: { allowedCommands: param } });
-                            
-                            let extraMsg = '';
-                            if (param === '.coor') {
-                                extraMsg = '\n\n🙈 *Ojo:* La búsqueda automática de coordenadas se ha desactivado en este grupo.';
-                            }
-
-                            await sock.sendMessage(remoteJid, { text: `🗑️ Comando *${param}* eliminado de la lista permitida.${extraMsg}` });
-                        }
-                    } else if (subCmd === 'list' || subCmd === 'lista') {
-                        // Comprobación dinámica de estado para comandos Opt-In
-                        const config = await getGroupConfig(remoteJid);
-                        
-                        let statusList = '';
-                        for (const cmd of OPT_IN_COMMANDS) {
-                            // SOLO mostrar si está activo en el grupo
-                            if (config.allowedCommands.includes(cmd)) {
-                                statusList += `• *${cmd}*\n`;
-                            }
-                        }
-                        
-                        if (statusList === '') statusList = '(Ninguno)\n';
-
-                        const message = `⚙️ *Configuración del Grupo*\n\n` +
-                                        `✅ *Comandos Permitidos:*\n` +
-                                        statusList;
-                        
-                        await sock.sendMessage(remoteJid, { text: message });
-                    } else {
-                        await sock.sendMessage(remoteJid, { 
-                            text: `⚙️ *Ayuda de Configuración*\n\n` +
-                                  `• *.add .comando*: Permite un comando\n` +
-                                  `• *.remove .comando*: Bloquea un comando\n` +
-                                  `• *.permit*: Ver comandos permitidos\n` +
-                                  `• *.silent*: Cerrar grupo (Solo Admins)\n` +
-                                  `• *.nosilent*: Abrir grupo (Todos)\n` +
-                                  `• *.on*: Encender respuesta del Bot\n` +
-                                  `• *.off*: Apagar respuesta del Bot`
-                        });
-                    }
-                    continue;
-                }
-
-                // 3. COMANDO DATASHEET / FICHA TÉCNICA (Serper.dev)
-                // Ejemplo: .ficha Axis P3245-V
-                if (text.toLowerCase().startsWith('.ficha') || text.toLowerCase().startsWith('.datasheet')) {
-                    
-                    // Verificación Opt-In: .ficha requiere estar permitido explícitamente (igual que .coor)
-                    const config = await getGroupConfig(remoteJid);
-                    if (!config.allowedCommands.includes('.ficha')) {
-                         // Si no está permitido, ignoramos silenciosamente
-                         continue;
-                    }
-
-                    const model = text.split(' ').slice(1).join(' ');
-                    
-                    if (!model) {
-                        await sock.sendMessage(remoteJid, { text: '⚠️ Debes escribir el modelo. Ejemplo: `.ficha DS-2CD2043G0-I`' }, { quoted: msg });
-                        continue;
-                    }
-
-                    if (!process.env.SERPER_API_KEY) {
-                        console.error('[SERPER ERROR] No API KEY configurada');
-                        await sock.sendMessage(remoteJid, { text: '❌ Error de configuración: Falta la API Key de Serper.' }, { quoted: msg });
-                        continue;
-                    }
-
-                    await sock.sendMessage(remoteJid, { text: `🔍🤖 Buscando ficha técnica para: *${model}*...` }, { quoted: msg });
-
-                    try {
-                        // Construir consulta: Modelo + filtros para PDF
-                        const query = `${model} datasheet OR ficha tecnica filetype:pdf`;
-                        
-                        const response = await axios.post('https://google.serper.dev/search', {
-                            q: query,
-                            num: 50 // Pedir más resultados (Cisco/HP tienen mucha "basura" documental)
-                            // Eliminamos gl: 'mx' y hl: 'es' para permitir resultados globales (inglés/oficiales)
-                        }, {
-                            headers: {
-                                'X-API-KEY': process.env.SERPER_API_KEY,
-                                'Content-Type': 'application/json'
-                            }
-                        });
-
-                        const organicResults = response.data.organic;
-
-                        if (organicResults && organicResults.length > 0) {
-                            // Lista de dominios oficiales de fabricantes CCTV/Redes/TI
-                            const OFFICIAL_DOMAINS = [
-                                // CCTV & Acceso
-                                'hikvision.com', 'hikvision.com.mx', 'hik-connect.com', 'ezviz.com', 'ezvizlife.com',
-                                'dahuasecurity.com', 'dahua-security.com', 'imoulife.com',
-                                'axis.com', 'avigilon.com', 'boschsecurity.com', 'bosch.com',
-                                'honeywell.com', 'samsung.com', 'hanwhavision.com', 'hanwha-security.com',
-                                'vivotek.com', 'uniview.com', 'uniview.com.cn', 'unv.com',
-                                'zkteco.com', 'zktecolatinoamerica.com', 'supremainc.com', 'suprema.co.kr',
-                                'assaabloy.com', 'rosslare.com', 'cdvi.com', 'hidglobal.com', 'hid.com',
-                                'paradox.com', 'dsc.com', 'resideo.com', 'ajax.systems', 'riscogroup.com', 'garrett.com',
-                                'zkteco.mx', 'zkteco.us',
-                                
-                                // VMS & Software de Seguridad
-                                'genetec.com', 'milestonesys.com', 'issivs.com', 'isscctv.com', 'axxonsoft.com', 'digifort.com',
-
-                                // Redes & Conectividad
-                                'ubnt.com', 'ui.com', 'cisco.com', 'meraki.com', 'arubanetworks.com', 'ruijienetworks.com', 'ruijie.com.cn',
-                                'mikrotik.com', 'cambiumnetworks.com', 'tplink.com', 'tp-link.com', 'netgear.com', 
-                                'grandstream.com', 'fanvil.com', 'juniper.net', 'fortinet.com', 'paloaltonetworks.com',
-                                'sonicwall.com', 'sophos.com', 'watchguard.com', 'huawei.com', 'zte.com.cn',
-                                
-                                // Infraestructura & Cableado
-                                'panduit.com', 'belden.com', 'commscope.com', 'siemon.com', 'legrand.com',
-                                'toten.com.cn', 'linkedpro.com', 'linkedpro.mx', // LinkedPro es marca propia de Syscom
-                                'charofil.com', 'charofil.mx',
-                                
-                                // Energía
-                                'apc.com', 'schneider-electric.com', 'tripplite.com', 'cyberpower.com', 'epcom.net', 'epcom.com.mx',
-                                
-                                // Almacenamiento & Computación (Servidores/Workstations)
-                                'kingston.com', 'adata.com', 'westerndigital.com', 'wd.com', 'seagate.com', 
-                                'toshiba.com', 'sandisk.com', 'crucial.com', 'dell.com', 'delltechnologies.com', 
-                                'lenovo.com', 'hp.com', 'hpe.com', 'intel.com', 'amd.com',
-                                
-                                // Audio/Video & Proyección
-                                'barco.com', 'epson.com', 'benq.com', 'lg.com', 'samsung.com', 'sony.com', 'christiedigital.com',
-                                'jbl.com', 'bose.com', 'shure.com', 'senheiser.com'
-                            ];
-
-                            let bestResult = null;
-                            let sourceType = 'GENERIC'; // OFFICIAL, SYSCOM, GENERIC
-
-                            // 1. Prioridad: PDF en dominio oficial
-                            // Primero filtramos todos los candidatos oficiales
-                            const officialCandidates = organicResults.filter(r => {
-                                const link = r.link.toLowerCase();
-                                const title = r.title.toLowerCase();
-                                const isPdf = link.endsWith('.pdf') || title.includes('datasheet') || title.includes('ficha');
-                                const isOfficialDomain = OFFICIAL_DOMAINS.some(d => link.includes(d));
-                                return isPdf && isOfficialDomain;
-                            });
-
-                            if (officialCandidates.length > 0) {
-                                sourceType = 'OFFICIAL';
-                                
-                                // Definir qué constituye una "Ficha Técnica Real" vs "Manual/Guía"
-                                // Esto ayuda a evitar "Installation Guide", "Quick Start Guide", "User Manual" si existe un Datasheet real.
-                                const isRealDatasheet = (r) => {
-                                    const text = (r.title + r.link).toLowerCase();
-                                    
-                                    // FILTRO NEGATIVO: Si dice "Guía", "Manual", "Install", etc., NO es un datasheet puro.
-                                    // Esto penaliza documentos como "Short Guide", "Quick Start", "Hardware Installation", "Differences".
-                                    const badWords = [
-                                        'guide', 'guia', 'manual', 'install', 'setup', 'short', 'qsg', 'hig', 'quick', 'breve', 'usuario', 'user', 'start', 'inicio', 'montaje',
-                                        'differences', 'diferencias', 'comparison', 'comparativa', 'versus', 'vs',
-                                        'flyer', 'folleto', 'brochure', 'catalog', 'catalogo', 'list', 'lista', 'eol', 'eos', 'announcement', 'notice'
-                                    ];
-                                    if (badWords.some(w => text.includes(w))) return false;
-
-                                    // FILTRO POSITIVO: Debe decir explícitamente Datasheet o Ficha Técnica
-                                    return text.includes('datasheet') || 
-                                           text.includes('data-sheet') || 
-                                           text.includes('data_sheet') || 
-                                           text.includes('spec sheet') || 
-                                           text.includes('especificaciones') ||
-                                           (text.includes('ficha') && text.includes('tecnica'));
-                                };
-
-                            // Separar candidatos en "Datasheets Puros" y "Otros (Manuales, etc)"
-                                const datasheets = officialCandidates.filter(isRealDatasheet);
-                                const others = officialCandidates.filter(r => !isRealDatasheet(r));
-
-                                // Buscar posible resultado en Syscom para comparar
-                                const syscomResult = organicResults.find(r => {
-                                    const link = r.link.toLowerCase();
-                                    const title = r.title.toLowerCase();
-                                    const isPdf = link.endsWith('.pdf') || title.includes('datasheet') || title.includes('ficha');
-                                    return isPdf && link.includes('syscom');
-                                });
-
-                                // Función para preferir español
-                                const preferSpanish = (candidates) => {
-                                    return candidates.find(r => {
-                                        const text = (r.title + r.snippet).toLowerCase();
-                                        return text.includes('ficha') || text.includes('técnica') || text.includes('tecnica') || text.includes('manual de usuario') || text.includes('spanish') || text.includes('es-es') || text.includes('es_mx');
-                                    });
-                                };
-
-                                let bestOfficial = null;
-
-                                // 1. Buscar Datasheet en Español
-                                const spanishDatasheet = preferSpanish(datasheets);
-                                
-                                if (spanishDatasheet) {
-                                    bestOfficial = spanishDatasheet;
-                                } else if (datasheets.length > 0) {
-                                    // 2. Si no hay Datasheet Español, usar Datasheet Inglés (MEJOR QUE MANUAL ESPAÑOL)
-                                    bestOfficial = datasheets[0];
-                                } 
-                                
-                                // Si encontramos un Datasheet Oficial, nos quedamos con él.
-                                if (bestOfficial) {
-                                    bestResult = bestOfficial;
-                                    sourceType = 'OFFICIAL';
-                                } else {
-                                    // NO hay Datasheet Oficial Puro (solo Manuales/Guías en 'others')
-                                    
-                                    // 3. Verificar si Syscom tiene algo antes de caer en "Manuales Oficiales"
-                                    // Esto soluciona el caso Cisco: El sitio oficial llena de Guías, pero Syscom tiene la Ficha.
-                                    if (syscomResult) {
-                                        bestResult = syscomResult;
-                                        sourceType = 'SYSCOM';
-                                    } else {
-                                        // 4. Si no hay Syscom, entonces sí usamos los Manuales/Guías Oficiales
-                                        const spanishOther = preferSpanish(others);
-                                        if (spanishOther) {
-                                            bestOfficial = spanishOther;
-                                        } else {
-                                            bestOfficial = others[0];
-                                        }
-                                        bestResult = bestOfficial || officialCandidates[0];
-                                        sourceType = 'OFFICIAL';
-                                    }
-                                }
-
-                            } else {
-                                // 2. Prioridad: PDF en Syscom (Distribuidor) - Si no hubo NINGÚN resultado oficial
-                                const syscomResult = organicResults.find(r => {
-                                    const link = r.link.toLowerCase();
-                                    const title = r.title.toLowerCase();
-                                    const isPdf = link.endsWith('.pdf') || title.includes('datasheet') || title.includes('ficha');
-                                    return isPdf && link.includes('syscom');
-                                });
-
-                                if (syscomResult) {
-                                    bestResult = syscomResult;
-                                    sourceType = 'SYSCOM';
-                                } else {
-                                    // 3. Prioridad: Cualquier PDF (Externo)
-                                    bestResult = organicResults.find(r => r.link.toLowerCase().endsWith('.pdf'));
-                                }
-                            }
-
-                            // 4. Fallback: El primer resultado orgánico (aunque no sea PDF, si no hay nada más)
-                            if (!bestResult) {
-                                bestResult = organicResults[0];
-                            }
-                            
-                            const title = bestResult.title || 'Ficha Técnica';
-                            const link = bestResult.link;
-                            const snippet = bestResult.snippet || 'Documento encontrado.';
-                            
-                            let sourceTag = '⚠️ *Fuente Externa*';
-                            if (sourceType === 'OFFICIAL') sourceTag = '✅ *Fuente Oficial*';
-                            if (sourceType === 'SYSCOM') sourceTag = '🛒 *Distribuidor (Syscom)*';
-
-                            console.log(`[SERPER] Resultado seleccionado (${sourceType}): ${title} -> ${link}`);
-
-                            const caption = `📄 *Ficha Técnica Encontrada*\n\n📌 *Modelo:* ${model}\n${sourceTag}\n📝 *Título:* ${title}\n🔗 *Link:* ${link}\n\n> ${snippet}`;
-
-                            // Intentar enviar el PDF directamente
-                            try {
-                                await sock.sendMessage(remoteJid, { 
-                                    document: { url: link }, 
-                                    mimetype: 'application/pdf', 
-                                    fileName: `${model.replace(/\s+/g, '_')}_Datasheet.pdf`,
-                                    caption: caption
-                                }, { quoted: msg });
-                                await sock.sendMessage(remoteJid, { react: { text: '🤖', key: msg.key } });
-                            } catch (sendError) {
-                                console.error('[BAILEYS FILE ERROR]', sendError.message);
-                                // Fallback: Enviar solo texto con el link si falla la descarga/envío
-                                await sock.sendMessage(remoteJid, { 
-                                    text: `⚠️ No pude enviar el archivo directamente (posiblemente muy pesado o protegido), pero aquí tienes el enlace:\n\n${caption}` 
-                                }, { quoted: msg });
-                                await sock.sendMessage(remoteJid, { react: { text: '🤖', key: msg.key } });
-                            }
-
-                        } else {
-                            await sock.sendMessage(remoteJid, { text: `❌ No encontré ninguna ficha técnica para "${model}". Intenta ser más específico.` }, { quoted: msg });
-                        }
-
-                    } catch (error) {
-                        console.error('[SERPER API ERROR]', error?.response?.data || error.message);
-                        await sock.sendMessage(remoteJid, { text: '❌ Error al buscar en internet. Intenta más tarde.' }, { quoted: msg });
-                    }
-                    continue;
-                }
-
-                // 3.5 COMANDO CUMPLIMIENTO TÉCNICO (Gemini AI)
-                // Ejemplo: .cumplimiento Especificaciones...
-                if (text.toLowerCase().startsWith('.cumplimiento')) {
-                    
-                    // Verificación Opt-In
-                    const config = await getGroupConfig(remoteJid);
-                    if (!config.allowedCommands.includes('.cumplimiento')) {
-                         continue;
-                    }
-
-                    // Extraer especificaciones (todo lo que sigue al comando)
-                    // Usamos replace con regex para ser insensible a mayúsculas/minúsculas en el comando
-                    const specs = text.replace(/^\.cumplimiento\s*/i, '').trim();
-                    
-                    if (!specs) {
-                        await sock.sendMessage(remoteJid, { text: '⚠️ Debes escribir las especificaciones después del comando. Ejemplo: `.cumplimiento Cámara IP 4MP con WDR...`' }, { quoted: msg });
-                        continue;
-                    }
-
-                    if (!GEMINI_API_KEY) {
-                        console.error('[CONFIG ERROR] Falta GEMINI_API_KEY');
-                        await sock.sendMessage(remoteJid, { text: '❌ Error de configuración: El bot no tiene la API Key de Gemini configurada.' }, { quoted: msg });
-                        continue;
-                    }
-
-                    try {
-                        // 1. Estado de espera
-                        await sock.sendMessage(remoteJid, { text: '⏳ Analizando especificaciones técnicas y verificando cumplimiento estricto...' }, { quoted: msg });
-                        await sock.sendPresenceUpdate('composing', remoteJid);
-
-                        // 2. Configurar Gemini
-                        const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-                        
-                        // Lista de modelos a probar en orden de preferencia (Actualizado a Gemini 2.5)
-                        const MODEL_CANDIDATES = [
-                            "gemini-2.5-pro",
-                            "gemini-2.5-flash"
-                        ];
-
-                        const prompt = `
-                        Actúa como un Auditor Técnico e Ingeniero Preventa Experto de nivel Senior. Tu tarea es analizar las especificaciones técnicas proporcionadas y encontrar equipos reales del mercado que cumplan AL 100% con TODOS los requisitos.
-                        
-                        METODOLOGÍA DE ANÁLISIS (OBLIGATORIA):
-                        Desglosa internamente el texto del usuario en una lista de verificación (checklist) rigurosa (ej. resolución, luxes, certificaciones, voltajes, temperaturas).
-                        Cruza esa lista con tu base de conocimientos técnicos.
-                        Si un equipo cumple con 9 de 10 requisitos, automáticamente se considera ❌ NO CUMPLE.
-                        
-                        REGLA DE CERO ALUCINACIONES: Si en tu memoria técnica no tienes la certeza absoluta de que un modelo específico posee una característica puntual (por ejemplo, dudas si tiene protección IK10 o si soporta OSPF), asume obligatoriamente que NO LO TIENE y márcalo con ❌. No asumas ni inventes especificaciones para forzar un resultado positivo.
-                        
-                        PRIORIDAD DE MARCAS COMERCIALES: Busca PRIMERO equipos viables en catálogos de distribución mayorista (ej. Syscom) de las siguientes marcas líderes: Cisco, Ubiquiti, Mikrotik, Aruba, Fortinet, Hikvision, Dahua, Epcom, Linkedpro, Axis, Hanwha, APC, Tripp Lite, Panduit, Belden, ZKTeco, Honeywell, Bosch, Grandstream, Huawei y TP-Link. Recomienda otras marcas comerciales reconocidas solo si las anteriores fallan. Evita marcas genéricas.
-                        
-                        FORMATO DE SALIDA ESTRICTO:
-                        Omite saludos, introducciones o texto de relleno. Devuelve ÚNICAMENTE la evaluación estructurada en formato de lista para que sea fácil de leer en WhatsApp (máximo 5 opciones relevantes).
-
-                        REGLA MATEMÁTICA ESTRICTA Y EXTRACCIÓN DE REQUISITOS:
-                        Debes calcular el porcentaje basándote en la cantidad total de requisitos solicitados. Para contarlos, usa esta lógica:
-
-                        Si el usuario envía una lista (viñetas, guiones o saltos de línea claros), cada viñeta cuenta como UN (1) requisito, sin importar cuántas sub-características tenga dentro.
-                        Ejemplo: Si el usuario envía 10 viñetas, el total es 10. Si un equipo cumple 8 de esas viñetas, el porcentaje es 80% (8 de 10).'
-
-                        Si el usuario envía un bloque de texto continuo (un párrafo sin formato), debes actuar como un analizador sintáctico: separa lógicamente los requisitos guiándote por las comas (,) y los puntos (.). Cada característica técnica separada por puntuación cuenta como UN (1) requisito individual.
-                        Ejemplo: Si extraes 8 requisitos de un párrafo y el equipo cumple 6, el porcentaje exacto es 75% (6 de 8).
-
-                        Usa EXACTAMENTE esta estructura visual:
-
-                        Si cumple con todo:
-                        ✅ [Marca] [Modelo]
-                        📊 Cumplimiento: 100%
-
-                        Si le falta algo:
-                        ❌ [Marca] [Modelo]
-                        📊 Cumplimiento: [Escribe el porcentaje exacto, ej. 85%] ([X] de [Y] requisitos cumplidos)
-                        ⚠️ No cumple con:
-                        - [Requisito faltante 1 detallado]
-                        - [Requisito faltante 2 detallado]
-                        
-                        (REGLA VISUAL OBLIGATORIA: En la sección "No cumple con", CADA línea debe empezar estrictamente con un guion medio y un espacio "- " para que el formato de lista funcione. No uses solo saltos de línea).
-
-                        Especificaciones a analizar:
-                        "${specs}"
-                        `;
-
-                        // 3. Generar respuesta con Lógica de Fallback Inteligente (Auto-Discovery)
-                        let textResponse = '';
-                        let success = false;
-                        let lastError = null;
-
-                        // Iterar sobre candidatos hasta encontrar uno que funcione
-                        for (const modelName of MODEL_CANDIDATES) {
-                            try {
-                                const model = genAI.getGenerativeModel({ model: modelName, generationConfig: { temperature: 0 } });
-                                const result = await model.generateContent(prompt);
-                                const response = await result.response;
-                                textResponse = response.text();
-                                success = true;
-                                console.log(`[GEMINI SUCCESS] Modelo usado exitosamente: ${modelName}`);
-                                break; // Salir del bucle si funciona
-                            } catch (error) {
-                                console.warn(`[GEMINI RETRY] Falló modelo ${modelName}:`, error.message.split('\n')[0]); // Log breve
-                                lastError = error;
-                                // Continuar con el siguiente modelo
-                            }
-                        }
-
-                        if (!success) {
-                            console.error('[GEMINI FATAL ERROR] Todos los modelos fallaron.', lastError);
-                            throw lastError; // Re-lanzar el último error para que el catch exterior lo maneje
-                        }
-
-                        // 4. Enviar resultado
-                        await sock.sendMessage(remoteJid, { text: textResponse.trim() }, { quoted: msg });
-                        // Reaccionar al mensaje original indicando éxito
-                        await sock.sendMessage(remoteJid, { react: { text: '🤖', key: msg.key } });
-
-                    } catch (error) {
-                        console.error('[GEMINI API ERROR]', error);
-                        await sock.sendMessage(remoteJid, { text: '❌ Ocurrió un error al analizar las especificaciones. Intenta más tarde.' }, { quoted: msg });
-                    }
-                    continue;
-                }
-
-                // Si el chat está cerrado, ignorar mensajes (excepto los comandos de admin arriba)
-                if (isChatClosed) {
-                    continue;
-                }
-
-                // Anti-Bucle (Ignorar respuestas propias citadas o forwards del bot)
-                if (text.includes('SOLICITUD ACEPTADA') || text.includes('🤖M5-Bot')) continue;
-
-                console.log(`[INCOMING] Procesando msg de ${remoteJid}: ${text.substring(0, 30)}...`);
-
-                // Comandos Simples
-                if (text === '.ping') {
-                    const sender = msg.key.participant || msg.key.remoteJid;
-                    const senderNumber = sender.replace(/\D/g, '');
-                    if (ADMIN_NUMBERS.includes(senderNumber)) {
-                        await sock.sendMessage(remoteJid, { text: 'pong!' }, { quoted: msg });
-                    }
-                    continue;
-                }
-
-
-                // 4. COORDENADAS (.coor) y Búsqueda Implícita
-                // Busca IDs (MC12345 o 12345) en el mensaje.
-                
-                // 4. COORDENADAS (.coor) y Búsqueda Implícita
-                // Busca IDs (MC12345 o 12345) en el mensaje.
-                
-                const config = await getGroupConfig(remoteJid);
-                const isCoorEnabled = config.allowedCommands.includes('.coor');
-
-                if (isCoorEnabled) {
-                    // Regex mejorado: 
-                    // 1. (?<!\.) Evita coincidir con decimales de coordenadas (ej: 19.12345)
-                    // 2. \b Límite de palabra
-                    // 3. (?:[A-Z]+[:\s]*)? Soporta CUALQUIER prefijo de letras mayúsculas (MC, MMC, MCMC, ID, etc)
-                    // 4. (\d{5}) Captura exactamente 5 dígitos
-                    const coordMatches = [...text.matchAll(/(?<!\.)\b(?:[A-Z]+[:\s]*)?(\d{5})\b/gi)];
-
-                    // --- DETECCIÓN DE FORMATO INCORRECTO ---
-                    // Solo si NO hay matches válidos, buscamos intentos fallidos (MC + num incorrecto)
-                    // para avisar al usuario. NO avisamos por números sueltos (evita falsos positivos en chat normal)
-                    if (coordMatches.length === 0) {
-                        const invalidMatches = [...text.matchAll(/\b(?:M{1,2}C[:\s]*|ID[:\s]*)(\d{1,4}|\d{6,})\b/gi)];
-                        if (invalidMatches.length > 0) {
-                             const badId = invalidMatches[0][1];
-                             await sock.sendMessage(remoteJid, { 
-                                 react: { text: "❌", key: msg.key } 
-                             });
-                             await sock.sendMessage(remoteJid, { text: `⚠️ *Formato Incorrecto*\n\nDetecté un intento de ID (${badId}) pero no tiene 5 dígitos.\nPor favor verifica el número.` }, { quoted: msg });
-                             continue;
-                        }
-                    }
-
-                    if (coordMatches.length > 0) {
-                        // Solo procesar si es explícitamente .coor O si es texto normal (búsqueda implícita)
-                        if (cmdBase === '.coor' || !text.startsWith('.')) {
-                            
-                            const uniqueIDs = new Set();
-                            const validMatches = [];
-
-                            for (const match of coordMatches) {
-                                const idNumbers = match[1];
-                                if (!uniqueIDs.has(idNumbers)) {
-                                    uniqueIDs.add(idNumbers);
-                                    validMatches.push(idNumbers);
-                                }
-                            }
-
-                            if (validMatches.length > 0) {
-                                console.log(`[MATCH] ${validMatches.length} IDs únicos encontrados (Permiso: OK)`);
-                                for (const idNumbers of validMatches) {
-                                    const idToFind = `MC${idNumbers}`;
-                                    ackQueue.push({ msg, remoteJid, idToFind });
-                                }
-                                runAckQueue(sock);
-                            }
-                            continue;
-                        }
-                    } else if (cmdBase === '.coor') {
-                        // Habilitado, comando correcto, pero sin IDs válidos
-                        await sock.sendMessage(remoteJid, { text: '⚠️ Formato incorrecto. Debes incluir el ID de 5 dígitos (ej: 12345).' }, { quoted: msg });
-                        continue;
-                    }
-                }
-                // Si no está habilitado, simplemente ignoramos (tanto comando como búsqueda implícita)
-
-            } catch (err) {
-                console.error('[INCOMING ERROR]', err);
-            }
-        }
-    } finally {
-        isProcessingIncoming = false;
-        // Doble check por si entraron mensajes mientras procesábamos
-        if (incomingQueue.length > 0) processIncomingQueue(sock);
+        const stream = await downloadContentFromMessage(imageMessage, 'image');
+        const imageBuffer = await streamToBuffer(stream);
+        await sock.sendMessage(remoteJid, { sticker: imageBuffer }, { quoted: msg });
+    } catch (error) {
+        await sock.sendMessage(remoteJid, { text: 'No pude convertir esa imagen a sticker.' }, { quoted: msg });
     }
 }
 
-// 2. Procesador de ACK (Envío inicial)
-async function runAckQueue(sock) {
-    if (isProcessingAck || ackQueue.length === 0) return;
-    isProcessingAck = true;
-
-    try {
-        while (ackQueue.length > 0) {
-            const { msg, remoteJid, idToFind } = ackQueue.shift();
-            
+async function applyWarning(sock, targetJid, groupJid, reason) {
+    const record = await upsertModRecord(targetJid, {
+        $inc: { advertencias: 1 },
+        $push: { motivos: sanitizeText(reason, 500) }
+    });
+    const warningCount = record.advertencias;
+    let kicked = false;
+    if (warningCount >= 3) {
+        await upsertModRecord(targetJid, { $set: { isBanned: true } });
+        if (groupJid) {
             try {
-                // Simular Escribiendo
-                await sock.sendPresenceUpdate('composing', remoteJid);
-                
-                // Generar texto
-                const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-                const date = new Date();
-                const formattedDate = `${date.getDate()} de ${months[date.getMonth()]}`;
-                const acceptanceText = `🤖 \`\`\`SOLICITUD ACEPTADA\`\`\` 🤖\n\n> Buscando 🔎\n> 🤖M5-Bot | ${formattedDate}`;
-
-                // ENVIAR
-                let sentMsg;
-                try {
-                    sentMsg = await sock.sendMessage(remoteJid, { text: acceptanceText }, { quoted: msg });
-                } catch (sendError) {
-                    console.error(`[ACK-RETRY] Error enviando a ${idToFind}, reintentando...`);
-                    await delay(1000);
-                    sentMsg = await sock.sendMessage(remoteJid, { text: acceptanceText }, { quoted: msg });
-                }
-
-                if (sentMsg) {
-                    processingQueue.push({ sentMsg, userMsg: msg, remoteJid, idToFind });
-                    runProcessor(sock); // Disparar cola de edición
-                }
-
-                // Delay entre ACKs para no saturar
-                await delay(800); 
-
-            } catch (err) {
-                console.error(`[ACK ERROR] ID ${idToFind}:`, err);
+                await sock.groupParticipantsUpdate(groupJid, [targetJid], 'remove');
+                kicked = true;
+            } catch (error) {
+                kicked = false;
             }
         }
-    } finally {
-        isProcessingAck = false;
-        if (ackQueue.length > 0) runAckQueue(sock);
     }
+    return { warningCount, kicked };
 }
 
-// 3. Procesador de EDICIÓN (Búsqueda y Resultado)
-async function runProcessor(sock) {
-    if (isProcessingQueue || processingQueue.length === 0) return;
-    isProcessingQueue = true;
+async function handleGhostsCommand(sock, msg, text, remoteJid) {
+    if (!remoteJid.endsWith('@g.us')) {
+        await sock.sendMessage(remoteJid, { text: 'El comando .fantasmas solo funciona en grupos.' }, { quoted: msg });
+        return;
+    }
+    const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
+    if (!isAuthorized) {
+        await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
+        return;
+    }
+    if (!isMongoReady) {
+        await sock.sendMessage(remoteJid, { text: 'Moderación no disponible: MongoDB no está conectado.' }, { quoted: msg });
+        return;
+    }
 
-    try {
-        while (processingQueue.length > 0) {
-            const { sentMsg, userMsg, remoteJid, idToFind } = processingQueue.shift();
+    const argDays = Number(sanitizeText(text).split(/\s+/)[1] || '15');
+    const days = Number.isFinite(argDays) && argDays > 0 ? Math.floor(argDays) : 15;
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const metadata = await sock.groupMetadata(remoteJid);
+    const participants = metadata.participants || [];
+    const participantIds = participants.map((p) => p.id);
+    const records = await ModRecordModel.find(
+        { userId: { $in: participantIds } },
+        { userId: 1, ultimaActividad: 1 }
+    ).lean();
 
-            console.log(`[PROCESSOR] Editando ID: ${idToFind}. Pendientes: ${processingQueue.length}`);
-
-            try {
-                // Delay 5s (Efecto búsqueda)
-                await delay(5000);
-
-                // Buscar en Caché
-                const found = cachedCoordenadas.find(item => item.ID === idToFind);
-                
-                const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-                const date = new Date();
-                const formattedDate = `${date.getDate()} de ${months[date.getMonth()]}`;
-
-                if (found) {
-                    const lat = found.Latitud || found.lat || 'No definida';
-                    const long = found.Longitud || found.long || 'No definida';
-                    
-                    const finalText = `🆔: ${idToFind}\n${lat} ${long}`;
-
-                    await sock.sendMessage(remoteJid, { text: finalText, edit: sentMsg.key });
-                    await sock.sendMessage(remoteJid, { react: { text: '🤖', key: userMsg.key } });
-                    
-                } else {
-                    const notFoundText = `❌ No se encontraron coordenadas para el ID: ${idToFind}\n\n> 🤖M5-Bot | ${formattedDate}`;
-                    await sock.sendMessage(remoteJid, { text: notFoundText, edit: sentMsg.key });
-                    await sock.sendMessage(remoteJid, { react: { text: '😪', key: userMsg.key } });
-                }
-
-                // Pausa breve
-                await delay(500);
-
-            } catch (err) {
-                console.error(`[PROCESSOR ERROR] ${idToFind}:`, err);
-            }
+    const recordsByUser = new Map(records.map((item) => [item.userId, item]));
+    const inactive = [];
+    for (const participant of participants) {
+        const isAdmin = participant.admin === 'admin' || participant.admin === 'superadmin';
+        if (isAdmin) {
+            continue;
         }
-    } finally {
-        isProcessingQueue = false;
-        if (processingQueue.length > 0) runProcessor(sock);
+        const rec = recordsByUser.get(participant.id);
+        if (!rec?.ultimaActividad || new Date(rec.ultimaActividad) < cutoff) {
+            const number = getNumberFromJid(participant.id);
+            const name = sanitizeText(participant.notify || participant.name || participant.id, 120);
+            const lastActivityText = rec?.ultimaActividad
+                ? new Date(rec.ultimaActividad).toISOString().slice(0, 10)
+                : 'sin registro';
+            inactive.push(`• ${name} (@${number}) - última actividad: ${lastActivityText}`);
+        }
     }
+
+    const senderJid = msg.key.participant || msg.key.remoteJid;
+    const summary = inactive.length > 0
+        ? inactive.join('\n')
+        : 'No se detectaron usuarios inactivos en ese rango.';
+    const privateText = `👻 Reporte de fantasmas\nGrupo: ${metadata.subject}\nRango: ${days} días\nTotal inactivos: ${inactive.length}\n\n${summary}`;
+    await sock.sendMessage(senderJid, { text: privateText });
+    await sock.sendMessage(remoteJid, { text: '✅ Lista de inactivos enviada por privado al administrador.' }, { quoted: msg });
 }
 
-
-// --- RUTAS WEB ---
 app.get('/', (req, res) => {
     if (qrCodeData) {
         res.send(`
             <html>
                 <head>
-                    <title>Bot Baileys - QR</title>
+                    <title>Bot WhatsApp - QR</title>
                     <meta http-equiv="refresh" content="5">
                     <style>body{font-family:sans-serif;text-align:center;padding:50px;}</style>
                 </head>
                 <body>
-                    <h1>🤖 Bot WhatsApp (Baileys Light)</h1>
+                    <h1>🤖 Escanea el QR</h1>
                     <img src="https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qrCodeData)}" />
-                    <p>Escanea rápido. Se actualiza cada 5s.</p>
                 </body>
             </html>
         `);
-    } else {
-        res.send(`
-            <html>
-                <head><title>Bot Activo</title></head>
-                <body style="font-family:sans-serif;text-align:center;padding:50px;">
-                    <h1>✅ Bot Conectado y Listo</h1>
-                    <p>Memoria JSON: ${cachedCoordenadas.length} registros cargados.</p>
-                    <p>Uso de RAM: ${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)} MB</p>
-                    <p>Si no responde, revisa los logs en Render.</p>
-                </body>
-            </html>
-        `);
+        return;
     }
-});
 
-// SELF-PING PARA MANTENER ACTIVO (Render Free Tier)
-// Render Free se duerme tras 15 min de inactividad. Esto ayuda a mantenerlo despierto un poco más.
-setInterval(() => {
-    const renderUrl = process.env.RENDER_EXTERNAL_URL;
-    if (renderUrl) {
-        console.log(`[KEEP-ALIVE] Ping a ${renderUrl}`);
-        fetch(renderUrl).catch(() => {});
-    }
-}, 10 * 60 * 1000); // Cada 10 minutos
+    res.send(`
+        <html>
+            <head><title>Bot Activo</title></head>
+            <body style="font-family:sans-serif;text-align:center;padding:50px;">
+                <h1>✅ Bot conectado</h1>
+            </body>
+        </html>
+    `);
+});
 
 app.listen(PORT, () => console.log(`Servidor iniciado en puerto ${PORT}`));
 
-// --- LÓGICA DE CACHÉ JSON (Igual que antes) ---
-async function loadCoordenadas() {
-    console.log('[SISTEMA] Cargando JSON de coordenadas...');
-    try {
-        const response = await fetch('https://raw.githubusercontent.com/lazerboy404/buscador-totems/main/coordenadas-script.json');
-        if (!response.ok) throw new Error(response.statusText);
-        const data = await response.json();
-        cachedCoordenadas = data;
-        console.log(`[SISTEMA] ✅ ${data.length} coordenadas en memoria.`);
-    } catch (e) {
-        console.error('[SISTEMA] Error cargando JSON:', e);
-        setTimeout(loadCoordenadas, 60000);
-    }
-}
-loadCoordenadas();
-
-// --- LÓGICA DEL BOT (Baileys) ---
 async function startBot() {
-    // Auth State: Elegir entre Mongo o Archivos
-    let state, saveCreds;
-
-    if (MONGO_URL) {
-        console.log('Intentando conectar a MongoDB...');
-        
-        try {
-            // AWAIT CRÍTICO: Esperamos a que la conexión esté lista ANTES de seguir
-            if (mongoose.connection.readyState === 0) {
-                await connectToMongo();
-            }
-            
-            const auth = await useMongoAuthState();
-            state = auth.state;
-            saveCreds = auth.saveCreds;
-            
-        } catch (mongoError) {
-            console.error('FALLO FATAL EN MONGO, USANDO ARCHIVOS LOCALES (Volátil en Render):', mongoError);
-            const auth = await useMultiFileAuthState('auth_info_baileys');
-            state = auth.state;
-            saveCreds = auth.saveCreds;
-        }
-
-    } else {
-        console.log('Using FileSystem Auth Strategy...');
-        const auth = await useMultiFileAuthState('auth_info_baileys');
-        state = auth.state;
-        saveCreds = auth.saveCreds;
+    try {
+        await ensureMongo();
+    } catch (error) {
+        console.error('No se pudo conectar MongoDB al iniciar:', error?.message || error);
     }
 
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     const { version } = await fetchLatestBaileysVersion();
-    console.log(`Usando Baileys v${version.join('.')}`);
 
     const sock = makeWASocket({
         version,
-        logger: pino({ level: 'info' }), // Habilitamos logs INFO para depurar
-        printQRInTerminal: true, // QR en consola
-        auth: {
-            creds: state.creds,
-            // CLAVE: makeCacheableSignalKeyStore evita el error "No sessions" en grupos
-            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
-        },
-        generateHighQualityLinkPreview: true,
-        // Usamos la configuración de navegador recomendada para Ubuntu/Linux (Render)
-        browser: Browsers.ubuntu('Chrome'), 
-        syncFullHistory: false, // Ahorra memoria al no sincronizar todo el historial antiguo
-        markOnlineOnConnect: true, // Marcar online al conectar
-        defaultQueryTimeoutMs: 120000, // Aumentar timeout a 120s para conexiones lentas
-        keepAliveIntervalMs: 30000, // Ping cada 30s para mantener conexión viva
-        retryRequestDelayMs: 5000, // Esperar 5s antes de reintentar peticiones fallidas
+        logger: pino({ level: 'info' }),
+        printQRInTerminal: true,
+        auth: state,
+        browser: Browsers.ubuntu('Chrome')
     });
 
-    // Eventos de Conexión
+    sock.ev.on('creds.update', saveCreds);
+
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-
         if (qr) {
             qrCodeData = qr;
-            console.log('NUEVO QR GENERADO');
+        }
+
+        if (connection === 'open') {
+            qrCodeData = null;
+            console.log('✅ BOT CONECTADO A WHATSAPP');
         }
 
         if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-            
-            // Loguear el error exacto
-            const errorCode = (lastDisconnect.error)?.output?.statusCode;
-            const errorReason = (lastDisconnect.error)?.output?.payload?.error || (lastDisconnect.error)?.message;
-            console.error(`Conexión cerrada. Código: ${errorCode}, Razón: ${errorReason}`);
-            console.log('¿Debería reconectar?:', shouldReconnect);
-
+            const code = lastDisconnect?.error?.output?.statusCode;
+            const shouldReconnect = code !== DisconnectReason.loggedOut;
             if (shouldReconnect) {
-                // Si es un error 515 (Stream Error), a veces es mejor esperar un poco
-                if (errorCode === 515) {
-                    console.log('Error de Stream (515). Esperando 5s antes de reintentar...');
-                    setTimeout(startBot, 5000);
-                } else {
-                    startBot();
-                }
+                startBot();
             } else {
-                console.log('Sesión cerrada permanentemente (Logged Out). Borra la carpeta auth_info_baileys y reinicia.');
-                // Opcional: Borrar carpeta automáticamente
-                fs.rmSync('auth_info_baileys', { recursive: true, force: true });
-                startBot(); // Reiniciar para generar nuevo QR
+                console.log('Sesión cerrada. Elimina auth_info_baileys y vuelve a iniciar para escanear de nuevo.');
             }
-        } else if (connection === 'open') {
-            console.log('✅ BOT CONECTADO A WHATSAPP');
-            qrCodeData = null;
-            
-            // --- KICKSTART DE COLAS (IMPORTANTE) ---
-            // Si el bot se reconecta, asegúrate de procesar cualquier mensaje pendiente
-            console.log('[SISTEMA] Reiniciando procesadores de cola tras conexión...');
-            processIncomingQueue(sock);
-            if (ackQueue.length > 0) runAckQueue(sock);
-            if (processingQueue.length > 0) runProcessor(sock);
         }
     });
 
-    // --- LÓGICA DE ANTI-SLEEP & KEEP-ALIVE EXTRA ---
-    // Detecta si la PC se suspendió o si el proceso se congeló
-    // NOTA: Se ha aumentado el umbral de 15s a 60s para evitar falsos positivos en Render (CPU throttling)
-    let lastTime = Date.now();
-    const antiSleepInterval = setInterval(() => {
-        const currentTime = Date.now();
-        const diff = currentTime - lastTime;
-        lastTime = currentTime;
-
-        // Si la diferencia es mayor a 60s (el intervalo es 5s), hubo suspensión severa
-        if (diff > 60000) {
-            console.log(`[SISTEMA] ⚠️ Detectada suspensión/lag del sistema por ${(diff/1000).toFixed(1)}s.`);
-            
-            // Si estamos conectados, forzamos reconexión para refrescar el socket
-            if (sock?.ws?.isOpen) {
-                console.log('[SISTEMA] Forzando reconexión preventiva para evitar socket muerto...');
-                sock.end(new Error('System Suspended - Force Reconnect'));
-                clearInterval(antiSleepInterval); // Limpiamos este intervalo (startBot creará uno nuevo)
-            }
+    sock.ev.on('group-participants.update', async (event) => {
+        if (event.action !== 'add') {
+            return;
         }
-    }, 5000);
 
-    // Keep-Alive de Aplicación (Presence Update)
-    // Envía una señal de "disponible" cada 10 min para mantener la sesión activa en los servidores de WA
-    const presenceInterval = setInterval(async () => {
-        if (sock?.ws?.isOpen) {
+        for (const participantJid of event.participants) {
             try {
-                await sock.sendPresenceUpdate('available');
-                console.log('[KEEP-ALIVE] Presencia actualizada (available)');
-            } catch (e) {
-                console.error('[KEEP-ALIVE] Error actualizando presencia:', e);
+                if (isMongoReady) {
+                    const record = await getModRecord(participantJid);
+                    if (record?.isBanned) {
+                        await upsertModRecord(participantJid, { $inc: { intentosReingreso: 1 } });
+                        try {
+                            await sock.groupParticipantsUpdate(event.id, [participantJid], 'remove');
+                        } catch (error) {
+                            await sendPrivateAdminMessage(sock, `🚨 ALERTA: El usuario baneado ${participantJid} intentó entrar al grupo ${event.id}, pero no pude expulsarlo automáticamente. Usa .unban ${participantJid} si deseas perdonarlo.`);
+                            continue;
+                        }
+                        await sendPrivateAdminMessage(sock, `🚨 ALERTA: El usuario baneado ${participantJid} intentó entrar al grupo ${event.id}. Fue expulsado automáticamente. Usa .unban ${participantJid} si deseas perdonarlo.`);
+                        continue;
+                    }
+                }
+                await sendWelcome(sock, event.id, participantJid);
+            } catch (error) {
+                console.error('Error procesando ingreso al grupo:', error?.message || error);
             }
         }
-    }, 10 * 60 * 1000);
+    });
 
-
-    // Guardar credenciales
-    sock.ev.on('creds.update', saveCreds);
-
-    // Manejo de Mensajes (UPSERT - Entrada Cruda)
-    sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        // Log detallado de entrada
-        console.log(`[UPSERT] Recibido evento. Tipo: ${type}. Cantidad: ${messages.length}`);
-
+    sock.ev.on('messages.upsert', async ({ messages }) => {
         for (const msg of messages) {
-            // Deduplicación Crítica
-            if (processedMessageIds.has(msg.key.id)) {
-                console.log(`[DUPLICADO] ID ${msg.key.id} ya procesado. Ignorando.`);
-                continue;
+            try {
+                if (!msg.message || msg.key.fromMe) {
+                    continue;
+                }
+                const remoteJid = msg.key.remoteJid;
+                if (!remoteJid) {
+                    continue;
+                }
+                const senderJid = msg.key.participant || msg.key.remoteJid;
+
+                const text = extractTextFromMessage(msg.message);
+                let senderIsAdmin = false;
+                if (remoteJid.endsWith('@g.us')) {
+                    senderIsAdmin = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
+                }
+
+                if (!senderIsAdmin) {
+                    touchLastActivityAsync(senderJid);
+                }
+
+                if (remoteJid.endsWith('@g.us') && text && hasGroupInviteLink(text) && !senderIsAdmin) {
+                    try {
+                        await sock.sendMessage(remoteJid, { delete: msg.key });
+                    } catch (error) {
+                    }
+                    if (isMongoReady) {
+                        const autoWarnResult = await applyWarning(sock, senderJid, remoteJid, 'Invitación de grupo detectada automáticamente');
+                        const mention = `@${getNumberFromJid(senderJid)}`;
+                        const warningText = autoWarnResult.warningCount < 3
+                            ? `🚫 ${mention}, las invitaciones a otros grupos están prohibidas. Has sido advertido automáticamente.`
+                            : `🚫 ${mention}, las invitaciones a otros grupos están prohibidas. Alcanzaste 3/3 advertencias.`;
+                        await sock.sendMessage(remoteJid, { text: warningText, mentions: [senderJid] });
+                    } else {
+                        await sock.sendMessage(remoteJid, { text: '🚫 Las invitaciones a otros grupos están prohibidas.' });
+                    }
+                    continue;
+                }
+
+                if (!text || !text.trim().startsWith('.')) {
+                    continue;
+                }
+
+                const command = text.trim().split(/\s+/)[0].toLowerCase();
+                if (command === '.reporte') {
+                    await handleReportCommand(sock, msg, text, remoteJid);
+                } else if (command === '.advertir') {
+                    await handleWarnCommand(sock, msg, text, remoteJid);
+                } else if (command === '.unban') {
+                    await handleUnbanCommand(sock, msg, text, remoteJid);
+                } else if (command === '.sticker') {
+                    await handleStickerCommand(sock, msg, remoteJid);
+                } else if (command === '.fantasmas') {
+                    await handleGhostsCommand(sock, msg, text, remoteJid);
+                }
+            } catch (error) {
+                console.error('Error en procesamiento de comando:', error?.message || error);
             }
-            
-            // Añadir a procesados
-            processedMessageIds.add(msg.key.id);
-
-            // Push a Cola de Entrada
-            incomingQueue.push(msg);
         }
-
-        // --- LÓGICA DE DEBOUNCE / BUFFER ---
-        // Si hay un temporizador corriendo, lo limpiamos (reiniciamos la cuenta atrás)
-        // Esto permite "agrupar" ráfagas. Si siguen llegando mensajes, seguimos esperando.
-        if (incomingBufferTimeout) {
-            clearTimeout(incomingBufferTimeout);
-        }
-
-        // Establecemos un nuevo temporizador. 
-        // Solo procesaremos la cola si dejan de llegar mensajes por 1000ms (1 segundo).
-        // Opcional: Podríamos poner un límite máximo de espera si quisiéramos.
-        console.log(`[BUFFER] Esperando 1.5s para estabilizar ráfaga... (Cola: ${incomingQueue.length})`);
-        
-        incomingBufferTimeout = setTimeout(() => {
-            console.log('[BUFFER] Tiempo de espera finalizado. Procesando lote acumulado.');
-            processIncomingQueue(sock);
-            incomingBufferTimeout = null;
-        }, 1500); // 1.5 segundos de espera tras el último mensaje
     });
 }
 
-startBot().catch(err => console.error('Error al iniciar bot:', err));
+startBot().catch((error) => {
+    console.error('Error al iniciar bot:', error);
+});
