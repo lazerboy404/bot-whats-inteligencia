@@ -24,6 +24,23 @@ const KEEP_ALIVE_INTERVAL_MS = Number(process.env.KEEP_ALIVE_INTERVAL_MS || (10 
 const lastSentAtByJid = new Map();
 let globalSendQueue = Promise.resolve();
 const closeTimersByGroup = new Map();
+const CASTOR_EMOJI = '🦫';
+const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/github/explore/main/topics/mongodb/mongodb.png';
+const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
+const CASTOR_VALID_COMMANDS = new Set(['.reporte', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir']);
+const FLAG_BY_DIAL_CODE = {
+    '1': '🇺🇸',
+    '34': '🇪🇸',
+    '52': '🇲🇽',
+    '54': '🇦🇷',
+    '55': '🇧🇷',
+    '56': '🇨🇱',
+    '57': '🇨🇴',
+    '58': '🇻🇪',
+    '51': '🇵🇪',
+    '44': '🇬🇧',
+    '49': '🇩🇪'
+};
 
 const COUNTRY_BY_DIAL_CODE = {
     '1': 'Estados Unidos/Canadá',
@@ -277,6 +294,16 @@ function getCountryFromNumber(number) {
     return 'un país no identificado';
 }
 
+function getFlagFromNumber(number) {
+    const normalized = normalizePhoneForCompare(number);
+    for (const code of SORTED_DIAL_CODES) {
+        if (normalized.startsWith(code)) {
+            return FLAG_BY_DIAL_CODE[code] || '🌍';
+        }
+    }
+    return '🌍';
+}
+
 function sanitizeText(value, maxLength = 3500) {
     const plain = String(value ?? '')
         .replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\u024F\u1E00-\u1EFF]/g, '')
@@ -289,6 +316,20 @@ function sanitizeText(value, maxLength = 3500) {
 
 function hasGroupInviteLink(text) {
     return GROUP_INVITE_REGEX.test(String(text || ''));
+}
+
+function brandCastorText(value) {
+    let text = sanitizeText(value ?? '', 9000);
+    if (!text) {
+        text = `${CASTOR_EMOJI} Castor Bot al habla.`;
+    }
+    if (!text.includes(CASTOR_EMOJI)) {
+        text = `${CASTOR_EMOJI} ${text}`;
+    }
+    if (!/(dique|estanque|presa|corriente)/i.test(text)) {
+        text = `${text}\n\n${CASTOR_EMOJI} Castor Bot: Estamos reforzando la presa en el dique.`;
+    }
+    return text;
 }
 
 async function streamToBuffer(stream) {
@@ -573,7 +614,8 @@ async function sendWelcome(sock, groupJid, participantJid) {
     const number = getNumberFromJid(participantJid);
     const mention = `@${number}`;
     const country = getCountryFromNumber(number);
-    const welcomeText = `Hola ${mention}, nos saludas desde ${country}. ¡Bienvenido al grupo!\n\n${getRulesText()}`;
+    const flag = getFlagFromNumber(number);
+    const welcomeText = `¡Un nuevo castor ha llegado al estanque! ${CASTOR_EMOJI} Bienvenido/a ${mention}. Nos saludas desde ${country} ${flag}. Soy Castor Bot, el guardián de este dique. 🪵 ¡Ponte cómodo y ayudemos a construir!`;
 
     let profileUrl = null;
     try {
@@ -582,19 +624,20 @@ async function sendWelcome(sock, groupJid, participantJid) {
         profileUrl = null;
     }
 
-    if (profileUrl) {
+    const imageUrl = profileUrl || CASTOR_DEFAULT_IMAGE_URL;
+
+    try {
         await sock.sendMessage(groupJid, {
-            image: { url: profileUrl },
+            image: { url: imageUrl },
             caption: welcomeText,
             mentions: [participantJid]
         });
-        return;
+    } catch (error) {
+        await sock.sendMessage(groupJid, {
+            text: welcomeText,
+            mentions: [participantJid]
+        });
     }
-
-    await sock.sendMessage(groupJid, {
-        text: welcomeText,
-        mentions: [participantJid]
-    });
 }
 
 async function handleReportCommand(sock, msg, text, remoteJid) {
@@ -705,6 +748,7 @@ async function handleWarnCommand(sock, msg, text, remoteJid) {
     const reason = `Advertencia por ${senderJid} en ${new Date().toISOString()}`;
     const mention = `@${getNumberFromJid(resolved.targetJid)}`;
     const result = await applyWarning(sock, resolved.targetJid, currentGroup, reason);
+    await sendCastorSealSticker(sock, remoteJid, msg);
 
     if (result.warningCount < 3) {
         await sock.sendMessage(remoteJid, {
@@ -765,9 +809,21 @@ async function handleStickerCommand(sock, msg, remoteJid) {
     try {
         const stream = await downloadContentFromMessage(imageMessage, 'image');
         const imageBuffer = await streamToBuffer(stream);
+        await sendCastorSealSticker(sock, remoteJid, msg);
         await sock.sendMessage(remoteJid, { sticker: imageBuffer }, { quoted: msg });
+        await sock.sendMessage(remoteJid, { text: '¡Misión Dique Cumplida! Tu imagen ya es sticker.' }, { quoted: msg });
     } catch (error) {
         await sock.sendMessage(remoteJid, { text: 'No pude convertir esa imagen a sticker.' }, { quoted: msg });
+    }
+}
+
+async function sendCastorSealSticker(sock, remoteJid, quotedMsg) {
+    if (!CASTOR_SEAL_STICKER_URL) {
+        return;
+    }
+    try {
+        await sock.sendMessage(remoteJid, { sticker: { url: CASTOR_SEAL_STICKER_URL } }, quotedMsg ? { quoted: quotedMsg } : undefined);
+    } catch (error) {
     }
 }
 
@@ -1025,6 +1081,16 @@ async function startBot() {
 
     const originalSendMessage = sock.sendMessage.bind(sock);
     sock.sendMessage = (jid, content, options) => {
+        if (content?.react || content?.delete) {
+            return originalSendMessage(jid, content, options);
+        }
+        const normalizedContent = { ...(content || {}) };
+        if (typeof normalizedContent.text === 'string') {
+            normalizedContent.text = brandCastorText(normalizedContent.text);
+        }
+        if (typeof normalizedContent.caption === 'string') {
+            normalizedContent.caption = brandCastorText(normalizedContent.caption);
+        }
         globalSendQueue = globalSendQueue.then(async () => {
             const now = Date.now();
             const lastAt = lastSentAtByJid.get(jid) || 0;
@@ -1034,7 +1100,7 @@ async function startBot() {
             if (totalDelay > 0) {
                 await new Promise((resolve) => setTimeout(resolve, totalDelay));
             }
-            const result = await originalSendMessage(jid, content, options);
+            const result = await originalSendMessage(jid, normalizedContent, options);
             lastSentAtByJid.set(jid, Date.now());
             return result;
         });
@@ -1122,6 +1188,7 @@ async function startBot() {
                     }
                     if (isMongoReady) {
                         const autoWarnResult = await applyWarning(sock, senderJid, remoteJid, 'Invitación de grupo detectada automáticamente');
+                        await sendCastorSealSticker(sock, remoteJid, msg);
                         const mention = `@${getNumberFromJid(senderJid)}`;
                         const warningText = autoWarnResult.warningCount < 3
                             ? `🚫 ${mention}, las invitaciones a otros grupos están prohibidas. Has sido advertido automáticamente.`
@@ -1138,6 +1205,9 @@ async function startBot() {
                 }
 
                 const command = text.trim().split(/\s+/)[0].toLowerCase();
+                if (CASTOR_VALID_COMMANDS.has(command)) {
+                    await sock.sendMessage(remoteJid, { react: { text: CASTOR_EMOJI, key: msg.key } });
+                }
                 if (command === '.reporte') {
                     await handleReportCommand(sock, msg, text, remoteJid);
                 } else if (command === '.advertir') {
