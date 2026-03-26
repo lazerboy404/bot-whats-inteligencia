@@ -488,33 +488,50 @@ function parseCloseDurationMs(rawText) {
 
 function getRulesText() {
     return [
-        '📌 *Reglas básicas del grupo:*',
-        '1) Respeto total entre miembros.',
-        '2) Prohibidos insultos, amenazas o acoso.',
-        '3) No spam, cadenas ni contenido ofensivo.',
-        '4) Evita compartir datos personales de terceros.',
-        '5) Sigue indicaciones de los administradores.'
+        '� *Reglas del Grupo*',
+        '',
+        '🚫 *Prohibido:*',
+        'Contenido sexual, erótico o +18 (incluye IA).',
+        'Contenido relacionado con menores = ban inmediato.',
+        '',
+        '🤝 *Normas:*',
+        '• Respeto entre todos',
+        '• Sin insultos ni acoso',
+        '• No spam ni cadenas',
+        '• No datos personales',
+        '• Seguir a admins'
     ].join('\n');
 }
 
 function getUserCommandsText() {
     return [
-        '🛠️ *Comandos para usuarios:*',
-        '• .sticker (responde a una imagen)',
-        '• .troncos',
-        '• .ranking',
-        '• .dique',
-        '• .perfil @usuario'
+        '🛠️ *Comandos*',
+        '',
+        '• .sticker → crear sticker (responde imagen)',
+        '• .troncos → ver tus 🪵',
+        '• .ranking → top usuarios 🏆',
+        '• .dique → progreso del grupo 🧱',
+        '• .perfil @user → info de usuario'
     ].join('\n');
 }
 
 function getTroncosDynamicsText() {
     return [
-        '🪵 *Dinámica de Troncos:*',
-        `• Con ${TRONCOS_AUTO_LIKE_THRESHOLD_1} reacciones: +1 tronco`,
-        `• Con ${TRONCOS_AUTO_LIKE_THRESHOLD_2} reacciones: +2 troncos`,
-        '• Anti abuso: no auto-like, no bots, 1 premio por mensaje',
-        `• Límite diario automático: ${TRONCOS_DAILY_AUTO_LIMIT} troncos`
+        '🪵 *Troncos (dinámica)*',
+        '',
+        'Los troncos 🪵 son recompensas que ganas por aportar contenido de calidad en el grupo.',
+        '',
+        `• ${TRONCOS_AUTO_LIKE_THRESHOLD_1} reacciones = +1 🪵`,
+        `• ${TRONCOS_AUTO_LIKE_THRESHOLD_2} reacciones = +2 🪵`,
+        '',
+        '⚠️ *Reglas:*',
+        '• 1 premio por mensaje',
+        '• No auto-like / bots',
+        `• Máx. ${TRONCOS_DAILY_AUTO_LIMIT} 🪵 por día`,
+        '',
+        '🏆 Sirven para ranking y construir el dique del grupo.',
+        '',
+        '💡 Entre más calidad, más reacciones → más 🪵'
     ].join('\n');
 }
 
