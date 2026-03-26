@@ -497,6 +497,27 @@ function getRulesText() {
     ].join('\n');
 }
 
+function getUserCommandsText() {
+    return [
+        '🛠️ *Comandos para usuarios:*',
+        '• .sticker (responde a una imagen)',
+        '• .troncos',
+        '• .ranking',
+        '• .dique',
+        '• .perfil @usuario'
+    ].join('\n');
+}
+
+function getTroncosDynamicsText() {
+    return [
+        '🪵 *Dinámica de Troncos:*',
+        `• Con ${TRONCOS_AUTO_LIKE_THRESHOLD_1} reacciones: +1 tronco`,
+        `• Con ${TRONCOS_AUTO_LIKE_THRESHOLD_2} reacciones: +2 troncos`,
+        '• Anti abuso: no auto-like, no bots, 1 premio por mensaje',
+        `• Límite diario automático: ${TRONCOS_DAILY_AUTO_LIMIT} troncos`
+    ].join('\n');
+}
+
 async function ensureMongo() {
     if (isMongoReady) {
         return true;
@@ -1149,7 +1170,16 @@ async function sendWelcome(sock, groupJid, participantJid) {
     const resolvedLocation = await resolveCountryAndFlag(sock, groupJid, participantJid);
     const country = resolvedLocation.country;
     const flag = resolvedLocation.flag;
-    const welcomeText = `${CASTOR_EMOJI} ¡Un nuevo castor ha llegado al estanque! Bienvenido/a ${mention}.\nNos saludas desde ${flag} ${country}. Soy Castor Bot, el guardián de este dique. ¡Ponte cómodo y ayudemos a construir!`;
+    const welcomeText = [
+        `${CASTOR_EMOJI} ¡Un nuevo castor ha llegado al estanque! Bienvenido/a ${mention}.`,
+        `Nos saludas desde ${flag} ${country}. Soy Castor Bot, el guardián de este dique. ¡Ponte cómodo y ayudemos a construir!`,
+        '',
+        getRulesText(),
+        '',
+        getUserCommandsText(),
+        '',
+        getTroncosDynamicsText()
+    ].join('\n');
 
     let profileUrl = null;
     try {
