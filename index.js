@@ -2,6 +2,7 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLat
 const pino = require('pino');
 const express = require('express');
 const mongoose = require('mongoose');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -22,6 +23,7 @@ const SEND_MIN_DELAY_MS = Number(process.env.SEND_MIN_DELAY_MS || (SAFE_MODE ? 1
 const SEND_MAX_DELAY_MS = Number(process.env.SEND_MAX_DELAY_MS || (SAFE_MODE ? 4200 : 1800));
 const PER_CHAT_MIN_GAP_MS = Number(process.env.PER_CHAT_MIN_GAP_MS || (SAFE_MODE ? 3600 : 1400));
 const KEEP_ALIVE_INTERVAL_MS = Number(process.env.KEEP_ALIVE_INTERVAL_MS || (10 * 60 * 1000));
+const RESET_WA_SESSION_ON_BOOT = ['1', 'true', 'yes', 'on'].includes(String(process.env.RESET_WA_SESSION_ON_BOOT || 'false').toLowerCase());
 const SAFE_DISABLE_SEAL_STICKER = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAFE_DISABLE_SEAL_STICKER || (SAFE_MODE ? 'true' : 'false')).toLowerCase());
 const SAFE_DISABLE_COMMAND_REACT = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAFE_DISABLE_COMMAND_REACT || 'false').toLowerCase());
 const SAFE_DISABLE_AUTO_KICK = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAFE_DISABLE_AUTO_KICK || (SAFE_MODE ? 'true' : 'false')).toLowerCase());
@@ -1329,6 +1331,18 @@ async function startBot() {
         if (activeSock) {
             try {
                 activeSock.end(new Error('new_run_started'));
+            } catch (error) {
+            }
+        }
+
+        if (RESET_WA_SESSION_ON_BOOT) {
+            if (isMongoReady && AuthStateModel) {
+                await AuthStateModel.deleteMany({});
+                console.log('RESET_WA_SESSION_ON_BOOT activo: sesión de Mongo reiniciada.');
+            }
+            try {
+                fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+                console.log('RESET_WA_SESSION_ON_BOOT activo: auth_info_baileys eliminado.');
             } catch (error) {
             }
         }
