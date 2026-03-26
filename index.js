@@ -28,6 +28,7 @@ const SAFE_DISABLE_SEAL_STICKER = ['1', 'true', 'yes', 'on'].includes(String(pro
 const SAFE_DISABLE_COMMAND_REACT = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAFE_DISABLE_COMMAND_REACT || 'false').toLowerCase());
 const SAFE_DISABLE_AUTO_KICK = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAFE_DISABLE_AUTO_KICK || (SAFE_MODE ? 'true' : 'false')).toLowerCase());
 const SAFE_COMPACT_WELCOME = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAFE_COMPACT_WELCOME || (SAFE_MODE ? 'true' : 'false')).toLowerCase());
+const ALLOW_SELF_COMMANDS = ['1', 'true', 'yes', 'on'].includes(String(process.env.ALLOW_SELF_COMMANDS || 'false').toLowerCase());
 const lastSentAtByJid = new Map();
 let globalSendQueue = Promise.resolve();
 const closeTimersByGroup = new Map();
@@ -41,7 +42,7 @@ let sessionResetDoneThisBoot = false;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reporte', '.reportar', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.pais']);
+const CASTOR_VALID_COMMANDS = new Set(['.reporte', '.reportar', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.pais', '.ping']);
 const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
 const BAILEYS_CONNECT_TIMEOUT_MS = Number(process.env.BAILEYS_CONNECT_TIMEOUT_MS || 60000);
 const BAILEYS_KEEPALIVE_MS = Number(process.env.BAILEYS_KEEPALIVE_MS || 30000);
@@ -1202,6 +1203,11 @@ async function handleOpenGroupCommand(sock, msg, remoteJid) {
     await sock.sendMessage(remoteJid, { text: '🔓 Grupo abierto. Todos los miembros ya pueden enviar mensajes.' }, { quoted: msg });
 }
 
+async function handlePingCommand(sock, msg, remoteJid) {
+    const mode = ALLOW_SELF_COMMANDS ? 'self_on' : 'self_off';
+    await sock.sendMessage(remoteJid, { text: `✅ Castor Bot activo. Modo comandos propios: ${mode}.` }, { quoted: msg });
+}
+
 app.get('/', (req, res) => {
     if (qrCodeData) {
         res.send(`
@@ -1486,7 +1492,10 @@ async function startBot() {
         }
         for (const msg of messages) {
             try {
-                if (!msg.message || msg.key.fromMe) {
+                if (!msg.message) {
+                    continue;
+                }
+                if (msg.key.fromMe && !ALLOW_SELF_COMMANDS) {
                     continue;
                 }
                 const remoteJid = msg.key.remoteJid;
@@ -1556,6 +1565,8 @@ async function startBot() {
                     await handleOpenGroupCommand(sock, msg, remoteJid);
                 } else if (command === '.pais') {
                     await handleSetCountryCommand(sock, msg, text, remoteJid);
+                } else if (command === '.ping') {
+                    await handlePingCommand(sock, msg, remoteJid);
                 }
             } catch (error) {
                 const errorMessage = error?.message || String(error || '');
