@@ -32,6 +32,7 @@ const FLAG_BY_DIAL_CODE = {
     '1': '🇺🇸',
     '34': '🇪🇸',
     '52': '🇲🇽',
+    '521': '🇲🇽',
     '54': '🇦🇷',
     '55': '🇧🇷',
     '56': '🇨🇱',
@@ -256,9 +257,15 @@ function cleanDigits(value) {
 }
 
 function normalizePhoneForCompare(value) {
-    const digits = cleanDigits(value);
+    let digits = cleanDigits(value);
+    if (digits.startsWith('00')) {
+        digits = digits.replace(/^00+/, '');
+    }
+    if (digits.startsWith('0521')) {
+        digits = `52${digits.slice(4)}`;
+    }
     if (digits.startsWith('521')) {
-        return `52${digits.slice(3)}`;
+        digits = `52${digits.slice(3)}`;
     }
     return digits;
 }
@@ -286,6 +293,9 @@ function isOwnerByNumber(number) {
 
 function getCountryFromNumber(number) {
     const normalized = normalizePhoneForCompare(number);
+    if (normalized.startsWith('52')) {
+        return 'México';
+    }
     for (const code of SORTED_DIAL_CODES) {
         if (normalized.startsWith(code)) {
             return COUNTRY_BY_DIAL_CODE[code];
@@ -296,6 +306,9 @@ function getCountryFromNumber(number) {
 
 function getFlagFromNumber(number) {
     const normalized = normalizePhoneForCompare(number);
+    if (normalized.startsWith('52')) {
+        return '🇲🇽';
+    }
     for (const code of SORTED_DIAL_CODES) {
         if (normalized.startsWith(code)) {
             return FLAG_BY_DIAL_CODE[code] || '🌍';
