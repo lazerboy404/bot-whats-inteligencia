@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers, downloadContentFromMessage } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers, downloadContentFromMessage, initAuthCreds, BufferJSON, proto } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const express = require('express');
 const mongoose = require('mongoose');
@@ -13,8 +13,10 @@ const ADMIN_NUMBER_VARIANTS = new Set(['5564132674', '525564132674', '5215564132
 const reportCooldownByUser = new Map();
 const reportReferenceMap = new Map();
 let ModRecordModel = null;
+let AuthStateModel = null;
 let isMongoReady = false;
 const GROUP_INVITE_REGEX = /(chat\.whatsapp\.com\/[a-zA-Z0-9]{20,}|wa\.me\/joinlink\/)/i;
+let keepAliveInterval = null;
 
 const COUNTRY_BY_DIAL_CODE = {
     '1': 'Estados Unidos/Canadá',
@@ -410,8 +412,79 @@ async function ensureMongo() {
         ModRecordModel = mongoose.model('ModRecord');
     }
 
+    if (!mongoose.models.AuthState) {
+        const authSchema = new mongoose.Schema({
+            _id: String,
+            data: String
+        });
+        AuthStateModel = mongoose.model('AuthState', authSchema, 'wa_auth_state');
+    } else {
+        AuthStateModel = mongoose.model('AuthState');
+    }
+
     isMongoReady = true;
     return true;
+}
+
+async function useMongoAuthState() {
+    const writeData = async (data, id) => {
+        await AuthStateModel.updateOne(
+            { _id: id },
+            { $set: { data: JSON.stringify(data, BufferJSON.replacer) } },
+            { upsert: true }
+        );
+    };
+
+    const readData = async (id) => {
+        const result = await AuthStateModel.findById(id).lean();
+        if (!result?.data) {
+            return null;
+        }
+        return JSON.parse(result.data, BufferJSON.reviver);
+    };
+
+    const removeData = async (id) => {
+        await AuthStateModel.deleteOne({ _id: id });
+    };
+
+    const creds = await readData('creds') || initAuthCreds();
+
+    return {
+        state: {
+            creds,
+            keys: {
+                get: async (type, ids) => {
+                    const data = {};
+                    await Promise.all(ids.map(async (id) => {
+                        let value = await readData(`${type}-${id}`);
+                        if (type === 'app-state-sync-key' && value) {
+                            value = proto.Message.AppStateSyncKeyData.fromObject(value);
+                        }
+                        if (value) {
+                            data[id] = value;
+                        }
+                    }));
+                    return data;
+                },
+                set: async (newData) => {
+                    const tasks = [];
+                    for (const category of Object.keys(newData)) {
+                        for (const id of Object.keys(newData[category])) {
+                            const value = newData[category][id];
+                            const key = `${category}-${id}`;
+                            if (value) {
+                                tasks.push(writeData(value, key));
+                            } else {
+                                tasks.push(removeData(key));
+                            }
+                        }
+                    }
+                    await Promise.all(tasks);
+                }
+            }
+        },
+        saveCreds: async () => writeData(creds, 'creds')
+    };
 }
 
 async function upsertModRecord(userId, update) {
@@ -766,6 +839,22 @@ app.get('/', (req, res) => {
 
 app.listen(PORT, () => console.log(`Servidor iniciado en puerto ${PORT}`));
 
+function startKeepAlive() {
+    if (keepAliveInterval) {
+        return;
+    }
+    keepAliveInterval = setInterval(async () => {
+        const renderUrl = process.env.RENDER_EXTERNAL_URL;
+        if (!renderUrl) {
+            return;
+        }
+        try {
+            await fetch(renderUrl);
+        } catch (error) {
+        }
+    }, 10 * 60 * 1000);
+}
+
 async function startBot() {
     try {
         await ensureMongo();
@@ -773,7 +862,26 @@ async function startBot() {
         console.error('No se pudo conectar MongoDB al iniciar:', error?.message || error);
     }
 
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+    let state;
+    let saveCreds;
+    if (isMongoReady && AuthStateModel) {
+        try {
+            const auth = await useMongoAuthState();
+            state = auth.state;
+            saveCreds = auth.saveCreds;
+            console.log('Sesión de WhatsApp usando MongoDB Atlas');
+        } catch (error) {
+            const auth = await useMultiFileAuthState('auth_info_baileys');
+            state = auth.state;
+            saveCreds = auth.saveCreds;
+            console.log('Sesión de WhatsApp usando archivos locales por fallback');
+        }
+    } else {
+        const auth = await useMultiFileAuthState('auth_info_baileys');
+        state = auth.state;
+        saveCreds = auth.saveCreds;
+        console.log('Sesión de WhatsApp usando archivos locales');
+    }
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
@@ -902,3 +1010,4 @@ async function startBot() {
 startBot().catch((error) => {
     console.error('Error al iniciar bot:', error);
 });
+startKeepAlive();
