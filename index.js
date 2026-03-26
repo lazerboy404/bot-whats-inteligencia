@@ -32,6 +32,8 @@ const closeTimersByGroup = new Map();
 let reconnectTimer = null;
 let reconnectDelayMs = 4000;
 let processErrorGuardReady = false;
+const DEBATE_CACHE_MAX_PER_GROUP = Number(process.env.DEBATE_CACHE_MAX_PER_GROUP || 200);
+const debateMessageCacheByGroup = new Map();
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
@@ -462,6 +464,57 @@ function collectDebateMessages(msg) {
         current = quoted.quotedMessage;
     }
     return result.reverse();
+}
+
+function storeMessageForDebate(msg, remoteJid) {
+    if (!remoteJid.endsWith('@g.us')) {
+        return;
+    }
+    const text = sanitizeDebateText(extractTextFromMessage(msg.message));
+    if (!text || text.startsWith('.')) {
+        return;
+    }
+    const quoted = getQuotedPayload(msg.message);
+    const entry = {
+        id: msg.key.id,
+        userId: msg.key.participant || msg.key.remoteJid,
+        text,
+        quotedStanzaId: quoted?.quotedStanzaId || null,
+        ts: Date.now()
+    };
+    const current = debateMessageCacheByGroup.get(remoteJid) || [];
+    const filtered = current.filter((item) => item.id !== entry.id);
+    filtered.push(entry);
+    while (filtered.length > DEBATE_CACHE_MAX_PER_GROUP) {
+        filtered.shift();
+    }
+    debateMessageCacheByGroup.set(remoteJid, filtered);
+}
+
+function collectDebateMessagesFromReplies(msg, remoteJid) {
+    const quoted = getQuotedPayload(msg.message);
+    if (!quoted?.quotedStanzaId || !quoted?.quotedParticipant || !quoted?.quotedMessage) {
+        return { error: 'missing_anchor', messages: [] };
+    }
+    const anchorText = sanitizeDebateText(extractTextFromMessage(quoted.quotedMessage));
+    if (!anchorText) {
+        return { error: 'no_anchor_text', messages: [] };
+    }
+
+    const cache = debateMessageCacheByGroup.get(remoteJid) || [];
+    const replies = cache
+        .filter((entry) => entry.quotedStanzaId === quoted.quotedStanzaId)
+        .sort((a, b) => a.ts - b.ts);
+
+    if (replies.length > 4) {
+        return { error: 'too_many', messages: [] };
+    }
+
+    const combined = [
+        { userId: quoted.quotedParticipant, text: anchorText },
+        ...replies.map((r) => ({ userId: r.userId, text: r.text }))
+    ];
+    return { error: null, messages: combined.slice(0, 5) };
 }
 
 async function streamToBuffer(stream) {
@@ -1676,14 +1729,20 @@ async function handleDebatirCommand(sock, msg, remoteJid) {
         return;
     }
 
-    const collected = collectDebateMessages(msg);
-    if (collected.length < 2) {
+    const selected = collectDebateMessagesFromReplies(msg, remoteJid);
+    if (selected.error === 'missing_anchor' || selected.error === 'no_anchor_text') {
         await sock.sendMessage(remoteJid, { text: '🦫 Selecciona varios mensajes para debatir' }, { quoted: msg });
         return;
     }
 
-    if (collected.length > 5) {
+    if (selected.error === 'too_many') {
         await sock.sendMessage(remoteJid, { text: '🦫 Selecciona máximo 5 mensajes' }, { quoted: msg });
+        return;
+    }
+
+    const collected = selected.messages || [];
+    if (collected.length < 2) {
+        await sock.sendMessage(remoteJid, { text: '🦫 No hay un debate claro aquí' }, { quoted: msg });
         return;
     }
 
@@ -1963,6 +2022,7 @@ async function startBot() {
                     continue;
                 }
                 const senderJid = msg.key.participant || msg.key.remoteJid;
+                storeMessageForDebate(msg, remoteJid);
 
                 if (msg.message?.reactionMessage) {
                     await handleReactionReward(sock, msg, remoteJid);
