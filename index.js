@@ -27,7 +27,7 @@ const closeTimersByGroup = new Map();
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/github/explore/main/topics/mongodb/mongodb.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reporte', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir']);
+const CASTOR_VALID_COMMANDS = new Set(['.reporte', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.pais']);
 const FLAG_BY_DIAL_CODE = {
     '1': '🇺🇸',
     '34': '🇪🇸',
@@ -497,7 +497,9 @@ async function ensureMongo() {
             motivos: { type: [String], default: [] },
             isBanned: { type: Boolean, default: false },
             intentosReingreso: { type: Number, default: 0 },
-            ultimaActividad: { type: Date, default: null }
+            ultimaActividad: { type: Date, default: null },
+            countryOverride: { type: String, default: '' },
+            flagOverride: { type: String, default: '' }
         });
         schema.index({ userId: 1 });
         schema.index({ ultimaActividad: 1 });
@@ -627,13 +629,125 @@ async function senderIsAuthorizedAdmin(sock, msg, remoteJid) {
     return isGroupAdmin(sock, remoteJid, senderJid);
 }
 
+function extractCandidateNumber(value) {
+    const raw = String(value || '');
+    if (!raw) {
+        return '';
+    }
+    if (raw.includes('@')) {
+        return getNumberFromJid(raw);
+    }
+    return cleanDigits(raw);
+}
+
+async function resolveCountryAndFlag(sock, groupJid, participantJid) {
+    if (isMongoReady) {
+        const overrideRecord = await getModRecord(participantJid);
+        if (overrideRecord?.countryOverride) {
+            return {
+                country: overrideRecord.countryOverride,
+                flag: overrideRecord.flagOverride || '🌍'
+            };
+        }
+    }
+
+    const number = getNumberFromJid(participantJid);
+    const jidDomain = getDomainFromJid(participantJid);
+    if (jidDomain === 's.whatsapp.net') {
+        return {
+            country: getCountryFromNumber(number),
+            flag: getFlagFromNumber(number)
+        };
+    }
+
+    try {
+        const metadata = await sock.groupMetadata(groupJid);
+        const participants = metadata?.participants || [];
+        const target = participants.find((p) => p.id === participantJid || p.lid === participantJid);
+        if (target) {
+            const candidates = [target.id, target.lid, target.phoneNumber, target.pn, target.jid];
+            for (const candidate of candidates) {
+                const candidateNumber = extractCandidateNumber(candidate);
+                if (candidateNumber.length >= 8) {
+                    return {
+                        country: getCountryFromNumber(candidateNumber),
+                        flag: getFlagFromNumber(candidateNumber)
+                    };
+                }
+            }
+        }
+    } catch (error) {
+    }
+
+    return {
+        country: 'un país no identificado',
+        flag: '🌍'
+    };
+}
+
+async function handleSetCountryCommand(sock, msg, text, remoteJid) {
+    if (!remoteJid.endsWith('@g.us')) {
+        await sock.sendMessage(remoteJid, { text: 'El comando .pais solo funciona en grupos.' }, { quoted: msg });
+        return;
+    }
+
+    const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
+    if (!isAuthorized) {
+        await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
+        return;
+    }
+
+    if (!isMongoReady) {
+        await sock.sendMessage(remoteJid, { text: 'Para usar .pais necesito MongoDB conectado.' }, { quoted: msg });
+        return;
+    }
+
+    const quoted = getQuotedPayload(msg.message);
+    const targetJid = parseTargetFromTextOrMention(msg, text) || quoted?.quotedParticipant;
+    if (!targetJid) {
+        await sock.sendMessage(remoteJid, { text: 'Uso: .pais @usuario México 🇲🇽 o responde al mensaje del usuario con .pais México 🇲🇽' }, { quoted: msg });
+        return;
+    }
+
+    const targetNumber = getNumberFromJid(targetJid);
+    let payload = sanitizeText(text).replace(/^\.pais\s*/i, '').trim();
+    if (targetNumber) {
+        payload = payload.replace(new RegExp(`@?${targetNumber}`, 'g'), '').trim();
+    }
+    payload = payload.replace(targetJid, '').trim();
+
+    if (!payload) {
+        await sock.sendMessage(remoteJid, { text: 'Debes indicar país y opcional bandera. Ejemplo: .pais @usuario México 🇲🇽' }, { quoted: msg });
+        return;
+    }
+
+    const indicatorChars = [...payload].filter((ch) => {
+        const cp = ch.codePointAt(0);
+        return cp >= 0x1F1E6 && cp <= 0x1F1FF;
+    });
+    const flag = indicatorChars.length >= 2 ? indicatorChars.slice(-2).join('') : '🌍';
+    const country = payload.replace(flag, '').trim() || payload;
+
+    await upsertModRecord(targetJid, {
+        $set: {
+            countryOverride: country,
+            flagOverride: flag
+        }
+    });
+
+    const mention = targetNumber ? `@${targetNumber}` : '@usuario';
+    await sock.sendMessage(remoteJid, {
+        text: `País manual guardado para ${mention}: ${country} ${flag}.`,
+        mentions: targetNumber ? [targetJid] : []
+    }, { quoted: msg });
+}
+
 async function sendWelcome(sock, groupJid, participantJid) {
     const number = getNumberFromJid(participantJid);
-    const mention = `@${number}`;
-    const jidDomain = getDomainFromJid(participantJid);
-    const isPhoneJid = jidDomain === 's.whatsapp.net';
-    const country = isPhoneJid ? getCountryFromNumber(number) : 'un país no identificado';
-    const flag = isPhoneJid ? getFlagFromNumber(number) : '🌍';
+    const mention = number ? `@${number}` : '@usuario';
+    const resolvedLocation = await resolveCountryAndFlag(sock, groupJid, participantJid);
+    const country = resolvedLocation.country;
+    const flag = resolvedLocation.flag;
     const welcomeText = `¡Un nuevo castor ha llegado al estanque! ${CASTOR_EMOJI} Bienvenido/a ${mention}. Nos saludas desde ${country} ${flag}. Soy Castor Bot, el guardián de este dique. 🪵 ¡Ponte cómodo y ayudemos a construir!`;
 
     let profileUrl = null;
@@ -649,12 +763,12 @@ async function sendWelcome(sock, groupJid, participantJid) {
         await sock.sendMessage(groupJid, {
             image: { url: imageUrl },
             caption: welcomeText,
-            mentions: [participantJid]
+            mentions: number ? [participantJid] : []
         });
     } catch (error) {
         await sock.sendMessage(groupJid, {
             text: welcomeText,
-            mentions: [participantJid]
+            mentions: number ? [participantJid] : []
         });
     }
 }
@@ -1241,6 +1355,8 @@ async function startBot() {
                     await handleCloseGroupCommand(sock, msg, text, remoteJid);
                 } else if (command === '.abrir') {
                     await handleOpenGroupCommand(sock, msg, remoteJid);
+                } else if (command === '.pais') {
+                    await handleSetCountryCommand(sock, msg, text, remoteJid);
                 }
             } catch (error) {
                 console.error('Error en procesamiento de comando:', error?.message || error);
