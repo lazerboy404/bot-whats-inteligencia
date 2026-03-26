@@ -274,6 +274,10 @@ function getNumberFromJid(jid) {
     return cleanDigits(String(jid || '').split('@')[0].split(':')[0]);
 }
 
+function getDomainFromJid(jid) {
+    return String(jid || '').split('@')[1]?.toLowerCase() || '';
+}
+
 function toJid(number) {
     return `${cleanDigits(number)}@s.whatsapp.net`;
 }
@@ -626,8 +630,10 @@ async function senderIsAuthorizedAdmin(sock, msg, remoteJid) {
 async function sendWelcome(sock, groupJid, participantJid) {
     const number = getNumberFromJid(participantJid);
     const mention = `@${number}`;
-    const country = getCountryFromNumber(number);
-    const flag = getFlagFromNumber(number);
+    const jidDomain = getDomainFromJid(participantJid);
+    const isPhoneJid = jidDomain === 's.whatsapp.net';
+    const country = isPhoneJid ? getCountryFromNumber(number) : 'un país no identificado';
+    const flag = isPhoneJid ? getFlagFromNumber(number) : '🌍';
     const welcomeText = `¡Un nuevo castor ha llegado al estanque! ${CASTOR_EMOJI} Bienvenido/a ${mention}. Nos saludas desde ${country} ${flag}. Soy Castor Bot, el guardián de este dique. 🪵 ¡Ponte cómodo y ayudemos a construir!`;
 
     let profileUrl = null;
