@@ -782,7 +782,7 @@ async function upsertModRecord(userId, update) {
     return ModRecordModel.findOneAndUpdate(
         { userId },
         update,
-        { upsert: true, new: true, setDefaultsOnInsert: true }
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
 }
 
@@ -817,7 +817,7 @@ async function ensureTroncoUser(groupJid, userId) {
     return TroncoUserModel.findOneAndUpdate(
         { groupJid, userId },
         { $setOnInsert: { troncos: 0, autoTodayDate: '', autoTodayEarned: 0 } },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
 }
 
@@ -850,13 +850,13 @@ async function addTroncos(groupJid, userId, amount, reason, options = {}) {
     const updatedUser = await TroncoUserModel.findOneAndUpdate(
         { groupJid, userId },
         update,
-        { new: true }
+        { returnDocument: 'after' }
     );
 
     const updatedGroup = await DiqueGroupModel.findOneAndUpdate(
         { groupJid },
         { $inc: { totalTroncos: credited } },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
 
     return {
@@ -871,7 +871,7 @@ async function getDiqueStats(groupJid) {
     const group = await DiqueGroupModel.findOneAndUpdate(
         { groupJid },
         { $setOnInsert: { totalTroncos: 0 } },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
     const total = group?.totalTroncos || 0;
     let level = 0;
@@ -909,7 +909,7 @@ async function handleReactionReward(sock, msg, remoteJid) {
             $setOnInsert: { senderId, troncosAwarded: 0, reactors: [] },
             $addToSet: { reactors: reactorJid }
         },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
 
     if (!record || record.troncosAwarded > 0) {
@@ -931,7 +931,7 @@ async function handleReactionReward(sock, msg, remoteJid) {
     const lock = await TroncoMessageModel.findOneAndUpdate(
         { groupJid: remoteJid, messageId: targetKey.id, troncosAwarded: 0 },
         { $set: { troncosAwarded: reward, awardedAt: new Date() } },
-        { new: true }
+        { returnDocument: 'after' }
     );
     if (!lock) {
         return;
@@ -1052,7 +1052,7 @@ async function handleEventoCommand(sock, msg, text, remoteJid) {
         await EventoGroupModel.findOneAndUpdate(
             { groupJid: remoteJid },
             { $set: { isActive: true, title } },
-            { upsert: true, new: true, setDefaultsOnInsert: true }
+            { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
         );
         await sock.sendMessage(remoteJid, { text: `🎯 Evento activado: ${title}. Usa .evento participar @usuario o .evento ganar @usuario.` }, { quoted: msg });
         return;
@@ -1062,7 +1062,7 @@ async function handleEventoCommand(sock, msg, text, remoteJid) {
         await EventoGroupModel.findOneAndUpdate(
             { groupJid: remoteJid },
             { $set: { isActive: false } },
-            { upsert: true, new: true, setDefaultsOnInsert: true }
+            { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
         );
         await sock.sendMessage(remoteJid, { text: '🎯 Evento desactivado en el estanque.' }, { quoted: msg });
         return;
@@ -1071,7 +1071,7 @@ async function handleEventoCommand(sock, msg, text, remoteJid) {
     const eventState = await EventoGroupModel.findOneAndUpdate(
         { groupJid: remoteJid },
         { $setOnInsert: { isActive: false, title: '', rewardParticipation: 1, rewardWin: 2 } },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
 
     if (sub === 'estado' || !sub) {
