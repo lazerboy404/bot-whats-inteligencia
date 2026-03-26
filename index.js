@@ -1873,7 +1873,7 @@ async function startBot() {
         if (typeof normalizedContent.caption === 'string') {
             normalizedContent.caption = brandCastorText(normalizedContent.caption);
         }
-        globalSendQueue = globalSendQueue.then(async () => {
+        const task = async () => {
             const now = Date.now();
             const lastAt = lastSentAtByJid.get(jid) || 0;
             const missingGap = Math.max(0, PER_CHAT_MIN_GAP_MS - (now - lastAt));
@@ -1885,8 +1885,10 @@ async function startBot() {
             const result = await originalSendMessage(jid, normalizedContent, options);
             lastSentAtByJid.set(jid, Date.now());
             return result;
-        });
-        return globalSendQueue;
+        };
+        const queuedResult = globalSendQueue.catch(() => null).then(task);
+        globalSendQueue = queuedResult.catch(() => null);
+        return queuedResult;
     };
 
     sock.ev.on('creds.update', saveCreds);
