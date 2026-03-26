@@ -2,7 +2,6 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLat
 const pino = require('pino');
 const express = require('express');
 const mongoose = require('mongoose');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -32,12 +31,10 @@ const closeTimersByGroup = new Map();
 let reconnectTimer = null;
 let reconnectDelayMs = 4000;
 let processErrorGuardReady = false;
-const DEBATE_CACHE_MAX_PER_GROUP = Number(process.env.DEBATE_CACHE_MAX_PER_GROUP || 200);
-const debateMessageCacheByGroup = new Map();
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reporte', '.reportar', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.pais', '.troncos', '.ranking', '.dique', '.perfil', '.destacar', '.evento', '.debatir', '.debatirdebug']);
+const CASTOR_VALID_COMMANDS = new Set(['.reporte', '.reportar', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.pais', '.troncos', '.ranking', '.dique', '.perfil', '.destacar', '.evento']);
 const TRONCOS_AUTO_LIKE_THRESHOLD_1 = Number(process.env.TRONCOS_AUTO_LIKE_THRESHOLD_1 || 5);
 const TRONCOS_AUTO_LIKE_THRESHOLD_2 = Number(process.env.TRONCOS_AUTO_LIKE_THRESHOLD_2 || 10);
 const TRONCOS_DAILY_AUTO_LIMIT = Number(process.env.TRONCOS_DAILY_AUTO_LIMIT || 5);
@@ -47,8 +44,6 @@ const BAILEYS_CONNECT_TIMEOUT_MS = Number(process.env.BAILEYS_CONNECT_TIMEOUT_MS
 const BAILEYS_KEEPALIVE_MS = Number(process.env.BAILEYS_KEEPALIVE_MS || 30000);
 const BOT_RECONNECT_BASE_MS = Number(process.env.BOT_RECONNECT_BASE_MS || 4000);
 const BOT_RECONNECT_MAX_MS = Number(process.env.BOT_RECONNECT_MAX_MS || 45000);
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
 const FLAG_BY_DIAL_CODE = {
     '1': '🇺🇸',
     '34': '🇪🇸',
@@ -371,168 +366,6 @@ function brandCastorText(value) {
         text = `${text}\n\n${CASTOR_EMOJI} Castor Bot: Estamos reforzando la presa en el dique.`;
     }
     return text;
-}
-
-function sanitizeDebateText(value) {
-    return String(value || '')
-        .replace(/https?:\/\/\S+|www\.\S+/gi, ' ')
-        .replace(/([\p{Extended_Pictographic}])\1{1,}/gu, '$1')
-        .replace(/(.)\1{5,}/g, '$1$1')
-        .replace(/\s+/g, ' ')
-        .trim();
-}
-
-function normalizeDebateAiOutput(value) {
-    const raw = String(value || '').replace(/\r/g, '').trim();
-    if (!raw) {
-        return '';
-    }
-    const lines = raw.split('\n').map((line) => line.trim()).filter((line, idx, arr) => line || (idx > 0 && arr[idx - 1]));
-    return lines.join('\n');
-}
-
-function getFallbackDebateText() {
-    return [
-        '🦫 El castor analizó el debate...',
-        '',
-        '📌 Tema: insuficiente contexto',
-        '',
-        '💡 Conclusión: no hay suficiente información para decidir'
-    ].join('\n');
-}
-
-function getDebatePrompt(conversationText) {
-    return [
-        'Eres un moderador imparcial representado como un castor inteligente y justo dentro de un grupo.',
-        '',
-        'Analiza los siguientes mensajes de una discusión:',
-        '',
-        conversationText,
-        '',
-        'Tu tarea:',
-        '1. Resume el tema del desacuerdo en una sola línea clara',
-        '2. Identifica quién tiene el argumento más sólido (si aplica)',
-        '3. Señala un error o debilidad importante (si existe)',
-        '4. Da una conclusión clara y justa',
-        '',
-        'Reglas:',
-        '- Sé neutral, objetivo y justo',
-        '- No insultes ni ataques a ningún usuario',
-        '- No inventes información',
-        '- Si no hay suficiente contexto, indícalo',
-        '- Mantén la respuesta breve (máx. 4–5 líneas)',
-        '',
-        'Formato de respuesta obligatorio:',
-        '',
-        '🦫 El castor analizó el debate...',
-        '',
-        '📌 Tema: [resumen corto]',
-        '',
-        '✅ Mejor argumento: @usuario',
-        '⚠️ Detalle: [error o punto débil]',
-        '',
-        '💡 Conclusión: [resultado claro y neutral]'
-    ].join('\n');
-}
-
-function collectDebateMessages(msg) {
-    const maxCollect = 7;
-    const result = [];
-    const text = sanitizeDebateText(extractTextFromMessage(msg.message));
-    if (text) {
-        result.push({
-            userId: msg.key.participant || msg.key.remoteJid,
-            text
-        });
-    }
-
-    let current = msg.message;
-    let guard = 0;
-    while (guard < maxCollect) {
-        guard += 1;
-        const quoted = getQuotedPayload(current);
-        if (!quoted?.quotedMessage || !quoted?.quotedParticipant) {
-            break;
-        }
-        const quotedText = sanitizeDebateText(extractTextFromMessage(quoted.quotedMessage));
-        if (quotedText) {
-            result.push({
-                userId: quoted.quotedParticipant,
-                text: quotedText
-            });
-        }
-        current = quoted.quotedMessage;
-    }
-    return result.reverse();
-}
-
-function storeMessageForDebate(msg, remoteJid) {
-    if (!remoteJid.endsWith('@g.us')) {
-        return;
-    }
-    const text = sanitizeDebateText(extractTextFromMessage(msg.message));
-    if (!text || text.startsWith('.')) {
-        return;
-    }
-    const quoted = getQuotedPayload(msg.message);
-    const entry = {
-        id: msg.key.id,
-        userId: msg.key.participant || msg.key.remoteJid,
-        text,
-        quotedStanzaId: quoted?.quotedStanzaId || null,
-        ts: Date.now()
-    };
-    const current = debateMessageCacheByGroup.get(remoteJid) || [];
-    const filtered = current.filter((item) => item.id !== entry.id);
-    filtered.push(entry);
-    while (filtered.length > DEBATE_CACHE_MAX_PER_GROUP) {
-        filtered.shift();
-    }
-    debateMessageCacheByGroup.set(remoteJid, filtered);
-}
-
-function collectDebateMessagesFromReplies(msg, remoteJid) {
-    const quoted = getQuotedPayload(msg.message);
-    if (!quoted?.quotedStanzaId || !quoted?.quotedParticipant || !quoted?.quotedMessage) {
-        return { error: 'missing_anchor', messages: [] };
-    }
-    const anchorText = sanitizeDebateText(extractTextFromMessage(quoted.quotedMessage));
-    if (!anchorText) {
-        return { error: 'no_anchor_text', messages: [] };
-    }
-
-    const cache = debateMessageCacheByGroup.get(remoteJid) || [];
-    const replies = cache
-        .filter((entry) => entry.quotedStanzaId === quoted.quotedStanzaId)
-        .sort((a, b) => a.ts - b.ts);
-
-    if (replies.length > 4) {
-        return { error: 'too_many', messages: [] };
-    }
-
-    const combined = [
-        { userId: quoted.quotedParticipant, text: anchorText },
-        ...replies.map((r) => ({ userId: r.userId, text: r.text }))
-    ];
-    return { error: null, messages: combined.slice(0, 5) };
-}
-
-async function runDebateGeminiProbe() {
-    if (!GEMINI_API_KEY) {
-        return { ok: false, reason: 'missing_api_key' };
-    }
-    try {
-        const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-        const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-        const response = await model.generateContent('Responde solo: OK');
-        const text = normalizeDebateAiOutput(response?.response?.text() || '');
-        if (!text) {
-            return { ok: false, reason: 'empty_response' };
-        }
-        return { ok: true, reason: 'ok', sample: text.slice(0, 80) };
-    } catch (error) {
-        return { ok: false, reason: error?.message || 'gemini_error' };
-    }
 }
 
 async function streamToBuffer(stream) {
@@ -1741,109 +1574,6 @@ async function handleOpenGroupCommand(sock, msg, remoteJid) {
     await sock.sendMessage(remoteJid, { text: '🔓 Grupo abierto. Todos los miembros ya pueden enviar mensajes.' }, { quoted: msg });
 }
 
-async function handleDebatirCommand(sock, msg, remoteJid) {
-    if (!remoteJid.endsWith('@g.us')) {
-        await sock.sendMessage(remoteJid, { text: '🦫 Este comando solo funciona en grupos' }, { quoted: msg });
-        return;
-    }
-
-    const selected = collectDebateMessagesFromReplies(msg, remoteJid);
-    if (selected.error === 'missing_anchor' || selected.error === 'no_anchor_text') {
-        await sock.sendMessage(remoteJid, { text: '🦫 Selecciona varios mensajes para debatir' }, { quoted: msg });
-        return;
-    }
-
-    if (selected.error === 'too_many') {
-        await sock.sendMessage(remoteJid, { text: '🦫 Selecciona máximo 5 mensajes' }, { quoted: msg });
-        return;
-    }
-
-    const collected = selected.messages || [];
-    if (collected.length < 2) {
-        await sock.sendMessage(remoteJid, { text: '🦫 No hay un debate claro aquí' }, { quoted: msg });
-        return;
-    }
-
-    const uniqueUsers = new Set(collected.map((m) => m.userId)).size;
-    if (uniqueUsers < 2) {
-        await sock.sendMessage(remoteJid, { text: '🦫 No hay un debate claro aquí' }, { quoted: msg });
-        return;
-    }
-
-    const lines = collected
-        .map((entry) => ({
-            userTag: jidToDisplayName(entry.userId),
-            text: sanitizeDebateText(entry.text)
-        }))
-        .filter((entry) => entry.text.length >= 3)
-        .map((entry) => `${entry.userTag}: ${entry.text}`);
-
-    if (lines.length < 2) {
-        await sock.sendMessage(remoteJid, { text: '🦫 No hay un debate claro aquí' }, { quoted: msg });
-        return;
-    }
-
-    if (!GEMINI_API_KEY) {
-        await sock.sendMessage(remoteJid, { text: getFallbackDebateText() }, { quoted: msg });
-        return;
-    }
-
-    try {
-        const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-        const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-        const prompt = getDebatePrompt(lines.join('\n'));
-        const response = await model.generateContent(prompt);
-        const output = normalizeDebateAiOutput(response?.response?.text() || '');
-
-        if (!output || !output.includes('Tema:')) {
-            await sock.sendMessage(remoteJid, { text: getFallbackDebateText() }, { quoted: msg });
-            return;
-        }
-
-        await sock.sendMessage(remoteJid, { text: output }, { quoted: msg });
-    } catch (error) {
-        await sock.sendMessage(remoteJid, { text: getFallbackDebateText() }, { quoted: msg });
-    }
-}
-
-async function handleDebatirDebugCommand(sock, msg, remoteJid) {
-    if (!remoteJid.endsWith('@g.us')) {
-        await sock.sendMessage(remoteJid, { text: '🦫 Este comando solo funciona en grupos' }, { quoted: msg });
-        return;
-    }
-
-    const selected = collectDebateMessagesFromReplies(msg, remoteJid);
-    const selectedMessages = selected.messages || [];
-    const uniqueUsers = new Set(selectedMessages.map((m) => m.userId)).size;
-    const quoted = getQuotedPayload(msg.message);
-    const cache = debateMessageCacheByGroup.get(remoteJid) || [];
-    const linkedReplies = quoted?.quotedStanzaId
-        ? cache.filter((entry) => entry.quotedStanzaId === quoted.quotedStanzaId).length
-        : 0;
-    const geminiProbe = await runDebateGeminiProbe();
-
-    const preview = selectedMessages
-        .map((entry) => `${jidToDisplayName(entry.userId)}: ${sanitizeDebateText(entry.text).slice(0, 60)}`)
-        .slice(0, 5);
-
-    const debugText = [
-        '🦫 Debate Debug',
-        `Grupo: ${remoteJid}`,
-        `Mensaje ancla citado: ${quoted?.quotedStanzaId ? 'sí' : 'no'}`,
-        `Error de selección: ${selected.error || 'none'}`,
-        `Mensajes seleccionados: ${selectedMessages.length}`,
-        `Usuarios únicos: ${uniqueUsers}`,
-        `Respuestas vinculadas al ancla: ${linkedReplies}`,
-        `Tamaño cache grupo: ${cache.length}`,
-        `Gemini API key: ${GEMINI_API_KEY ? 'configurada' : 'faltante'}`,
-        `Gemini modelo: ${GEMINI_MODEL}`,
-        `Gemini probe: ${geminiProbe.ok ? `ok (${geminiProbe.sample || 'respuesta'})` : `fail (${sanitizeText(geminiProbe.reason, 120)})`}`,
-        preview.length ? `Preview:\n${preview.join('\n')}` : 'Preview: vacío'
-    ].join('\n');
-
-    await sock.sendMessage(remoteJid, { text: debugText }, { quoted: msg });
-}
-
 app.get('/', (req, res) => {
     if (qrCodeData) {
         res.send(`
@@ -1987,9 +1717,7 @@ async function startBot() {
             return originalSendMessage(jid, content, options);
         }
         const normalizedContent = { ...(content || {}) };
-        const isDebateResult = typeof normalizedContent.text === 'string'
-            && normalizedContent.text.includes('🦫 El castor analizó el debate');
-        if (typeof normalizedContent.text === 'string' && !isDebateResult) {
+        if (typeof normalizedContent.text === 'string') {
             normalizedContent.text = brandCastorText(normalizedContent.text);
         }
         if (typeof normalizedContent.caption === 'string') {
@@ -2078,7 +1806,6 @@ async function startBot() {
                     continue;
                 }
                 const senderJid = msg.key.participant || msg.key.remoteJid;
-                storeMessageForDebate(msg, remoteJid);
 
                 if (msg.message?.reactionMessage) {
                     await handleReactionReward(sock, msg, remoteJid);
@@ -2150,10 +1877,6 @@ async function startBot() {
                     await handleDestacarCommand(sock, msg, text, remoteJid);
                 } else if (command === '.evento') {
                     await handleEventoCommand(sock, msg, text, remoteJid);
-                } else if (command === '.debatir') {
-                    await handleDebatirCommand(sock, msg, remoteJid);
-                } else if (command === '.debatirdebug') {
-                    await handleDebatirDebugCommand(sock, msg, remoteJid);
                 }
             } catch (error) {
                 console.error('Error en procesamiento de comando:', error?.message || error);
