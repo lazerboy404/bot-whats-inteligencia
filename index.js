@@ -34,7 +34,7 @@ let processErrorGuardReady = false;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reporte', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.pais', '.troncos', '.ranking', '.dique', '.perfil', '.destacar', '.evento']);
+const CASTOR_VALID_COMMANDS = new Set(['.reporte', '.reportar', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.pais', '.troncos', '.ranking', '.dique', '.perfil', '.destacar', '.evento']);
 const TRONCOS_AUTO_LIKE_THRESHOLD_1 = Number(process.env.TRONCOS_AUTO_LIKE_THRESHOLD_1 || 5);
 const TRONCOS_AUTO_LIKE_THRESHOLD_2 = Number(process.env.TRONCOS_AUTO_LIKE_THRESHOLD_2 || 10);
 const TRONCOS_DAILY_AUTO_LIMIT = Number(process.env.TRONCOS_DAILY_AUTO_LIMIT || 5);
@@ -488,49 +488,39 @@ function parseCloseDurationMs(rawText) {
 
 function getRulesText() {
     return [
-        '� *Reglas del Grupo*',
+        '✋Reglas del Grupo⚠️:',
         '',
         '🚫 *Prohibido:*',
         'Contenido sexual, erótico o +18 (incluye IA).',
-        'Contenido relacionado con menores = ban inmediato.',
         '',
         '🤝 *Normas:*',
         '• Respeto entre todos',
         '• Sin insultos ni acoso',
-        '• No spam ni cadenas',
-        '• No datos personales',
-        '• Seguir a admins'
+        '• No spam ni cadenas'
     ].join('\n');
 }
 
 function getUserCommandsText() {
     return [
-        '🛠️ *Comandos*',
+        '🛠️ *Comandos Disponibles*',
         '',
-        '• .sticker → crear sticker (responde imagen)',
+        '• .sticker → crear sticker (responder a imagen)',
         '• .troncos → ver tus 🪵',
         '• .ranking → top usuarios 🏆',
         '• .dique → progreso del grupo 🧱',
-        '• .perfil @user → info de usuario'
+        '• .reportar → reportar un usuario que pudo romper las reglas (revisión por admin, 3 faltas = ban)'
     ].join('\n');
 }
 
 function getTroncosDynamicsText() {
     return [
         '🪵 *Troncos (dinámica)*',
-        '',
         'Los troncos 🪵 son recompensas que ganas por aportar contenido de calidad en el grupo.',
         '',
-        `• ${TRONCOS_AUTO_LIKE_THRESHOLD_1} reacciones = +1 🪵`,
-        `• ${TRONCOS_AUTO_LIKE_THRESHOLD_2} reacciones = +2 🪵`,
-        '',
-        '⚠️ *Reglas:*',
-        '• 1 premio por mensaje',
-        '• No auto-like / bots',
-        `• Máx. ${TRONCOS_DAILY_AUTO_LIMIT} 🪵 por día`,
+        '• 10 reacciones positivas = +1 🪵',
+        '• 20 reacciones positivas = +2 🪵',
         '',
         '🏆 Sirven para ranking y construir el dique del grupo.',
-        '',
         '💡 Entre más calidad, más reacciones → más 🪵'
     ].join('\n');
 }
@@ -1850,7 +1840,7 @@ async function startBot() {
                 if (CASTOR_VALID_COMMANDS.has(command)) {
                     await sock.sendMessage(remoteJid, { react: { text: CASTOR_EMOJI, key: msg.key } });
                 }
-                if (command === '.reporte') {
+                if (command === '.reporte' || command === '.reportar') {
                     await handleReportCommand(sock, msg, text, remoteJid);
                 } else if (command === '.advertir') {
                     await handleWarnCommand(sock, msg, text, remoteJid);
