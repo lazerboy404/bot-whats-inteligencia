@@ -31,6 +31,9 @@ const closeTimersByGroup = new Map();
 let reconnectTimer = null;
 let reconnectDelayMs = 4000;
 let processErrorGuardReady = false;
+let activeSock = null;
+let isStartingBot = false;
+let botRunId = 0;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
@@ -1633,9 +1636,27 @@ function isTimeoutLikeError(error) {
     return msg.includes('timed out') || msg.includes('request time-out') || msg.includes('timeout');
 }
 
+function isAuthCryptoError(error) {
+    const msg = getErrorMessage(error);
+    return msg.includes('unsupported state or unable to authenticate data')
+        || msg.includes('bad decrypt')
+        || msg.includes('invalid mac');
+}
+
+function isSocketOpen(sock) {
+    return !!sock?.ws && sock.ws.readyState === 1;
+}
+
 function scheduleReconnect(reason) {
     if (reconnectTimer) {
         return;
+    }
+    if (activeSock) {
+        try {
+            activeSock.end(new Error('reconnect_requested'));
+        } catch (error) {
+        }
+        activeSock = null;
     }
     const wait = reconnectDelayMs;
     reconnectDelayMs = Math.min(BOT_RECONNECT_MAX_MS, reconnectDelayMs * 2);
@@ -1656,14 +1677,14 @@ function setupProcessErrorGuard() {
     processErrorGuardReady = true;
     process.on('unhandledRejection', (reason) => {
         console.error('UnhandledRejection detectado:', reason?.message || reason);
-        if (isTimeoutLikeError(reason)) {
-            scheduleReconnect('unhandled_timeout');
+        if (isTimeoutLikeError(reason) || isAuthCryptoError(reason)) {
+            scheduleReconnect('unhandled_connection_issue');
         }
     });
     process.on('uncaughtException', (error) => {
         console.error('UncaughtException detectado:', error?.message || error);
-        if (isTimeoutLikeError(error)) {
-            scheduleReconnect('uncaught_timeout');
+        if (isTimeoutLikeError(error) || isAuthCryptoError(error)) {
+            scheduleReconnect('uncaught_connection_issue');
             return;
         }
         scheduleReconnect('uncaught_error');
@@ -1671,103 +1692,129 @@ function setupProcessErrorGuard() {
 }
 
 async function startBot() {
-    setupProcessErrorGuard();
-    try {
-        await ensureMongo();
-    } catch (error) {
-        console.error('No se pudo conectar MongoDB al iniciar:', error?.message || error);
+    if (isStartingBot) {
+        return;
     }
-
-    let state;
-    let saveCreds;
-    if (isMongoReady && AuthStateModel) {
+    isStartingBot = true;
+    const runId = ++botRunId;
+    setupProcessErrorGuard();
         try {
-            const auth = await useMongoAuthState();
-            state = auth.state;
-            saveCreds = auth.saveCreds;
-            console.log('Sesión de WhatsApp usando MongoDB Atlas');
+        await ensureMongo();
         } catch (error) {
+        console.error('No se pudo conectar MongoDB al iniciar:', error?.message || error);
+        }
+    try {
+        if (activeSock) {
+            try {
+                activeSock.end(new Error('new_run_started'));
+            } catch (error) {
+            }
+        }
+
+        let state;
+        let saveCreds;
+        if (isMongoReady && AuthStateModel) {
+            try {
+                const auth = await useMongoAuthState();
+                state = auth.state;
+                saveCreds = auth.saveCreds;
+                console.log('Sesión de WhatsApp usando MongoDB Atlas');
+            } catch (error) {
+                const auth = await useMultiFileAuthState('auth_info_baileys');
+                state = auth.state;
+                saveCreds = auth.saveCreds;
+                console.log('Sesión de WhatsApp usando archivos locales por fallback');
+            }
+        } else {
             const auth = await useMultiFileAuthState('auth_info_baileys');
             state = auth.state;
             saveCreds = auth.saveCreds;
-            console.log('Sesión de WhatsApp usando archivos locales por fallback');
+            console.log('Sesión de WhatsApp usando archivos locales');
         }
-    } else {
-        const auth = await useMultiFileAuthState('auth_info_baileys');
-        state = auth.state;
-        saveCreds = auth.saveCreds;
-        console.log('Sesión de WhatsApp usando archivos locales');
-    }
-    const { version } = await fetchLatestBaileysVersion();
 
-    const sock = makeWASocket({
-        version,
-        logger: pino({ level: 'info' }),
-        printQRInTerminal: true,
-        auth: state,
-        browser: Browsers.ubuntu('Chrome'),
-        connectTimeoutMs: BAILEYS_CONNECT_TIMEOUT_MS,
-        defaultQueryTimeoutMs: BAILEYS_QUERY_TIMEOUT_MS,
-        keepAliveIntervalMs: BAILEYS_KEEPALIVE_MS
-    });
+        const { version } = await fetchLatestBaileysVersion();
 
-    const originalSendMessage = sock.sendMessage.bind(sock);
-    sock.sendMessage = (jid, content, options) => {
-        if (content?.react || content?.delete) {
-            return originalSendMessage(jid, content, options);
-        }
-        const normalizedContent = { ...(content || {}) };
-        if (typeof normalizedContent.text === 'string') {
-            normalizedContent.text = brandCastorText(normalizedContent.text);
-        }
-        if (typeof normalizedContent.caption === 'string') {
-            normalizedContent.caption = brandCastorText(normalizedContent.caption);
-        }
-        const task = async () => {
-            const now = Date.now();
-            const lastAt = lastSentAtByJid.get(jid) || 0;
-            const missingGap = Math.max(0, PER_CHAT_MIN_GAP_MS - (now - lastAt));
-            const randomDelay = getRandomDelay(SEND_MIN_DELAY_MS, SEND_MAX_DELAY_MS);
-            const totalDelay = missingGap + randomDelay;
-            if (totalDelay > 0) {
-                await new Promise((resolve) => setTimeout(resolve, totalDelay));
+        const sock = makeWASocket({
+            version,
+            logger: pino({ level: 'info' }),
+            printQRInTerminal: true,
+            auth: state,
+            browser: Browsers.ubuntu('Chrome'),
+            connectTimeoutMs: BAILEYS_CONNECT_TIMEOUT_MS,
+            defaultQueryTimeoutMs: BAILEYS_QUERY_TIMEOUT_MS,
+            keepAliveIntervalMs: BAILEYS_KEEPALIVE_MS
+        });
+        activeSock = sock;
+
+        const originalSendMessage = sock.sendMessage.bind(sock);
+        sock.sendMessage = (jid, content, options) => {
+            if (!isSocketOpen(sock)) {
+                return Promise.reject(new Error('Socket no disponible'));
             }
-            const result = await originalSendMessage(jid, normalizedContent, options);
-            lastSentAtByJid.set(jid, Date.now());
-            return result;
+            if (content?.react || content?.delete) {
+                return originalSendMessage(jid, content, options);
+            }
+            const normalizedContent = { ...(content || {}) };
+            if (typeof normalizedContent.text === 'string') {
+                normalizedContent.text = brandCastorText(normalizedContent.text);
+            }
+            if (typeof normalizedContent.caption === 'string') {
+                normalizedContent.caption = brandCastorText(normalizedContent.caption);
+            }
+            const task = async () => {
+                if (!isSocketOpen(sock)) {
+                    throw new Error('Connection Closed');
+                }
+                const now = Date.now();
+                const lastAt = lastSentAtByJid.get(jid) || 0;
+                const missingGap = Math.max(0, PER_CHAT_MIN_GAP_MS - (now - lastAt));
+                const randomDelay = getRandomDelay(SEND_MIN_DELAY_MS, SEND_MAX_DELAY_MS);
+                const totalDelay = missingGap + randomDelay;
+                if (totalDelay > 0) {
+                    await new Promise((resolve) => setTimeout(resolve, totalDelay));
+                }
+                const result = await originalSendMessage(jid, normalizedContent, options);
+                lastSentAtByJid.set(jid, Date.now());
+                return result;
+            };
+            const queuedResult = globalSendQueue.catch(() => null).then(task);
+            globalSendQueue = queuedResult.catch(() => null);
+            return queuedResult;
         };
-        const queuedResult = globalSendQueue.catch(() => null).then(task);
-        globalSendQueue = queuedResult.catch(() => null);
-        return queuedResult;
-    };
 
-    sock.ev.on('creds.update', saveCreds);
+        sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        if (qr) {
-            qrCodeData = qr;
-        }
-
-        if (connection === 'open') {
-            qrCodeData = null;
-            reconnectDelayMs = BOT_RECONNECT_BASE_MS;
-            console.log('✅ BOT CONECTADO A WHATSAPP');
-        }
-
-        if (connection === 'close') {
-            const code = lastDisconnect?.error?.output?.statusCode;
-            const reason = lastDisconnect?.error?.message || `code_${code || 'unknown'}`;
-            const shouldReconnect = code !== DisconnectReason.loggedOut;
-            if (shouldReconnect) {
-                scheduleReconnect(reason);
-            } else {
-                console.log('Sesión cerrada. Elimina auth_info_baileys y vuelve a iniciar para escanear de nuevo.');
+        sock.ev.on('connection.update', (update) => {
+            if (runId !== botRunId) {
+                return;
             }
-        }
-    });
+            const { connection, lastDisconnect, qr } = update;
+            if (qr) {
+                qrCodeData = qr;
+            }
 
-    sock.ev.on('group-participants.update', async (event) => {
+            if (connection === 'open') {
+                qrCodeData = null;
+                reconnectDelayMs = BOT_RECONNECT_BASE_MS;
+                console.log('✅ BOT CONECTADO A WHATSAPP');
+            }
+
+            if (connection === 'close') {
+                const code = lastDisconnect?.error?.output?.statusCode;
+                const reason = lastDisconnect?.error?.message || `code_${code || 'unknown'}`;
+                const shouldReconnect = code !== DisconnectReason.loggedOut;
+                if (shouldReconnect) {
+                    scheduleReconnect(reason);
+                } else {
+                    console.log('Sesión cerrada. Elimina auth_info_baileys y vuelve a iniciar para escanear de nuevo.');
+                }
+            }
+        });
+
+        sock.ev.on('group-participants.update', async (event) => {
+        if (runId !== botRunId || !isSocketOpen(sock)) {
+            return;
+        }
         if (event.action !== 'add') {
             return;
         }
@@ -1795,7 +1842,10 @@ async function startBot() {
         }
     });
 
-    sock.ev.on('messages.upsert', async ({ messages }) => {
+        sock.ev.on('messages.upsert', async ({ messages }) => {
+        if (runId !== botRunId || !isSocketOpen(sock)) {
+            return;
+        }
         for (const msg of messages) {
             try {
                 if (!msg.message || msg.key.fromMe) {
@@ -1883,10 +1933,16 @@ async function startBot() {
                     await handleEventoCommand(sock, msg, text, remoteJid);
                 }
             } catch (error) {
-                console.error('Error en procesamiento de comando:', error?.message || error);
+                const errorMessage = error?.message || String(error || '');
+                if (!/connection closed|socket no disponible/i.test(errorMessage)) {
+                    console.error('Error en procesamiento de comando:', errorMessage);
+                }
             }
         }
     });
+    } finally {
+        isStartingBot = false;
+    }
 }
 
 startBot().catch((error) => {
