@@ -37,6 +37,7 @@ let processErrorGuardReady = false;
 let activeSock = null;
 let isStartingBot = false;
 let botRunId = 0;
+let sessionResetDoneThisBoot = false;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
@@ -1335,7 +1336,7 @@ async function startBot() {
             }
         }
 
-        if (RESET_WA_SESSION_ON_BOOT) {
+        if (RESET_WA_SESSION_ON_BOOT && !sessionResetDoneThisBoot) {
             if (isMongoReady && AuthStateModel) {
                 await AuthStateModel.deleteMany({});
                 console.log('RESET_WA_SESSION_ON_BOOT activo: sesión de Mongo reiniciada.');
@@ -1345,6 +1346,7 @@ async function startBot() {
                 console.log('RESET_WA_SESSION_ON_BOOT activo: auth_info_baileys eliminado.');
             } catch (error) {
             }
+            sessionResetDoneThisBoot = true;
         }
 
         let state;
