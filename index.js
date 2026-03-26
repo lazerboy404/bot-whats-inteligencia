@@ -37,7 +37,7 @@ const debateMessageCacheByGroup = new Map();
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reporte', '.reportar', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.pais', '.troncos', '.ranking', '.dique', '.perfil', '.destacar', '.evento', '.debatir']);
+const CASTOR_VALID_COMMANDS = new Set(['.reporte', '.reportar', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.pais', '.troncos', '.ranking', '.dique', '.perfil', '.destacar', '.evento', '.debatir', '.debatirdebug']);
 const TRONCOS_AUTO_LIKE_THRESHOLD_1 = Number(process.env.TRONCOS_AUTO_LIKE_THRESHOLD_1 || 5);
 const TRONCOS_AUTO_LIKE_THRESHOLD_2 = Number(process.env.TRONCOS_AUTO_LIKE_THRESHOLD_2 || 10);
 const TRONCOS_DAILY_AUTO_LIMIT = Number(process.env.TRONCOS_DAILY_AUTO_LIMIT || 5);
@@ -515,6 +515,24 @@ function collectDebateMessagesFromReplies(msg, remoteJid) {
         ...replies.map((r) => ({ userId: r.userId, text: r.text }))
     ];
     return { error: null, messages: combined.slice(0, 5) };
+}
+
+async function runDebateGeminiProbe() {
+    if (!GEMINI_API_KEY) {
+        return { ok: false, reason: 'missing_api_key' };
+    }
+    try {
+        const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+        const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+        const response = await model.generateContent('Responde solo: OK');
+        const text = normalizeDebateAiOutput(response?.response?.text() || '');
+        if (!text) {
+            return { ok: false, reason: 'empty_response' };
+        }
+        return { ok: true, reason: 'ok', sample: text.slice(0, 80) };
+    } catch (error) {
+        return { ok: false, reason: error?.message || 'gemini_error' };
+    }
 }
 
 async function streamToBuffer(stream) {
@@ -1788,6 +1806,44 @@ async function handleDebatirCommand(sock, msg, remoteJid) {
     }
 }
 
+async function handleDebatirDebugCommand(sock, msg, remoteJid) {
+    if (!remoteJid.endsWith('@g.us')) {
+        await sock.sendMessage(remoteJid, { text: '🦫 Este comando solo funciona en grupos' }, { quoted: msg });
+        return;
+    }
+
+    const selected = collectDebateMessagesFromReplies(msg, remoteJid);
+    const selectedMessages = selected.messages || [];
+    const uniqueUsers = new Set(selectedMessages.map((m) => m.userId)).size;
+    const quoted = getQuotedPayload(msg.message);
+    const cache = debateMessageCacheByGroup.get(remoteJid) || [];
+    const linkedReplies = quoted?.quotedStanzaId
+        ? cache.filter((entry) => entry.quotedStanzaId === quoted.quotedStanzaId).length
+        : 0;
+    const geminiProbe = await runDebateGeminiProbe();
+
+    const preview = selectedMessages
+        .map((entry) => `${jidToDisplayName(entry.userId)}: ${sanitizeDebateText(entry.text).slice(0, 60)}`)
+        .slice(0, 5);
+
+    const debugText = [
+        '🦫 Debate Debug',
+        `Grupo: ${remoteJid}`,
+        `Mensaje ancla citado: ${quoted?.quotedStanzaId ? 'sí' : 'no'}`,
+        `Error de selección: ${selected.error || 'none'}`,
+        `Mensajes seleccionados: ${selectedMessages.length}`,
+        `Usuarios únicos: ${uniqueUsers}`,
+        `Respuestas vinculadas al ancla: ${linkedReplies}`,
+        `Tamaño cache grupo: ${cache.length}`,
+        `Gemini API key: ${GEMINI_API_KEY ? 'configurada' : 'faltante'}`,
+        `Gemini modelo: ${GEMINI_MODEL}`,
+        `Gemini probe: ${geminiProbe.ok ? `ok (${geminiProbe.sample || 'respuesta'})` : `fail (${sanitizeText(geminiProbe.reason, 120)})`}`,
+        preview.length ? `Preview:\n${preview.join('\n')}` : 'Preview: vacío'
+    ].join('\n');
+
+    await sock.sendMessage(remoteJid, { text: debugText }, { quoted: msg });
+}
+
 app.get('/', (req, res) => {
     if (qrCodeData) {
         res.send(`
@@ -2096,6 +2152,8 @@ async function startBot() {
                     await handleEventoCommand(sock, msg, text, remoteJid);
                 } else if (command === '.debatir') {
                     await handleDebatirCommand(sock, msg, remoteJid);
+                } else if (command === '.debatirdebug') {
+                    await handleDebatirDebugCommand(sock, msg, remoteJid);
                 }
             } catch (error) {
                 console.error('Error en procesamiento de comando:', error?.message || error);
