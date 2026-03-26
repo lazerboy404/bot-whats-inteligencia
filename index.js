@@ -344,7 +344,10 @@ function hasGroupInviteLink(text) {
 }
 
 function brandCastorText(value) {
-    let text = sanitizeText(value ?? '', 9000);
+    let text = String(value ?? '').trim();
+    if (text.length > 9000) {
+        text = `${text.slice(0, 9000)}...`;
+    }
     if (!text) {
         text = `${CASTOR_EMOJI} Castor Bot al habla.`;
     }
@@ -1138,7 +1141,7 @@ async function sendWelcome(sock, groupJid, participantJid) {
     const resolvedLocation = await resolveCountryAndFlag(sock, groupJid, participantJid);
     const country = resolvedLocation.country;
     const flag = resolvedLocation.flag;
-    const welcomeText = `¡Un nuevo castor ha llegado al estanque! ${CASTOR_EMOJI} Bienvenido/a ${mention}. Nos saludas desde ${country} ${flag}. Soy Castor Bot, el guardián de este dique. 🪵 ¡Ponte cómodo y ayudemos a construir!`;
+    const welcomeText = `${CASTOR_EMOJI} ¡Un nuevo castor ha llegado al estanque! Bienvenido/a ${mention}.\nNos saludas desde ${flag} ${country}. Soy Castor Bot, el guardián de este dique. ¡Ponte cómodo y ayudemos a construir!`;
 
     let profileUrl = null;
     try {
