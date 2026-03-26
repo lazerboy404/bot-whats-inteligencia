@@ -17,6 +17,13 @@ let AuthStateModel = null;
 let isMongoReady = false;
 const GROUP_INVITE_REGEX = /(chat\.whatsapp\.com\/[a-zA-Z0-9]{20,}|wa\.me\/joinlink\/)/i;
 let keepAliveInterval = null;
+const SEND_MIN_DELAY_MS = Number(process.env.SEND_MIN_DELAY_MS || 600);
+const SEND_MAX_DELAY_MS = Number(process.env.SEND_MAX_DELAY_MS || 1800);
+const PER_CHAT_MIN_GAP_MS = Number(process.env.PER_CHAT_MIN_GAP_MS || 1400);
+const KEEP_ALIVE_INTERVAL_MS = Number(process.env.KEEP_ALIVE_INTERVAL_MS || (10 * 60 * 1000));
+const lastSentAtByJid = new Map();
+let globalSendQueue = Promise.resolve();
+const closeTimersByGroup = new Map();
 
 const COUNTRY_BY_DIAL_CODE = {
     '1': 'Estados Unidos/Canadá',
@@ -292,6 +299,12 @@ async function streamToBuffer(stream) {
     return Buffer.concat(chunks);
 }
 
+function getRandomDelay(minMs, maxMs) {
+    const safeMin = Math.max(0, Number(minMs) || 0);
+    const safeMax = Math.max(safeMin, Number(maxMs) || safeMin);
+    return Math.floor(Math.random() * (safeMax - safeMin + 1)) + safeMin;
+}
+
 function getMainMessageObject(message) {
     if (!message) return null;
     if (message.ephemeralMessage?.message) return message.ephemeralMessage.message;
@@ -371,6 +384,29 @@ function parseGroupFromReportText(text) {
     const match = String(text || '').match(/Grupo:\s*([0-9\-]+@g\.us)/i);
     if (match?.[1]) return match[1];
     return null;
+}
+
+function parseCloseDurationMs(rawText) {
+    const input = sanitizeText(rawText || '').toLowerCase();
+    if (!input) {
+        return null;
+    }
+
+    const match = input.match(/(\d+)\s*(h|hr|hrs|hora|horas|m|min|mins|minuto|minutos)\b/i);
+    if (!match) {
+        return null;
+    }
+
+    const amount = Number(match[1]);
+    if (!Number.isFinite(amount) || amount <= 0) {
+        return null;
+    }
+
+    const unit = match[2].toLowerCase();
+    if (['h', 'hr', 'hrs', 'hora', 'horas'].includes(unit)) {
+        return amount * 60 * 60 * 1000;
+    }
+    return amount * 60 * 1000;
 }
 
 function getRulesText() {
@@ -809,6 +845,101 @@ async function handleGhostsCommand(sock, msg, text, remoteJid) {
     await sock.sendMessage(remoteJid, { text: '✅ Lista de inactivos enviada por privado al administrador.' }, { quoted: msg });
 }
 
+async function ensureBotIsAdmin(sock, remoteJid) {
+    if (!sock?.user?.id) {
+        return false;
+    }
+    return isGroupAdmin(sock, remoteJid, sock.user.id);
+}
+
+async function handleCloseGroupCommand(sock, msg, text, remoteJid) {
+    if (!remoteJid.endsWith('@g.us')) {
+        await sock.sendMessage(remoteJid, { text: 'El comando .cerrar solo funciona en grupos.' }, { quoted: msg });
+        return;
+    }
+
+    const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
+    if (!isAuthorized) {
+        await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
+        return;
+    }
+
+    const botIsAdmin = await ensureBotIsAdmin(sock, remoteJid);
+    if (!botIsAdmin) {
+        await sock.sendMessage(remoteJid, { text: 'Necesito ser administrador del grupo para cerrarlo.' }, { quoted: msg });
+        return;
+    }
+
+    const rawDuration = sanitizeText(text).replace(/^\.cerrar\s*/i, '').trim();
+    if (rawDuration) {
+        const durationMs = parseCloseDurationMs(rawDuration);
+        if (!durationMs) {
+            await sock.sendMessage(remoteJid, { text: 'Formato inválido. Usa por ejemplo: .cerrar 20min o .cerrar 1 hora' }, { quoted: msg });
+            return;
+        }
+
+        const activeTimer = closeTimersByGroup.get(remoteJid);
+        if (activeTimer?.timer) {
+            clearTimeout(activeTimer.timer);
+        }
+
+        await sock.groupSettingUpdate(remoteJid, 'announcement');
+        const reopenAt = new Date(Date.now() + durationMs);
+        const reopenAtLabel = reopenAt.toLocaleString('es-MX', { hour12: false });
+        await sock.sendMessage(remoteJid, { text: `🔒 Grupo cerrado por ${rawDuration}. Se abrirá automáticamente el ${reopenAtLabel}.` }, { quoted: msg });
+
+        const timer = setTimeout(async () => {
+            try {
+                await sock.groupSettingUpdate(remoteJid, 'not_announcement');
+                await sock.sendMessage(remoteJid, { text: '🔓 El grupo se abrió automáticamente. Ya todos pueden enviar mensajes.' });
+            } catch (error) {
+            } finally {
+                closeTimersByGroup.delete(remoteJid);
+            }
+        }, durationMs);
+
+        closeTimersByGroup.set(remoteJid, { timer, reopenAt });
+        return;
+    }
+
+    const activeTimer = closeTimersByGroup.get(remoteJid);
+    if (activeTimer?.timer) {
+        clearTimeout(activeTimer.timer);
+        closeTimersByGroup.delete(remoteJid);
+    }
+
+    await sock.groupSettingUpdate(remoteJid, 'announcement');
+    await sock.sendMessage(remoteJid, { text: '🔒 Grupo cerrado hasta nuevo aviso. Solo administradores pueden enviar mensajes.' }, { quoted: msg });
+}
+
+async function handleOpenGroupCommand(sock, msg, remoteJid) {
+    if (!remoteJid.endsWith('@g.us')) {
+        await sock.sendMessage(remoteJid, { text: 'El comando .abrir solo funciona en grupos.' }, { quoted: msg });
+        return;
+    }
+
+    const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
+    if (!isAuthorized) {
+        await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
+        return;
+    }
+
+    const botIsAdmin = await ensureBotIsAdmin(sock, remoteJid);
+    if (!botIsAdmin) {
+        await sock.sendMessage(remoteJid, { text: 'Necesito ser administrador del grupo para abrirlo.' }, { quoted: msg });
+        return;
+    }
+
+    const activeTimer = closeTimersByGroup.get(remoteJid);
+    if (activeTimer?.timer) {
+        clearTimeout(activeTimer.timer);
+        closeTimersByGroup.delete(remoteJid);
+    }
+
+    await sock.groupSettingUpdate(remoteJid, 'not_announcement');
+    await sock.sendMessage(remoteJid, { text: '🔓 Grupo abierto. Todos los miembros ya pueden enviar mensajes.' }, { quoted: msg });
+}
+
 app.get('/', (req, res) => {
     if (qrCodeData) {
         res.send(`
@@ -852,7 +983,7 @@ function startKeepAlive() {
             await fetch(renderUrl);
         } catch (error) {
         }
-    }, 10 * 60 * 1000);
+    }, KEEP_ALIVE_INTERVAL_MS);
 }
 
 async function startBot() {
@@ -891,6 +1022,24 @@ async function startBot() {
         auth: state,
         browser: Browsers.ubuntu('Chrome')
     });
+
+    const originalSendMessage = sock.sendMessage.bind(sock);
+    sock.sendMessage = (jid, content, options) => {
+        globalSendQueue = globalSendQueue.then(async () => {
+            const now = Date.now();
+            const lastAt = lastSentAtByJid.get(jid) || 0;
+            const missingGap = Math.max(0, PER_CHAT_MIN_GAP_MS - (now - lastAt));
+            const randomDelay = getRandomDelay(SEND_MIN_DELAY_MS, SEND_MAX_DELAY_MS);
+            const totalDelay = missingGap + randomDelay;
+            if (totalDelay > 0) {
+                await new Promise((resolve) => setTimeout(resolve, totalDelay));
+            }
+            const result = await originalSendMessage(jid, content, options);
+            lastSentAtByJid.set(jid, Date.now());
+            return result;
+        });
+        return globalSendQueue;
+    };
 
     sock.ev.on('creds.update', saveCreds);
 
@@ -999,6 +1148,10 @@ async function startBot() {
                     await handleStickerCommand(sock, msg, remoteJid);
                 } else if (command === '.fantasmas') {
                     await handleGhostsCommand(sock, msg, text, remoteJid);
+                } else if (command === '.cerrar') {
+                    await handleCloseGroupCommand(sock, msg, text, remoteJid);
+                } else if (command === '.abrir') {
+                    await handleOpenGroupCommand(sock, msg, remoteJid);
                 }
             } catch (error) {
                 console.error('Error en procesamiento de comando:', error?.message || error);
