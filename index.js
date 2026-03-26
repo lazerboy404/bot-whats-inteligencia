@@ -14,10 +14,6 @@ const reportCooldownByUser = new Map();
 const reportReferenceMap = new Map();
 let ModRecordModel = null;
 let AuthStateModel = null;
-let TroncoUserModel = null;
-let TroncoMessageModel = null;
-let DiqueGroupModel = null;
-let EventoGroupModel = null;
 let isMongoReady = false;
 const GROUP_INVITE_REGEX = /(chat\.whatsapp\.com\/[a-zA-Z0-9]{20,}|wa\.me\/joinlink\/)/i;
 let keepAliveInterval = null;
@@ -42,11 +38,7 @@ let botRunId = 0;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reporte', '.reportar', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.pais', '.troncos', '.ranking', '.dique', '.perfil', '.destacar', '.evento']);
-const TRONCOS_AUTO_LIKE_THRESHOLD_1 = Number(process.env.TRONCOS_AUTO_LIKE_THRESHOLD_1 || 5);
-const TRONCOS_AUTO_LIKE_THRESHOLD_2 = Number(process.env.TRONCOS_AUTO_LIKE_THRESHOLD_2 || 10);
-const TRONCOS_DAILY_AUTO_LIMIT = Number(process.env.TRONCOS_DAILY_AUTO_LIMIT || 5);
-const DIQUE_LEVELS = [100, 300, 700];
+const CASTOR_VALID_COMMANDS = new Set(['.reporte', '.reportar', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.pais']);
 const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
 const BAILEYS_CONNECT_TIMEOUT_MS = Number(process.env.BAILEYS_CONNECT_TIMEOUT_MS || 60000);
 const BAILEYS_KEEPALIVE_MS = Number(process.env.BAILEYS_KEEPALIVE_MS || 30000);
@@ -513,23 +505,10 @@ function getUserCommandsText() {
         '🛠️ *Comandos Disponibles*',
         '',
         '* .sticker → crear sticker (responder a imagen)',
-        '* .troncos → ver tus 🪵',
-        '* .ranking → top usuarios 🏆',
-        '* .dique → progreso del grupo 🧱',
-        '* .reportar → reportar un usuario que pudo romper las reglas (revisión por admin, 3 faltas = ban)'
-    ].join('\n');
-}
-
-function getTroncosDynamicsText() {
-    return [
-        '🪵 *Troncos (dinámica)*',
-        'Los troncos 🪵 son recompensas que ganas por aportar contenido de calidad en el grupo.',
-        '',
-        '* 10 reacciones positivas = +1 🪵',
-        '* 20 reacciones positivas = +2 🪵',
-        '',
-        '🏆 Sirven para ranking y construir el dique del grupo.',
-        '💡 Entre más calidad, más reacciones → más 🪵'
+        '* .reportar → reportar un usuario que pudo romper las reglas (revisión por admin, 3 faltas = ban)',
+        '* .fantasmas [días] → lista de inactivos (solo admin)',
+        '* .cerrar [tiempo] / .abrir → controlar mensajes del grupo (solo admin)',
+        '* .pais @usuario País 🇲🇽 → fijar país de bienvenida (solo admin)'
     ].join('\n');
 }
 
@@ -571,58 +550,6 @@ async function ensureMongo() {
         AuthStateModel = mongoose.model('AuthState', authSchema, 'wa_auth_state');
     } else {
         AuthStateModel = mongoose.model('AuthState');
-    }
-
-    if (!mongoose.models.TroncoUser) {
-        const troncoUserSchema = new mongoose.Schema({
-            groupJid: { type: String, required: true, index: true },
-            userId: { type: String, required: true, index: true },
-            troncos: { type: Number, default: 0 },
-            autoTodayDate: { type: String, default: '' },
-            autoTodayEarned: { type: Number, default: 0 }
-        });
-        troncoUserSchema.index({ groupJid: 1, userId: 1 }, { unique: true });
-        TroncoUserModel = mongoose.model('TroncoUser', troncoUserSchema, 'beaver_troncos_users');
-    } else {
-        TroncoUserModel = mongoose.model('TroncoUser');
-    }
-
-    if (!mongoose.models.TroncoMessage) {
-        const troncoMessageSchema = new mongoose.Schema({
-            groupJid: { type: String, required: true, index: true },
-            messageId: { type: String, required: true, index: true },
-            senderId: { type: String, required: true },
-            reactors: { type: [String], default: [] },
-            troncosAwarded: { type: Number, default: 0 },
-            awardedAt: { type: Date, default: null }
-        });
-        troncoMessageSchema.index({ groupJid: 1, messageId: 1 }, { unique: true });
-        TroncoMessageModel = mongoose.model('TroncoMessage', troncoMessageSchema, 'beaver_troncos_messages');
-    } else {
-        TroncoMessageModel = mongoose.model('TroncoMessage');
-    }
-
-    if (!mongoose.models.DiqueGroup) {
-        const diqueSchema = new mongoose.Schema({
-            groupJid: { type: String, required: true, unique: true, index: true },
-            totalTroncos: { type: Number, default: 0 }
-        });
-        DiqueGroupModel = mongoose.model('DiqueGroup', diqueSchema, 'beaver_diques');
-    } else {
-        DiqueGroupModel = mongoose.model('DiqueGroup');
-    }
-
-    if (!mongoose.models.EventoGroup) {
-        const eventoSchema = new mongoose.Schema({
-            groupJid: { type: String, required: true, unique: true, index: true },
-            isActive: { type: Boolean, default: false },
-            title: { type: String, default: '' },
-            rewardParticipation: { type: Number, default: 1 },
-            rewardWin: { type: Number, default: 2 }
-        });
-        EventoGroupModel = mongoose.model('EventoGroup', eventoSchema, 'beaver_eventos');
-    } else {
-        EventoGroupModel = mongoose.model('EventoGroup');
     }
 
     isMongoReady = true;
@@ -708,316 +635,6 @@ function touchLastActivityAsync(userId) {
     }
     upsertModRecord(userId, { $set: { ultimaActividad: new Date() } }).catch(() => {});
 }
-
-function getTodayKey() {
-    const now = new Date();
-    return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')}`;
-}
-
-function getRangoByTroncos(troncos) {
-    if (troncos >= 60) return 'Maestro del Dique';
-    if (troncos >= 20) return 'Constructor';
-    return 'Novato';
-}
-
-function jidToDisplayName(userId) {
-    const num = getNumberFromJid(userId);
-    return num ? `@${num}` : sanitizeText(userId, 60);
-}
-
-async function ensureTroncoUser(groupJid, userId) {
-    return TroncoUserModel.findOneAndUpdate(
-        { groupJid, userId },
-        { $setOnInsert: { troncos: 0, autoTodayDate: '', autoTodayEarned: 0 } },
-        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
-    );
-}
-
-async function addTroncos(groupJid, userId, amount, reason, options = {}) {
-    if (!isMongoReady || !groupJid || !userId || amount <= 0) {
-        return { credited: 0, totalUser: 0, totalGroup: 0 };
-    }
-    const respectDailyLimit = !!options.respectDailyLimit;
-    const todayKey = getTodayKey();
-    const user = await ensureTroncoUser(groupJid, userId);
-
-    let credited = amount;
-    if (respectDailyLimit) {
-        const todayEarned = user.autoTodayDate === todayKey ? user.autoTodayEarned : 0;
-        const remaining = Math.max(0, TRONCOS_DAILY_AUTO_LIMIT - todayEarned);
-        credited = Math.min(amount, remaining);
-    }
-    if (credited <= 0) {
-        return { credited: 0, totalUser: user.troncos, totalGroup: 0 };
-    }
-
-    const update = { $inc: { troncos: credited } };
-    if (respectDailyLimit) {
-        if (user.autoTodayDate !== todayKey) {
-            update.$set = { autoTodayDate: todayKey, autoTodayEarned: credited };
-        } else {
-            update.$inc.autoTodayEarned = credited;
-        }
-    }
-    const updatedUser = await TroncoUserModel.findOneAndUpdate(
-        { groupJid, userId },
-        update,
-        { returnDocument: 'after' }
-    );
-
-    const updatedGroup = await DiqueGroupModel.findOneAndUpdate(
-        { groupJid },
-        { $inc: { totalTroncos: credited } },
-        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
-    );
-
-    return {
-        credited,
-        totalUser: updatedUser?.troncos || 0,
-        totalGroup: updatedGroup?.totalTroncos || 0,
-        reason: sanitizeText(reason, 80)
-    };
-}
-
-async function getDiqueStats(groupJid) {
-    const group = await DiqueGroupModel.findOneAndUpdate(
-        { groupJid },
-        { $setOnInsert: { totalTroncos: 0 } },
-        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
-    );
-    const total = group?.totalTroncos || 0;
-    let level = 0;
-    for (const threshold of DIQUE_LEVELS) {
-        if (total >= threshold) level += 1;
-    }
-    const nextThreshold = DIQUE_LEVELS.find((v) => total < v) || null;
-    return { total, level, nextThreshold };
-}
-
-async function handleReactionReward(sock, msg, remoteJid) {
-    if (!isMongoReady || !remoteJid.endsWith('@g.us')) {
-        return;
-    }
-    const reactionMessage = msg.message?.reactionMessage;
-    const targetKey = reactionMessage?.key;
-    const reactionText = sanitizeText(reactionMessage?.text || '', 8);
-    if (!targetKey?.id || !reactionText) {
-        return;
-    }
-
-    const reactorJid = msg.key.participant || msg.key.remoteJid;
-    if (!reactorJid || reactorJid === targetKey.participant || reactorJid === sock.user?.id) {
-        return;
-    }
-
-    const senderId = targetKey.participant || targetKey.remoteJid;
-    if (!senderId) {
-        return;
-    }
-
-    const record = await TroncoMessageModel.findOneAndUpdate(
-        { groupJid: remoteJid, messageId: targetKey.id },
-        {
-            $setOnInsert: { senderId, troncosAwarded: 0, reactors: [] },
-            $addToSet: { reactors: reactorJid }
-        },
-        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
-    );
-
-    if (!record || record.troncosAwarded > 0) {
-        return;
-    }
-
-    const validReactors = (record.reactors || []).filter((jid) => jid !== senderId && jid !== sock.user?.id);
-    const likes = validReactors.length;
-    let reward = 0;
-    if (likes >= TRONCOS_AUTO_LIKE_THRESHOLD_2) {
-        reward = 2;
-    } else if (likes >= TRONCOS_AUTO_LIKE_THRESHOLD_1) {
-        reward = 1;
-    }
-    if (!reward) {
-        return;
-    }
-
-    const lock = await TroncoMessageModel.findOneAndUpdate(
-        { groupJid: remoteJid, messageId: targetKey.id, troncosAwarded: 0 },
-        { $set: { troncosAwarded: reward, awardedAt: new Date() } },
-        { returnDocument: 'after' }
-    );
-    if (!lock) {
-        return;
-    }
-
-    const added = await addTroncos(remoteJid, senderId, reward, 'calidad_por_reacciones', { respectDailyLimit: true });
-    if (!added.credited) {
-        return;
-    }
-
-    const mention = jidToDisplayName(senderId);
-    await sock.sendMessage(remoteJid, {
-        text: `¡Misión Dique Cumplida! ${mention} ganó 🪵 +${added.credited} por contenido de calidad (${likes} reacciones).`,
-        mentions: mention.startsWith('@') ? [senderId] : []
-    });
-}
-
-async function handleTroncosCommand(sock, msg, remoteJid) {
-    if (!isMongoReady || !remoteJid.endsWith('@g.us')) {
-        await sock.sendMessage(remoteJid, { text: 'Necesito MongoDB y un grupo para revisar troncos.' }, { quoted: msg });
-        return;
-    }
-    const userId = msg.key.participant || msg.key.remoteJid;
-    const user = await ensureTroncoUser(remoteJid, userId);
-    const rango = getRangoByTroncos(user.troncos || 0);
-    await sock.sendMessage(remoteJid, { text: `Tienes 🪵 ${user.troncos || 0}. Rango actual: ${rango}.` }, { quoted: msg });
-}
-
-async function handleRankingCommand(sock, msg, remoteJid) {
-    if (!isMongoReady || !remoteJid.endsWith('@g.us')) {
-        await sock.sendMessage(remoteJid, { text: 'Necesito MongoDB y un grupo para mostrar ranking.' }, { quoted: msg });
-        return;
-    }
-    const top = await TroncoUserModel.find({ groupJid: remoteJid }).sort({ troncos: -1 }).limit(10).lean();
-    if (!top.length) {
-        await sock.sendMessage(remoteJid, { text: 'Aún no hay troncos registrados en el estanque.' }, { quoted: msg });
-        return;
-    }
-    const lines = top.map((u, idx) => `${idx + 1}. ${jidToDisplayName(u.userId)} — 🪵 ${u.troncos || 0}`);
-    await sock.sendMessage(remoteJid, { text: `🏆 Ranking del dique\n${lines.join('\n')}` }, { quoted: msg });
-}
-
-async function handleDiqueCommand(sock, msg, remoteJid) {
-    if (!isMongoReady || !remoteJid.endsWith('@g.us')) {
-        await sock.sendMessage(remoteJid, { text: 'Necesito MongoDB y un grupo para mostrar progreso del dique.' }, { quoted: msg });
-        return;
-    }
-    const stats = await getDiqueStats(remoteJid);
-    const next = stats.nextThreshold ? `${stats.nextThreshold - stats.total} troncos para el siguiente nivel.` : 'El dique alcanzó el máximo nivel configurado.';
-    await sock.sendMessage(remoteJid, { text: `🧱 Progreso del dique\nTotal colectivo: 🪵 ${stats.total}\nNivel actual: ${stats.level}\n${next}` }, { quoted: msg });
-}
-
-async function handlePerfilCommand(sock, msg, text, remoteJid) {
-    if (!isMongoReady || !remoteJid.endsWith('@g.us')) {
-        await sock.sendMessage(remoteJid, { text: 'Necesito MongoDB y un grupo para mostrar perfil.' }, { quoted: msg });
-        return;
-    }
-    const target = parseTargetFromTextOrMention(msg, text) || (msg.key.participant || msg.key.remoteJid);
-    const user = await ensureTroncoUser(remoteJid, target);
-    const stats = await getDiqueStats(remoteJid);
-    const percent = stats.total > 0 ? ((user.troncos / stats.total) * 100).toFixed(1) : '0.0';
-    const mention = jidToDisplayName(target);
-    await sock.sendMessage(remoteJid, {
-        text: `📦 Perfil del castor ${mention}\nTroncos: 🪵 ${user.troncos}\nRango: ${getRangoByTroncos(user.troncos)}\nAportación al dique: ${percent}%`,
-        mentions: mention.startsWith('@') ? [target] : []
-    }, { quoted: msg });
-}
-
-async function handleDestacarCommand(sock, msg, text, remoteJid) {
-    if (!remoteJid.endsWith('@g.us')) {
-        await sock.sendMessage(remoteJid, { text: 'El comando .destacar solo funciona en grupos.' }, { quoted: msg });
-        return;
-    }
-    const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
-    if (!isAuthorized) {
-        await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
-        return;
-    }
-    if (!isMongoReady) {
-        await sock.sendMessage(remoteJid, { text: 'Necesito MongoDB para gestionar troncos.' }, { quoted: msg });
-        return;
-    }
-    const target = parseTargetFromTextOrMention(msg, text);
-    if (!target) {
-        await sock.sendMessage(remoteJid, { text: 'Uso: .destacar @usuario [2|3]' }, { quoted: msg });
-        return;
-    }
-    const amount = text.includes(' 3') ? 3 : 2;
-    const added = await addTroncos(remoteJid, target, amount, 'destacado_admin');
-    await sendCastorSealSticker(sock, remoteJid, msg);
-    await sock.sendMessage(remoteJid, {
-        text: `Contenido destacado. ${jidToDisplayName(target)} recibe 🪵 +${added.credited}.`,
-        mentions: [target]
-    }, { quoted: msg });
-}
-
-async function handleEventoCommand(sock, msg, text, remoteJid) {
-    if (!remoteJid.endsWith('@g.us')) {
-        await sock.sendMessage(remoteJid, { text: 'El comando .evento solo funciona en grupos.' }, { quoted: msg });
-        return;
-    }
-    const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
-    if (!isAuthorized) {
-        await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
-        return;
-    }
-    if (!isMongoReady) {
-        await sock.sendMessage(remoteJid, { text: 'Necesito MongoDB para gestionar eventos.' }, { quoted: msg });
-        return;
-    }
-
-    const parts = sanitizeText(text).split(/\s+/);
-    const sub = (parts[1] || '').toLowerCase();
-    const target = parseTargetFromTextOrMention(msg, text);
-
-    if (sub === 'on' || sub === 'iniciar') {
-        const title = sanitizeText(parts.slice(2).join(' '), 80) || 'Dinámica activa';
-        await EventoGroupModel.findOneAndUpdate(
-            { groupJid: remoteJid },
-            { $set: { isActive: true, title } },
-            { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
-        );
-        await sock.sendMessage(remoteJid, { text: `🎯 Evento activado: ${title}. Usa .evento participar @usuario o .evento ganar @usuario.` }, { quoted: msg });
-        return;
-    }
-
-    if (sub === 'off' || sub === 'cerrar') {
-        await EventoGroupModel.findOneAndUpdate(
-            { groupJid: remoteJid },
-            { $set: { isActive: false } },
-            { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
-        );
-        await sock.sendMessage(remoteJid, { text: '🎯 Evento desactivado en el estanque.' }, { quoted: msg });
-        return;
-    }
-
-    const eventState = await EventoGroupModel.findOneAndUpdate(
-        { groupJid: remoteJid },
-        { $setOnInsert: { isActive: false, title: '', rewardParticipation: 1, rewardWin: 2 } },
-        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
-    );
-
-    if (sub === 'estado' || !sub) {
-        const status = eventState.isActive ? `Activo: ${eventState.title}` : 'Inactivo';
-        await sock.sendMessage(remoteJid, { text: `🎯 Estado del evento: ${status}.` }, { quoted: msg });
-        return;
-    }
-
-    if (!eventState.isActive) {
-        await sock.sendMessage(remoteJid, { text: 'No hay evento activo. Usa .evento on [titulo].' }, { quoted: msg });
-        return;
-    }
-
-    if (!target) {
-        await sock.sendMessage(remoteJid, { text: 'Debes mencionar a un usuario para premiar en el evento.' }, { quoted: msg });
-        return;
-    }
-
-    let amount = 0;
-    if (sub === 'participar') amount = eventState.rewardParticipation || 1;
-    if (sub === 'ganar') amount = eventState.rewardWin || 2;
-    if (!amount) {
-        await sock.sendMessage(remoteJid, { text: 'Subcomando no válido. Usa .evento participar @usuario o .evento ganar @usuario.' }, { quoted: msg });
-        return;
-    }
-
-    const added = await addTroncos(remoteJid, target, amount, `evento_${sub}`);
-    await sendCastorSealSticker(sock, remoteJid, msg);
-    await sock.sendMessage(remoteJid, {
-        text: `Evento registrado. ${jidToDisplayName(target)} gana 🪵 +${added.credited}.`,
-        mentions: [target]
-    }, { quoted: msg });
-}
-
 async function sendPrivateAdminMessage(sock, text) {
     const adminJid = getAdminJid();
     await sock.sendMessage(adminJid, { text: sanitizeText(text, 9000) });
@@ -1191,11 +808,7 @@ async function sendWelcome(sock, groupJid, participantJid) {
         '',
         getRulesText()
     ].join('\n');
-    const commandsAndTroncosText = [
-        getUserCommandsText(),
-        '',
-        getTroncosDynamicsText()
-    ].join('\n');
+    const commandsInfoText = getUserCommandsText();
 
     let profileUrl = null;
     try {
@@ -1214,7 +827,7 @@ async function sendWelcome(sock, groupJid, participantJid) {
         });
         if (!SAFE_COMPACT_WELCOME) {
             await sock.sendMessage(groupJid, {
-                text: commandsAndTroncosText
+                text: commandsInfoText
             });
         }
     } catch (error) {
@@ -1224,7 +837,7 @@ async function sendWelcome(sock, groupJid, participantJid) {
         });
         if (!SAFE_COMPACT_WELCOME) {
             await sock.sendMessage(groupJid, {
-                text: commandsAndTroncosText
+                text: commandsInfoText
             });
         }
     }
@@ -1867,7 +1480,6 @@ async function startBot() {
                 const senderJid = msg.key.participant || msg.key.remoteJid;
 
                 if (msg.message?.reactionMessage) {
-                    await handleReactionReward(sock, msg, remoteJid);
                     continue;
                 }
 
@@ -1928,18 +1540,6 @@ async function startBot() {
                     await handleOpenGroupCommand(sock, msg, remoteJid);
                 } else if (command === '.pais') {
                     await handleSetCountryCommand(sock, msg, text, remoteJid);
-                } else if (command === '.troncos') {
-                    await handleTroncosCommand(sock, msg, remoteJid);
-                } else if (command === '.ranking') {
-                    await handleRankingCommand(sock, msg, remoteJid);
-                } else if (command === '.dique') {
-                    await handleDiqueCommand(sock, msg, remoteJid);
-                } else if (command === '.perfil') {
-                    await handlePerfilCommand(sock, msg, text, remoteJid);
-                } else if (command === '.destacar') {
-                    await handleDestacarCommand(sock, msg, text, remoteJid);
-                } else if (command === '.evento') {
-                    await handleEventoCommand(sock, msg, text, remoteJid);
                 }
             } catch (error) {
                 const errorMessage = error?.message || String(error || '');
