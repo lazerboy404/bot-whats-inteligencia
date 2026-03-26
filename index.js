@@ -28,6 +28,9 @@ const KEEP_ALIVE_INTERVAL_MS = Number(process.env.KEEP_ALIVE_INTERVAL_MS || (10 
 const lastSentAtByJid = new Map();
 let globalSendQueue = Promise.resolve();
 const closeTimersByGroup = new Map();
+let reconnectTimer = null;
+let reconnectDelayMs = 4000;
+let processErrorGuardReady = false;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
@@ -36,6 +39,11 @@ const TRONCOS_AUTO_LIKE_THRESHOLD_1 = Number(process.env.TRONCOS_AUTO_LIKE_THRES
 const TRONCOS_AUTO_LIKE_THRESHOLD_2 = Number(process.env.TRONCOS_AUTO_LIKE_THRESHOLD_2 || 10);
 const TRONCOS_DAILY_AUTO_LIMIT = Number(process.env.TRONCOS_DAILY_AUTO_LIMIT || 5);
 const DIQUE_LEVELS = [100, 300, 700];
+const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
+const BAILEYS_CONNECT_TIMEOUT_MS = Number(process.env.BAILEYS_CONNECT_TIMEOUT_MS || 60000);
+const BAILEYS_KEEPALIVE_MS = Number(process.env.BAILEYS_KEEPALIVE_MS || 30000);
+const BOT_RECONNECT_BASE_MS = Number(process.env.BOT_RECONNECT_BASE_MS || 4000);
+const BOT_RECONNECT_MAX_MS = Number(process.env.BOT_RECONNECT_MAX_MS || 45000);
 const FLAG_BY_DIAL_CODE = {
     '1': '🇺🇸',
     '34': '🇪🇸',
@@ -1568,7 +1576,58 @@ function startKeepAlive() {
     }, KEEP_ALIVE_INTERVAL_MS);
 }
 
+function getErrorMessage(error) {
+    return String(error?.message || error || '').toLowerCase();
+}
+
+function isTimeoutLikeError(error) {
+    const statusCode = error?.output?.statusCode || error?.data?.statusCode || error?.statusCode;
+    if (statusCode === 408) {
+        return true;
+    }
+    const msg = getErrorMessage(error);
+    return msg.includes('timed out') || msg.includes('request time-out') || msg.includes('timeout');
+}
+
+function scheduleReconnect(reason) {
+    if (reconnectTimer) {
+        return;
+    }
+    const wait = reconnectDelayMs;
+    reconnectDelayMs = Math.min(BOT_RECONNECT_MAX_MS, reconnectDelayMs * 2);
+    console.log(`Reintentando conexión en ${wait}ms. Motivo: ${reason}`);
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        startBot().catch((error) => {
+            console.error('Error al reintentar inicio del bot:', error?.message || error);
+            scheduleReconnect('fallo_reintento');
+        });
+    }, wait);
+}
+
+function setupProcessErrorGuard() {
+    if (processErrorGuardReady) {
+        return;
+    }
+    processErrorGuardReady = true;
+    process.on('unhandledRejection', (reason) => {
+        console.error('UnhandledRejection detectado:', reason?.message || reason);
+        if (isTimeoutLikeError(reason)) {
+            scheduleReconnect('unhandled_timeout');
+        }
+    });
+    process.on('uncaughtException', (error) => {
+        console.error('UncaughtException detectado:', error?.message || error);
+        if (isTimeoutLikeError(error)) {
+            scheduleReconnect('uncaught_timeout');
+            return;
+        }
+        scheduleReconnect('uncaught_error');
+    });
+}
+
 async function startBot() {
+    setupProcessErrorGuard();
     try {
         await ensureMongo();
     } catch (error) {
@@ -1602,7 +1661,10 @@ async function startBot() {
         logger: pino({ level: 'info' }),
         printQRInTerminal: true,
         auth: state,
-        browser: Browsers.ubuntu('Chrome')
+        browser: Browsers.ubuntu('Chrome'),
+        connectTimeoutMs: BAILEYS_CONNECT_TIMEOUT_MS,
+        defaultQueryTimeoutMs: BAILEYS_QUERY_TIMEOUT_MS,
+        keepAliveIntervalMs: BAILEYS_KEEPALIVE_MS
     });
 
     const originalSendMessage = sock.sendMessage.bind(sock);
@@ -1643,14 +1705,16 @@ async function startBot() {
 
         if (connection === 'open') {
             qrCodeData = null;
+            reconnectDelayMs = BOT_RECONNECT_BASE_MS;
             console.log('✅ BOT CONECTADO A WHATSAPP');
         }
 
         if (connection === 'close') {
             const code = lastDisconnect?.error?.output?.statusCode;
+            const reason = lastDisconnect?.error?.message || `code_${code || 'unknown'}`;
             const shouldReconnect = code !== DisconnectReason.loggedOut;
             if (shouldReconnect) {
-                startBot();
+                scheduleReconnect(reason);
             } else {
                 console.log('Sesión cerrada. Elimina auth_info_baileys y vuelve a iniciar para escanear de nuevo.');
             }
