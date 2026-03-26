@@ -21,10 +21,15 @@ let EventoGroupModel = null;
 let isMongoReady = false;
 const GROUP_INVITE_REGEX = /(chat\.whatsapp\.com\/[a-zA-Z0-9]{20,}|wa\.me\/joinlink\/)/i;
 let keepAliveInterval = null;
-const SEND_MIN_DELAY_MS = Number(process.env.SEND_MIN_DELAY_MS || 600);
-const SEND_MAX_DELAY_MS = Number(process.env.SEND_MAX_DELAY_MS || 1800);
-const PER_CHAT_MIN_GAP_MS = Number(process.env.PER_CHAT_MIN_GAP_MS || 1400);
+const SAFE_MODE = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAFE_MODE || '').toLowerCase());
+const SEND_MIN_DELAY_MS = Number(process.env.SEND_MIN_DELAY_MS || (SAFE_MODE ? 1800 : 600));
+const SEND_MAX_DELAY_MS = Number(process.env.SEND_MAX_DELAY_MS || (SAFE_MODE ? 4200 : 1800));
+const PER_CHAT_MIN_GAP_MS = Number(process.env.PER_CHAT_MIN_GAP_MS || (SAFE_MODE ? 3600 : 1400));
 const KEEP_ALIVE_INTERVAL_MS = Number(process.env.KEEP_ALIVE_INTERVAL_MS || (10 * 60 * 1000));
+const SAFE_DISABLE_SEAL_STICKER = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAFE_DISABLE_SEAL_STICKER || (SAFE_MODE ? 'true' : 'false')).toLowerCase());
+const SAFE_DISABLE_COMMAND_REACT = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAFE_DISABLE_COMMAND_REACT || (SAFE_MODE ? 'true' : 'false')).toLowerCase());
+const SAFE_DISABLE_AUTO_KICK = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAFE_DISABLE_AUTO_KICK || (SAFE_MODE ? 'true' : 'false')).toLowerCase());
+const SAFE_COMPACT_WELCOME = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAFE_COMPACT_WELCOME || (SAFE_MODE ? 'true' : 'false')).toLowerCase());
 const lastSentAtByJid = new Map();
 let globalSendQueue = Promise.resolve();
 const closeTimersByGroup = new Map();
@@ -1207,17 +1212,21 @@ async function sendWelcome(sock, groupJid, participantJid) {
             caption: welcomeAndRulesText,
             mentions: number ? [participantJid] : []
         });
-        await sock.sendMessage(groupJid, {
-            text: commandsAndTroncosText
-        });
+        if (!SAFE_COMPACT_WELCOME) {
+            await sock.sendMessage(groupJid, {
+                text: commandsAndTroncosText
+            });
+        }
     } catch (error) {
         await sock.sendMessage(groupJid, {
             text: welcomeAndRulesText,
             mentions: number ? [participantJid] : []
         });
-        await sock.sendMessage(groupJid, {
-            text: commandsAndTroncosText
-        });
+        if (!SAFE_COMPACT_WELCOME) {
+            await sock.sendMessage(groupJid, {
+                text: commandsAndTroncosText
+            });
+        }
     }
 }
 
@@ -1399,7 +1408,7 @@ async function handleStickerCommand(sock, msg, remoteJid) {
 }
 
 async function sendCastorSealSticker(sock, remoteJid, quotedMsg) {
-    if (!CASTOR_SEAL_STICKER_URL) {
+    if (!CASTOR_SEAL_STICKER_URL || SAFE_DISABLE_SEAL_STICKER) {
         return;
     }
     try {
@@ -1417,7 +1426,7 @@ async function applyWarning(sock, targetJid, groupJid, reason) {
     let kicked = false;
     if (warningCount >= 3) {
         await upsertModRecord(targetJid, { $set: { isBanned: true } });
-        if (groupJid) {
+        if (groupJid && !SAFE_DISABLE_AUTO_KICK) {
             try {
                 await sock.groupParticipantsUpdate(groupJid, [targetJid], 'remove');
                 kicked = true;
@@ -1900,7 +1909,7 @@ async function startBot() {
                 }
 
                 const command = text.trim().split(/\s+/)[0].toLowerCase();
-                if (CASTOR_VALID_COMMANDS.has(command)) {
+                if (CASTOR_VALID_COMMANDS.has(command) && !SAFE_DISABLE_COMMAND_REACT) {
                     await sock.sendMessage(remoteJid, { react: { text: CASTOR_EMOJI, key: msg.key } });
                 }
                 if (command === '.reporte' || command === '.reportar') {
