@@ -1392,9 +1392,6 @@ async function startBot() {
 
         const originalSendMessage = sock.sendMessage.bind(sock);
         sock.sendMessage = (jid, content, options) => {
-            if (!isSocketOpen(sock)) {
-                return Promise.reject(new Error('Socket no disponible'));
-            }
             if (content?.react || content?.delete) {
                 return originalSendMessage(jid, content, options);
             }
@@ -1406,9 +1403,6 @@ async function startBot() {
                 normalizedContent.caption = brandCastorText(normalizedContent.caption);
             }
             const task = async () => {
-                if (!isSocketOpen(sock)) {
-                    throw new Error('Connection Closed');
-                }
                 const now = Date.now();
                 const lastAt = lastSentAtByJid.get(jid) || 0;
                 const missingGap = Math.max(0, PER_CHAT_MIN_GAP_MS - (now - lastAt));
@@ -1456,7 +1450,7 @@ async function startBot() {
         });
 
         sock.ev.on('group-participants.update', async (event) => {
-        if (runId !== botRunId || !isSocketOpen(sock)) {
+        if (runId !== botRunId) {
             return;
         }
         if (event.action !== 'add') {
@@ -1487,7 +1481,7 @@ async function startBot() {
     });
 
         sock.ev.on('messages.upsert', async ({ messages }) => {
-        if (runId !== botRunId || !isSocketOpen(sock)) {
+        if (runId !== botRunId) {
             return;
         }
         for (const msg of messages) {
