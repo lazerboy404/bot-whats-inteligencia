@@ -29,7 +29,7 @@ const lastSentAtByJid = new Map();
 let globalSendQueue = Promise.resolve();
 const closeTimersByGroup = new Map();
 const CASTOR_EMOJI = '🦫';
-const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/github/explore/main/topics/mongodb/mongodb.png';
+const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
 const CASTOR_VALID_COMMANDS = new Set(['.reporte', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.pais', '.troncos', '.ranking', '.dique', '.perfil', '.destacar', '.evento']);
 const TRONCOS_AUTO_LIKE_THRESHOLD_1 = Number(process.env.TRONCOS_AUTO_LIKE_THRESHOLD_1 || 5);
@@ -1009,6 +1009,11 @@ function extractCandidateNumber(value) {
     return cleanDigits(raw);
 }
 
+function isLikelyPhoneNumber(number) {
+    const digits = cleanDigits(number);
+    return digits.length >= 10 && digits.length <= 15;
+}
+
 async function resolveCountryAndFlag(sock, groupJid, participantJid) {
     if (isMongoReady) {
         const overrideRecord = await getModRecord(participantJid);
@@ -1034,10 +1039,26 @@ async function resolveCountryAndFlag(sock, groupJid, participantJid) {
         const participants = metadata?.participants || [];
         const target = participants.find((p) => p.id === participantJid || p.lid === participantJid);
         if (target) {
-            const candidates = [target.id, target.lid, target.phoneNumber, target.pn, target.jid];
+            const candidates = [
+                { key: 'id', value: target.id },
+                { key: 'phoneNumber', value: target.phoneNumber },
+                { key: 'pn', value: target.pn },
+                { key: 'jid', value: target.jid },
+                { key: 'lid', value: target.lid }
+            ];
             for (const candidate of candidates) {
-                const candidateNumber = extractCandidateNumber(candidate);
-                if (candidateNumber.length >= 8) {
+                const raw = String(candidate.value || '');
+                if (!raw) {
+                    continue;
+                }
+                const domain = getDomainFromJid(raw);
+                const isPhoneJidCandidate = domain === 's.whatsapp.net';
+                const isPhoneFieldCandidate = (candidate.key === 'phoneNumber' || candidate.key === 'pn') && isLikelyPhoneNumber(raw);
+                if (!isPhoneJidCandidate && !isPhoneFieldCandidate) {
+                    continue;
+                }
+                const candidateNumber = extractCandidateNumber(raw);
+                if (isLikelyPhoneNumber(candidateNumber)) {
                     return {
                         country: getCountryFromNumber(candidateNumber),
                         flag: getFlagFromNumber(candidateNumber)
