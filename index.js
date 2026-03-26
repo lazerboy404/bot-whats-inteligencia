@@ -590,9 +590,9 @@ function getRulesText() {
         'Contenido sexual, erótico o +18 (incluye IA).',
         '',
         '🤝 *Normas:*',
-        '• Respeto entre todos',
-        '• Sin insultos ni acoso',
-        '• No spam ni cadenas'
+        '* Respeto entre todos',
+        '* Sin insultos ni acoso',
+        '* No spam ni cadenas'
     ].join('\n');
 }
 
@@ -600,11 +600,11 @@ function getUserCommandsText() {
     return [
         '🛠️ *Comandos Disponibles*',
         '',
-        '• .sticker → crear sticker (responder a imagen)',
-        '• .troncos → ver tus 🪵',
-        '• .ranking → top usuarios 🏆',
-        '• .dique → progreso del grupo 🧱',
-        '• .reportar → reportar un usuario que pudo romper las reglas (revisión por admin, 3 faltas = ban)'
+        '* .sticker → crear sticker (responder a imagen)',
+        '* .troncos → ver tus 🪵',
+        '* .ranking → top usuarios 🏆',
+        '* .dique → progreso del grupo 🧱',
+        '* .reportar → reportar un usuario que pudo romper las reglas (revisión por admin, 3 faltas = ban)'
     ].join('\n');
 }
 
@@ -613,8 +613,8 @@ function getTroncosDynamicsText() {
         '🪵 *Troncos (dinámica)*',
         'Los troncos 🪵 son recompensas que ganas por aportar contenido de calidad en el grupo.',
         '',
-        '• 10 reacciones positivas = +1 🪵',
-        '• 20 reacciones positivas = +2 🪵',
+        '* 10 reacciones positivas = +1 🪵',
+        '* 20 reacciones positivas = +2 🪵',
         '',
         '🏆 Sirven para ranking y construir el dique del grupo.',
         '💡 Entre más calidad, más reacciones → más 🪵'
@@ -1273,12 +1273,13 @@ async function sendWelcome(sock, groupJid, participantJid) {
     const resolvedLocation = await resolveCountryAndFlag(sock, groupJid, participantJid);
     const country = resolvedLocation.country;
     const flag = resolvedLocation.flag;
-    const welcomeText = [
+    const welcomeAndRulesText = [
         `${CASTOR_EMOJI} ¡Un nuevo castor ha llegado al estanque! Bienvenido/a ${mention}.`,
         `Nos saludas desde ${flag} ${country}. Soy Castor Bot, el guardián de este dique. ¡Ponte cómodo y ayudemos a construir!`,
         '',
-        getRulesText(),
-        '',
+        getRulesText()
+    ].join('\n');
+    const commandsAndTroncosText = [
         getUserCommandsText(),
         '',
         getTroncosDynamicsText()
@@ -1296,13 +1297,19 @@ async function sendWelcome(sock, groupJid, participantJid) {
     try {
         await sock.sendMessage(groupJid, {
             image: { url: imageUrl },
-            caption: welcomeText,
+            caption: welcomeAndRulesText,
             mentions: number ? [participantJid] : []
+        });
+        await sock.sendMessage(groupJid, {
+            text: commandsAndTroncosText
         });
     } catch (error) {
         await sock.sendMessage(groupJid, {
-            text: welcomeText,
+            text: welcomeAndRulesText,
             mentions: number ? [participantJid] : []
+        });
+        await sock.sendMessage(groupJid, {
+            text: commandsAndTroncosText
         });
     }
 }
