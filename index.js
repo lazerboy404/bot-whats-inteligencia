@@ -1815,7 +1815,11 @@ async function startBot() {
                 const text = extractTextFromMessage(msg.message);
                 let senderIsAdmin = false;
                 if (remoteJid.endsWith('@g.us')) {
-                    senderIsAdmin = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
+                    try {
+                        senderIsAdmin = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
+                    } catch (error) {
+                        senderIsAdmin = false;
+                    }
                 }
 
                 if (!senderIsAdmin) {
