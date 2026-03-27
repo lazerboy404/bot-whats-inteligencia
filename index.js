@@ -45,7 +45,7 @@ let lastCommandHandledAt = 0;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random']);
+const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random']);
 const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
 const BAILEYS_CONNECT_TIMEOUT_MS = Number(process.env.BAILEYS_CONNECT_TIMEOUT_MS || 60000);
 const BAILEYS_KEEPALIVE_MS = Number(process.env.BAILEYS_KEEPALIVE_MS || 30000);
@@ -1001,6 +1001,59 @@ async function handleUnbanCommand(sock, msg, text, remoteJid) {
     }, { quoted: msg });
 }
 
+async function handleBanCommand(sock, msg, text, remoteJid) {
+    const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
+    if (!isAuthorized) {
+        await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
+        return;
+    }
+    if (!isMongoReady) {
+        await sock.sendMessage(remoteJid, { text: 'Moderación no disponible: MongoDB no está conectado.' }, { quoted: msg });
+        return;
+    }
+
+    const resolved = await resolveTargetForModeration(msg, text);
+    if (!resolved.targetJid) {
+        await sock.sendMessage(remoteJid, { text: 'Usa .ban con mención, ID o respondiendo al reporte.' }, { quoted: msg });
+        return;
+    }
+
+    const currentGroup = remoteJid.endsWith('@g.us') ? remoteJid : resolved.groupFromReport;
+    if (!currentGroup) {
+        await sock.sendMessage(remoteJid, { text: 'Para usar .ban necesito conocer el grupo de origen.' }, { quoted: msg });
+        return;
+    }
+    if (await isGroupAdmin(sock, currentGroup, resolved.targetJid)) {
+        await sock.sendMessage(remoteJid, { text: 'No puedes banear a un administrador del grupo.' }, { quoted: msg });
+        return;
+    }
+
+    const botIsAdmin = await ensureBotIsAdmin(sock, currentGroup);
+    if (!botIsAdmin) {
+        await sock.sendMessage(remoteJid, { text: 'Necesito ser administrador del grupo para banear usuarios.' }, { quoted: msg });
+        return;
+    }
+
+    await upsertModRecord(resolved.targetJid, { $set: { isBanned: true } });
+
+    let removed = false;
+    try {
+        await sock.groupParticipantsUpdate(currentGroup, [resolved.targetJid], 'remove');
+        removed = true;
+    } catch (error) {
+        removed = false;
+    }
+
+    const mention = `@${getNumberFromJid(resolved.targetJid) || 'usuario'}`;
+    const resultText = removed
+        ? `⛔ ${mention} fue baneado y eliminado del grupo.`
+        : `⛔ ${mention} quedó marcado como baneado, pero no pude eliminarlo del grupo.`;
+    await sock.sendMessage(remoteJid, {
+        text: resultText,
+        mentions: [resolved.targetJid]
+    }, { quoted: msg });
+}
+
 async function handleStickerCommand(sock, msg, remoteJid) {
     const quoted = getQuotedPayload(msg.message);
     if (!quoted?.quotedMessage) {
@@ -1685,6 +1738,8 @@ async function startBot() {
                     await handleReportCommand(sock, msg, text, remoteJid);
                 } else if (command === '.advertir') {
                     await handleWarnCommand(sock, msg, text, remoteJid);
+                } else if (command === '.ban') {
+                    await handleBanCommand(sock, msg, text, remoteJid);
                 } else if (command === '.unban') {
                     await handleUnbanCommand(sock, msg, text, remoteJid);
                 } else if (command === '.sticker') {
