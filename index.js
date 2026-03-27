@@ -697,6 +697,18 @@ function getParticipantDisplayName(participant, fallbackJid = '') {
     return 'Usuario sin nombre visible';
 }
 
+function getParticipantMentionLabel(participant, fallbackJid = '') {
+    const visibleName = sanitizeText(participant?.notify || participant?.name || participant?.pushName || '', 40);
+    if (visibleName) {
+        return visibleName.replace(/\s+/g, '_');
+    }
+    const phone = sanitizeText(getNumberFromJid(participant?.id || fallbackJid || '') || '', 40);
+    if (phone) {
+        return phone;
+    }
+    return 'usuario';
+}
+
 async function senderIsAuthorizedAdmin(sock, msg, remoteJid) {
     const senderJid = msg.key.participant || msg.key.remoteJid;
     const senderNumber = getNumberFromJid(senderJid);
@@ -1168,9 +1180,11 @@ async function handleRandomCommand(sock, msg, remoteJid) {
     }
 
     const selectedJid = candidates[Math.floor(Math.random() * candidates.length)];
-    const displayName = await getGroupDisplayName(sock, remoteJid, selectedJid);
+    const selectedParticipant = (metadata.participants || []).find((participant) => participant.id === selectedJid) || null;
+    const displayName = getParticipantDisplayName(selectedParticipant, selectedJid);
+    const mentionLabel = getParticipantMentionLabel(selectedParticipant, selectedJid);
     await sock.sendMessage(remoteJid, {
-        text: `🎲 El castor eligió a @${getNumberFromJid(selectedJid)} (${displayName})`,
+        text: `🎲 El castor eligió a @${mentionLabel} (${displayName})`,
         mentions: [selectedJid]
     }, { quoted: msg });
 }
