@@ -1182,12 +1182,17 @@ async function sendBatchedWelcome(sock, groupJid, participantJids) {
     const title = isMultiple
         ? `${CASTOR_EMOJI} ¡Nuevos castores han llegado al estanque! Bienvenidos:`
         : `${CASTOR_EMOJI} ¡Un nuevo castor ha llegado al estanque! Bienvenido/a:`;
+    let locationLine = 'Soy Castor Bot, el guardián de este dique. ¡Pónganse cómodos y ayudemos a construir!';
+    if (!isMultiple && mentionsArray[0]) {
+        const resolvedLocation = await resolveCountryAndFlag(sock, groupJid, mentionsArray[0]);
+        locationLine = `Nos saludas desde ${resolvedLocation.flag} ${resolvedLocation.country}. Soy Castor Bot, el guardián de este dique. ¡Ponte cómodo y ayudemos a construir!`;
+    }
 
     const welcomeAndRulesText = [
         title,
         welcomeMentions.join(', '),
         '',
-        'Soy Castor Bot, el guardián de este dique. ¡Pónganse cómodos y ayudemos a construir!',
+        locationLine,
         '',
         getRulesText()
     ].join('\n');
