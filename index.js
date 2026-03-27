@@ -1591,12 +1591,6 @@ async function handleCloseGroupCommand(sock, msg, text, remoteJid) {
         return;
     }
 
-    const botIsAdmin = await ensureBotIsAdmin(sock, remoteJid);
-    if (!botIsAdmin) {
-        await sock.sendMessage(remoteJid, { text: 'Necesito ser administrador del grupo para cerrarlo.' }, { quoted: msg });
-        return;
-    }
-
     const rawDuration = sanitizeText(text).replace(/^\.cerrar\s*/i, '').trim();
     if (rawDuration) {
         const durationMs = parseCloseDurationMs(rawDuration);
@@ -1610,7 +1604,12 @@ async function handleCloseGroupCommand(sock, msg, text, remoteJid) {
             clearTimeout(activeTimer.timer);
         }
 
-        await sock.groupSettingUpdate(remoteJid, 'announcement');
+        try {
+            await sock.groupSettingUpdate(remoteJid, 'announcement');
+        } catch (error) {
+            await sock.sendMessage(remoteJid, { text: 'Necesito ser administrador del grupo para cerrarlo.' }, { quoted: msg });
+            return;
+        }
         const reopenAt = new Date(Date.now() + durationMs);
         const reopenAtLabel = reopenAt.toLocaleString('es-MX', { hour12: false });
         await sock.sendMessage(remoteJid, { text: `🔒 Grupo cerrado por ${rawDuration}. Se abrirá automáticamente el ${reopenAtLabel}.` }, { quoted: msg });
@@ -1635,7 +1634,12 @@ async function handleCloseGroupCommand(sock, msg, text, remoteJid) {
         closeTimersByGroup.delete(remoteJid);
     }
 
-    await sock.groupSettingUpdate(remoteJid, 'announcement');
+    try {
+        await sock.groupSettingUpdate(remoteJid, 'announcement');
+    } catch (error) {
+        await sock.sendMessage(remoteJid, { text: 'Necesito ser administrador del grupo para cerrarlo.' }, { quoted: msg });
+        return;
+    }
     await sock.sendMessage(remoteJid, { text: '🔒 Grupo cerrado hasta nuevo aviso. Solo administradores pueden enviar mensajes.' }, { quoted: msg });
 }
 
@@ -1651,19 +1655,18 @@ async function handleOpenGroupCommand(sock, msg, remoteJid) {
         return;
     }
 
-    const botIsAdmin = await ensureBotIsAdmin(sock, remoteJid);
-    if (!botIsAdmin) {
-        await sock.sendMessage(remoteJid, { text: 'Necesito ser administrador del grupo para abrirlo.' }, { quoted: msg });
-        return;
-    }
-
     const activeTimer = closeTimersByGroup.get(remoteJid);
     if (activeTimer?.timer) {
         clearTimeout(activeTimer.timer);
         closeTimersByGroup.delete(remoteJid);
     }
 
-    await sock.groupSettingUpdate(remoteJid, 'not_announcement');
+    try {
+        await sock.groupSettingUpdate(remoteJid, 'not_announcement');
+    } catch (error) {
+        await sock.sendMessage(remoteJid, { text: 'Necesito ser administrador del grupo para abrirlo.' }, { quoted: msg });
+        return;
+    }
     await sock.sendMessage(remoteJid, { text: '🔓 Grupo abierto. Todos los miembros ya pueden enviar mensajes.' }, { quoted: msg });
 }
 
