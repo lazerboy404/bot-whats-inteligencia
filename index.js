@@ -676,10 +676,10 @@ function getRulesText() {
     return [
         '✋Reglas del Grupo⚠️:',
         '',
-        '🚫 *Prohibido:*',
+        '🚫 Prohibido:',
         'Contenido sexual, erótico o +18 (incluye IA).',
         '',
-        '🤝 *Normas:*',
+        '🤝 Normas:',
         '* Respeto entre todos',
         '* Sin insultos ni acoso',
         '* No spam ni cadenas'
@@ -897,7 +897,12 @@ function touchLastActivityAsync(userId) {
     }).catch(() => {});
 }
 async function sendPrivateAdminMessage(sock, text) {
-    const payload = { text: sanitizeText(text, 9000) };
+    const payload = typeof text === 'string'
+        ? { text: sanitizeText(text, 9000) }
+        : {
+            ...(text || {}),
+            text: typeof text?.text === 'string' ? sanitizeText(text.text, 9000) : text?.text
+        };
     let lastError = null;
     const adminJids = await resolveAdminJids(sock);
     for (const adminJid of adminJids) {
@@ -968,6 +973,21 @@ function getModerationReferenceText(jid) {
         return digits ? `${digits} (ID interno de WhatsApp)` : rawJid;
     }
     return digits || rawJid;
+}
+
+function getReadableReportIdentity(info) {
+    const label = sanitizeText(info?.mentionLabel || '', 60);
+    const displayName = sanitizeText(info?.displayName || '', 120);
+    if (label && displayName && label !== displayName) {
+        return `@${label} (${displayName})`;
+    }
+    if (label) {
+        return `@${label}`;
+    }
+    if (displayName) {
+        return displayName;
+    }
+    return 'Usuario';
 }
 
 async function getGroupParticipantSummary(sock, groupJid, userJid) {
@@ -1090,7 +1110,7 @@ async function sendWelcome(sock, groupJid, participantJid) {
     const country = resolvedLocation.country;
     const flag = resolvedLocation.flag;
     const welcomeAndRulesText = [
-        `${CASTOR_EMOJI} ¡Un nuevo castor ha llegado al estanque! Bienvenido/a ${mention}.`,
+        `${CASTOR_EMOJI} ¡Un nuevo castor ha llegado al estanque! Bienvenido/a ${mention}`,
         `Nos saludas desde ${flag} ${country}. Soy Castor Bot, el guardián de este dique. ¡Ponte cómodo y ayudemos a construir!`,
         '',
         getRulesText()
@@ -1164,14 +1184,16 @@ async function handleReportCommand(sock, msg, text, remoteJid) {
     const offenderInfo = await getGroupParticipantSummary(sock, remoteJid, offenderId);
     const motive = sanitizeText(text).split(/\s+/).slice(1).join(' ');
     const cleanMotive = motive || 'Sin motivo adicional.';
+    const reporterReadable = getReadableReportIdentity(reporterInfo);
+    const offenderReadable = getReadableReportIdentity(offenderInfo);
 
     const reportText = [
         '🧾 REPORTE FORENSE',
         `Grupo: ${reporterInfo.groupName}`,
-        `Reportante: ${reporterInfo.displayName}`,
+        `Reportante: ${reporterReadable}`,
         `Referencia reportante: ${reporterInfo.moderationReference}`,
         `ID reportante: ${reporterId}`,
-        `Infractor: ${offenderInfo.displayName}`,
+        `Infractor: ${offenderReadable}`,
         `Referencia infractor: ${offenderInfo.moderationReference}`,
         `ID infractor: ${offenderId}`,
         `Motivo: ${cleanMotive}`,
@@ -1185,7 +1207,10 @@ async function handleReportCommand(sock, msg, text, remoteJid) {
     ].join('\n');
 
     try {
-        const sentReport = await sendPrivateAdminMessage(sock, reportText);
+        const sentReport = await sendPrivateAdminMessage(sock, {
+            text: reportText,
+            mentions: [reporterId, offenderId]
+        });
         reportReferenceMap.set(sentReport.key.id, { offenderJid: offenderId, groupJid: remoteJid });
         await sendPrivateAdminMessage(sock, `.advertir ${offenderId}`);
         await sock.sendMessage(remoteJid, { text: '✅ Reporte recibido. Evidencia preservada y enviada a administración.' }, { quoted: msg });
