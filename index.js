@@ -507,10 +507,15 @@ function getRulesText() {
 
 function getUserCommandsText() {
     return [
-        '🛠️ *Comandos Disponibles*',
+        '🦫 🛠️ *Comandos Disponibles*',
         '',
-        '* .sticker → crear sticker (responder a imagen)',
-        '* .reportar → reportar un usuario que pudo romper las reglas (revisión por admin, 3 faltas = ban)'
+        '.sticker → crear sticker de una imagen (responder a imagen)',
+        '',
+        '.reportar → reportar un usuario que pudo romper las reglas',
+        '(debes citar el mensaje a reportar)',
+        '(revisión por admin, 3 faltas = ban)',
+        '',
+        '🦫 Castor Bot: Estamos reforzando la presa en el dique.'
     ].join('\n');
 }
 
