@@ -1301,7 +1301,9 @@ async function handleWarnCommand(sock, msg, text, remoteJid) {
 
     const resultText = result.kicked
         ? `⛔ ${mention} alcanzó 3/3 advertencias y fue expulsado automáticamente.`
-        : `⛔ ${mention} alcanzó 3/3 advertencias y quedó marcado como baneado. No pude expulsarlo automáticamente.`;
+        : result.kickPermissionDenied
+            ? `⛔ ${mention} alcanzó 3/3 advertencias y quedó marcado como baneado. Necesito ser administrador del grupo para expulsarlo automáticamente.`
+            : `⛔ ${mention} alcanzó 3/3 advertencias y quedó marcado como baneado. No pude expulsarlo automáticamente.`;
     await sock.sendMessage(remoteJid, { text: resultText, mentions: [resolved.targetJid] }, { quoted: msg });
 }
 
@@ -1360,12 +1362,6 @@ async function handleBanCommand(sock, msg, text, remoteJid) {
         return;
     }
 
-    const botIsAdmin = await ensureBotIsAdmin(sock, currentGroup);
-    if (!botIsAdmin) {
-        await sock.sendMessage(remoteJid, { text: 'Necesito ser administrador del grupo para banear usuarios.' }, { quoted: msg });
-        return;
-    }
-
     await upsertModRecord(resolved.targetJid, { $set: { isBanned: true } });
 
     let removed = false;
@@ -1373,7 +1369,8 @@ async function handleBanCommand(sock, msg, text, remoteJid) {
         await sock.groupParticipantsUpdate(currentGroup, [resolved.targetJid], 'remove');
         removed = true;
     } catch (error) {
-        removed = false;
+        await sock.sendMessage(remoteJid, { text: 'Necesito ser administrador del grupo para banear usuarios.' }, { quoted: msg });
+        return;
     }
 
     const mention = `@${getNumberFromJid(resolved.targetJid) || 'usuario'}`;
@@ -1428,6 +1425,7 @@ async function applyWarning(sock, targetJid, groupJid, reason) {
     });
     const warningCount = record.advertencias;
     let kicked = false;
+    let kickPermissionDenied = false;
     if (warningCount >= 3) {
         await upsertModRecord(targetJid, { $set: { isBanned: true } });
         if (groupJid && !SAFE_DISABLE_AUTO_KICK) {
@@ -1436,10 +1434,11 @@ async function applyWarning(sock, targetJid, groupJid, reason) {
                 kicked = true;
             } catch (error) {
                 kicked = false;
+                kickPermissionDenied = true;
             }
         }
     }
-    return { warningCount, kicked };
+    return { warningCount, kicked, kickPermissionDenied };
 }
 
 async function handleGhostsCommand(sock, msg, text, remoteJid) {
