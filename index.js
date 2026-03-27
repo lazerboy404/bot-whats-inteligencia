@@ -42,7 +42,7 @@ let sessionResetDoneThisBoot = false;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.cerra', '.abrir', '.ping']);
+const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping']);
 const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
 const BAILEYS_CONNECT_TIMEOUT_MS = Number(process.env.BAILEYS_CONNECT_TIMEOUT_MS || 60000);
 const BAILEYS_KEEPALIVE_MS = Number(process.env.BAILEYS_KEEPALIVE_MS || 30000);
@@ -743,63 +743,6 @@ async function resolveCountryAndFlag(sock, groupJid, participantJid) {
     };
 }
 
-async function handleSetCountryCommand(sock, msg, text, remoteJid) {
-    if (!remoteJid.endsWith('@g.us')) {
-        await sock.sendMessage(remoteJid, { text: 'El comando .pais solo funciona en grupos.' }, { quoted: msg });
-        return;
-    }
-
-    const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
-    if (!isAuthorized) {
-        await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
-        return;
-    }
-
-    if (!isMongoReady) {
-        await sock.sendMessage(remoteJid, { text: 'Para usar .pais necesito MongoDB conectado.' }, { quoted: msg });
-        return;
-    }
-
-    const quoted = getQuotedPayload(msg.message);
-    const targetJid = parseTargetFromTextOrMention(msg, text) || quoted?.quotedParticipant;
-    if (!targetJid) {
-        await sock.sendMessage(remoteJid, { text: 'Uso: .pais @usuario México 🇲🇽 o responde al mensaje del usuario con .pais México 🇲🇽' }, { quoted: msg });
-        return;
-    }
-
-    const targetNumber = getNumberFromJid(targetJid);
-    let payload = sanitizeText(text).replace(/^\.pais\s*/i, '').trim();
-    if (targetNumber) {
-        payload = payload.replace(new RegExp(`@?${targetNumber}`, 'g'), '').trim();
-    }
-    payload = payload.replace(targetJid, '').trim();
-
-    if (!payload) {
-        await sock.sendMessage(remoteJid, { text: 'Debes indicar país y opcional bandera. Ejemplo: .pais @usuario México 🇲🇽' }, { quoted: msg });
-        return;
-    }
-
-    const indicatorChars = [...payload].filter((ch) => {
-        const cp = ch.codePointAt(0);
-        return cp >= 0x1F1E6 && cp <= 0x1F1FF;
-    });
-    const flag = indicatorChars.length >= 2 ? indicatorChars.slice(-2).join('') : '🌍';
-    const country = payload.replace(flag, '').trim() || payload;
-
-    await upsertModRecord(targetJid, {
-        $set: {
-            countryOverride: country,
-            flagOverride: flag
-        }
-    });
-
-    const mention = targetNumber ? `@${targetNumber}` : '@usuario';
-    await sock.sendMessage(remoteJid, {
-        text: `País manual guardado para ${mention}: ${country} ${flag}.`,
-        mentions: targetNumber ? [targetJid] : []
-    }, { quoted: msg });
-}
-
 async function sendWelcome(sock, groupJid, participantJid) {
     const number = getNumberFromJid(participantJid);
     const mention = number ? `@${number}` : '@usuario';
@@ -1133,11 +1076,11 @@ async function handleCloseGroupCommand(sock, msg, text, remoteJid) {
         return;
     }
 
-    const rawDuration = sanitizeText(text).replace(/^\.cerr(?:ar|a)\s*/i, '').trim();
+    const rawDuration = sanitizeText(text).replace(/^\.cerrar\s*/i, '').trim();
     if (rawDuration) {
         const durationMs = parseCloseDurationMs(rawDuration);
         if (!durationMs) {
-            await sock.sendMessage(remoteJid, { text: 'Formato inválido. Usa por ejemplo: .cerrar 20 min, .cerrar 7 horas o .cerra 5 minutos' }, { quoted: msg });
+            await sock.sendMessage(remoteJid, { text: 'Formato inválido. Usa por ejemplo: .cerrar 20 min o .cerrar 7 horas' }, { quoted: msg });
             return;
         }
 
@@ -1204,8 +1147,12 @@ async function handleOpenGroupCommand(sock, msg, remoteJid) {
 }
 
 async function handlePingCommand(sock, msg, remoteJid) {
-    const mode = ALLOW_SELF_COMMANDS ? 'self_on' : 'self_off';
-    await sock.sendMessage(remoteJid, { text: `✅ Castor Bot activo. Modo comandos propios: ${mode}.` }, { quoted: msg });
+    const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
+    if (!isAuthorized) {
+        await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
+        return;
+    }
+    await sock.sendMessage(remoteJid, { text: '✅ Castor Bot activo.' }, { quoted: msg });
 }
 
 app.get('/', (req, res) => {
@@ -1574,7 +1521,7 @@ async function startBot() {
                     await handleStickerCommand(sock, msg, remoteJid);
                 } else if (command === '.fantasmas') {
                     await handleGhostsCommand(sock, msg, text, remoteJid);
-                } else if (command === '.cerrar' || command === '.cerra') {
+                } else if (command === '.cerrar') {
                     await handleCloseGroupCommand(sock, msg, text, remoteJid);
                 } else if (command === '.abrir') {
                     await handleOpenGroupCommand(sock, msg, remoteJid);
