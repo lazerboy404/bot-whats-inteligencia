@@ -60,7 +60,7 @@ let incomingBufferTimeout = null;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.miid', '.setadmin']);
+const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.comandos', '.reglas', '.miid', '.setadmin']);
 const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
 const BAILEYS_CONNECT_TIMEOUT_MS = Number(process.env.BAILEYS_CONNECT_TIMEOUT_MS || 60000);
 const BAILEYS_KEEPALIVE_MS = Number(process.env.BAILEYS_KEEPALIVE_MS || 30000);
@@ -706,6 +706,10 @@ function getUserCommandsText() {
         '.top → muestra los usuarios más activos del grupo',
         '',
         '.random → menciona alguien al azar',
+        '',
+        '.comandos → muestra la lista de comandos para usuarios',
+        '',
+        '.reglas → muestra las reglas del grupo',
         '',
         getCastorSignatureText()
     ].join('\n');
@@ -1672,6 +1676,14 @@ async function handlePingCommand(sock, msg, remoteJid) {
     await sock.sendMessage(remoteJid, { text: '✅ Castor Bot activo.' }, { quoted: msg });
 }
 
+async function handleCommandsListCommand(sock, msg, remoteJid) {
+    await sock.sendMessage(remoteJid, { text: getUserCommandsText() }, { quoted: msg });
+}
+
+async function handleRulesCommand(sock, msg, remoteJid) {
+    await sock.sendMessage(remoteJid, { text: getRulesText() }, { quoted: msg });
+}
+
 async function handleMyIdCommand(sock, msg, remoteJid) {
     const senderJid = msg.key.participant || msg.key.remoteJid;
     const senderNumber = getNumberFromJid(senderJid);
@@ -1959,6 +1971,10 @@ async function processIncomingMessage(sock, msg, runId) {
         await handleOpenGroupCommand(sock, msg, remoteJid);
     } else if (command === '.ping') {
         await handlePingCommand(sock, msg, remoteJid);
+    } else if (command === '.comandos') {
+        await handleCommandsListCommand(sock, msg, remoteJid);
+    } else if (command === '.reglas') {
+        await handleRulesCommand(sock, msg, remoteJid);
     } else if (command === '.miid') {
         await handleMyIdCommand(sock, msg, remoteJid);
     } else if (command === '.setadmin') {
