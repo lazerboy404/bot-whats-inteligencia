@@ -451,7 +451,7 @@ function parseTargetFromTextOrMention(msg, text) {
 
     const arg = sanitizeText(text).split(/\s+/).slice(1).find(Boolean);
     if (!arg) return null;
-    if (arg.includes('@s.whatsapp.net')) {
+    if (arg.includes('@')) {
         return arg;
     }
     const digits = cleanDigits(arg);
@@ -462,7 +462,7 @@ function parseTargetFromTextOrMention(msg, text) {
 }
 
 function parseTargetFromReportText(text) {
-    const match = String(text || '').match(/ID infractor:\s*([0-9]+@s\.whatsapp\.net)/i);
+    const match = String(text || '').match(/ID infractor:\s*([^\s]+)/i);
     if (match?.[1]) return match[1];
     return null;
 }
@@ -1096,7 +1096,8 @@ async function handleGhostsCommand(sock, msg, text, remoteJid) {
             const lastActivityText = rec?.ultimaActividad
                 ? new Date(rec.ultimaActividad).toISOString().slice(0, 10)
                 : 'sin registro';
-            inactive.push(`• ${name} - última actividad: ${lastActivityText}`);
+            const moderationId = sanitizeText(participant.id, 160);
+            inactive.push(`• ${name} - última actividad: ${lastActivityText}\n  ID moderación: ${moderationId}`);
         }
     }
 
