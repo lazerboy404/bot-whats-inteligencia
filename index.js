@@ -2172,7 +2172,15 @@ async function startBot() {
                 const randomDelay = getRandomDelay(SEND_MIN_DELAY_MS, SEND_MAX_DELAY_MS);
                 const totalDelay = missingGap + randomDelay;
                 if (totalDelay > 0) {
+                    try {
+                        await sock.sendPresenceUpdate('composing', jid);
+                    } catch (error) {
+                    }
                     await new Promise((resolve) => setTimeout(resolve, totalDelay));
+                    try {
+                        await sock.sendPresenceUpdate('paused', jid);
+                    } catch (error) {
+                    }
                 }
                 const result = await withTimeout(originalSendMessage(jid, normalizedContent, options), SEND_ACTION_TIMEOUT_MS, 'send_message');
                 touchSocketActivity();
