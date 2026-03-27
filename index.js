@@ -1295,6 +1295,7 @@ async function handleReportCommand(sock, msg, text, remoteJid) {
         reportReferenceMap.set(sentReport.key.id, { offenderJid: offenderId, groupJid: remoteJid });
         await sendPrivateAdminMessage(sock, `.advertir ${offenderId}`);
         await sock.sendMessage(remoteJid, { text: '✅ Reporte recibido. Evidencia preservada y enviada a administración.' }, { quoted: msg });
+        await sendReactionSticker(sock, remoteJid, 'reportar.webp');
     } catch (error) {
         console.error('No pude entregar el reporte al administrador:', error?.message || error);
         await sock.sendMessage(remoteJid, { text: '⚠️ Recibí el reporte, pero no pude enviarlo a administración. En tu chat privado con el bot usa primero .miid y luego .setadmin para vincular correctamente tu ID admin.' }, { quoted: msg });
@@ -1375,6 +1376,7 @@ async function handleWarnCommand(sock, msg, text, remoteJid) {
             ? `⛔ ${mention} alcanzó 3/3 advertencias y quedó marcado como baneado. Necesito ser administrador del grupo para expulsarlo automáticamente.`
             : `⛔ ${mention} alcanzó 3/3 advertencias y quedó marcado como baneado. No pude expulsarlo automáticamente.`;
     await sock.sendMessage(remoteJid, { text: resultText, mentions: [resolved.targetJid] }, { quoted: msg });
+    await sendReactionSticker(sock, remoteJid, 'advertir.webp');
 }
 
 async function handleUnbanCommand(sock, msg, text, remoteJid) {
@@ -1489,6 +1491,16 @@ async function sendCastorSealSticker(sock, remoteJid, quotedMsg) {
         await sock.sendMessage(remoteJid, { sticker: { url: CASTOR_SEAL_STICKER_URL } }, quotedMsg ? { quoted: quotedMsg } : undefined);
     } catch (error) {
     }
+}
+
+async function sendReactionSticker(sock, remoteJid, stickerFileName) {
+    const stickerPath = path.join(process.cwd(), 'stickers', stickerFileName);
+    if (!fs.existsSync(stickerPath)) {
+        console.log(`⚠️ No se encontró el sticker: ${stickerPath}`);
+        return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    await sock.sendMessage(remoteJid, { sticker: fs.readFileSync(stickerPath) });
 }
 
 async function applyWarning(sock, targetJid, groupJid, reason) {
@@ -1689,6 +1701,7 @@ async function handleCloseGroupCommand(sock, msg, text, remoteJid) {
         const reopenAt = new Date(Date.now() + durationMs);
         const reopenAtLabel = formatMexicoDateTime(reopenAt);
         await sock.sendMessage(remoteJid, { text: `🔒 Grupo cerrado por ${rawDuration}. Se abrirá automáticamente el ${reopenAtLabel}.` }, { quoted: msg });
+        await sendReactionSticker(sock, remoteJid, 'cerrar.webp');
 
         const timer = setTimeout(async () => {
             try {
@@ -1720,6 +1733,7 @@ async function handleCloseGroupCommand(sock, msg, text, remoteJid) {
         return;
     }
     await sock.sendMessage(remoteJid, { text: '🔒 Grupo cerrado hasta nuevo aviso. Solo administradores pueden enviar mensajes.' }, { quoted: msg });
+    await sendReactionSticker(sock, remoteJid, 'cerrar.webp');
 }
 
 async function handleOpenGroupCommand(sock, msg, remoteJid) {
@@ -1750,6 +1764,7 @@ async function handleOpenGroupCommand(sock, msg, remoteJid) {
         return;
     }
     await sock.sendMessage(remoteJid, { text: '🔓 Grupo abierto. Todos los miembros ya pueden enviar mensajes.' }, { quoted: msg });
+    await sendReactionSticker(sock, remoteJid, 'abrir.webp');
 }
 
 async function handlePingCommand(sock, msg, remoteJid) {
