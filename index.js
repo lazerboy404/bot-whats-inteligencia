@@ -330,6 +330,18 @@ function getAdminJid() {
     return toJid(base);
 }
 
+function getAdminJidCandidates() {
+    const candidates = new Set();
+    candidates.add(getAdminJid());
+    for (const variant of ADMIN_NUMBER_VARIANTS) {
+        const digits = cleanDigits(variant);
+        if (digits) {
+            candidates.add(toJid(digits));
+        }
+    }
+    return [...candidates];
+}
+
 function isOwnerByNumber(number) {
     const normalized = normalizePhoneForCompare(number);
     return ADMIN_NUMBER_VARIANTS.has(normalized) || ADMIN_NUMBER_VARIANTS.has(cleanDigits(number));
@@ -670,8 +682,16 @@ function touchLastActivityAsync(userId) {
     }).catch(() => {});
 }
 async function sendPrivateAdminMessage(sock, text) {
-    const adminJid = getAdminJid();
-    await sock.sendMessage(adminJid, { text: sanitizeText(text, 9000) });
+    const payload = { text: sanitizeText(text, 9000) };
+    let lastError = null;
+    for (const adminJid of getAdminJidCandidates()) {
+        try {
+            return await sock.sendMessage(adminJid, payload);
+        } catch (error) {
+            lastError = error;
+        }
+    }
+    throw lastError || new Error('No pude entregar el mensaje al administrador.');
 }
 
 async function isGroupAdmin(sock, groupJid, userJid) {
@@ -907,10 +927,15 @@ async function handleReportCommand(sock, msg, text, remoteJid) {
         `Contenido crudo: ${detail.raw || '(sin contenido)'}`
     ].join('\n');
 
-    const sentReport = await sock.sendMessage(getAdminJid(), { text: reportText });
-    reportReferenceMap.set(sentReport.key.id, { offenderJid: offenderId, groupJid: remoteJid });
-    await sock.sendMessage(getAdminJid(), { text: `.advertir ${offenderId}` });
-    await sock.sendMessage(remoteJid, { text: '✅ Reporte recibido. Evidencia preservada y enviada a administración.' }, { quoted: msg });
+    try {
+        const sentReport = await sendPrivateAdminMessage(sock, reportText);
+        reportReferenceMap.set(sentReport.key.id, { offenderJid: offenderId, groupJid: remoteJid });
+        await sendPrivateAdminMessage(sock, `.advertir ${offenderId}`);
+        await sock.sendMessage(remoteJid, { text: '✅ Reporte recibido. Evidencia preservada y enviada a administración.' }, { quoted: msg });
+    } catch (error) {
+        console.error('No pude entregar el reporte al administrador:', error?.message || error);
+        await sock.sendMessage(remoteJid, { text: '⚠️ Recibí el reporte, pero no pude enviarlo a administración. Revisa el número admin configurado.' }, { quoted: msg });
+    }
 }
 
 async function resolveTargetForModeration(msg, text) {
