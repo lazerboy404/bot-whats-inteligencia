@@ -706,7 +706,7 @@ function getRulesText() {
         '* Respeto entre todos',
         '* Sin insultos ni acoso',
         '* No spam ni cadenas',
-        '* 3 faltas serán motivo de ban'
+        '* 3 faltas acomuladas serán motivo de ban'
     ].join('\n');
 }
 
