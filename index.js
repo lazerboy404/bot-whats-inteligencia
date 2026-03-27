@@ -1708,6 +1708,7 @@ async function handleCloseGroupCommand(sock, msg, text, remoteJid) {
             try {
                 await sock.groupSettingUpdate(remoteJid, 'not_announcement');
                 await sock.sendMessage(remoteJid, { text: '🔓 El grupo se abrió automáticamente. Ya todos pueden enviar mensajes.' });
+                await sendReactionSticker(sock, remoteJid, 'abrir.webp');
             } catch (error) {
             } finally {
                 closeTimersByGroup.delete(remoteJid);
