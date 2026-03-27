@@ -45,7 +45,7 @@ let lastCommandHandledAt = 0;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping']);
+const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random']);
 const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
 const BAILEYS_CONNECT_TIMEOUT_MS = Number(process.env.BAILEYS_CONNECT_TIMEOUT_MS || 60000);
 const BAILEYS_KEEPALIVE_MS = Number(process.env.BAILEYS_KEEPALIVE_MS || 30000);
@@ -520,6 +520,10 @@ function getUserCommandsText() {
         '(debes citar el mensaje a reportar)',
         '(revisión por admin, 3 faltas = ban)',
         '',
+        '.top → muestra los usuarios más activos del grupo',
+        '',
+        '.random → menciona alguien al azar',
+        '',
         '🦫 Castor Bot: Estamos reforzando la presa en el dique.'
     ].join('\n');
 }
@@ -543,6 +547,7 @@ async function ensureMongo() {
             motivos: { type: [String], default: [] },
             isBanned: { type: Boolean, default: false },
             intentosReingreso: { type: Number, default: 0 },
+            actividadMensajes: { type: Number, default: 0 },
             ultimaActividad: { type: Date, default: null },
             countryOverride: { type: String, default: '' },
             flagOverride: { type: String, default: '' }
@@ -645,7 +650,10 @@ function touchLastActivityAsync(userId) {
     if (!isMongoReady || !userId) {
         return;
     }
-    upsertModRecord(userId, { $set: { ultimaActividad: new Date() } }).catch(() => {});
+    upsertModRecord(userId, {
+        $set: { ultimaActividad: new Date() },
+        $inc: { actividadMensajes: 1 }
+    }).catch(() => {});
 }
 async function sendPrivateAdminMessage(sock, text) {
     const adminJid = getAdminJid();
@@ -674,6 +682,18 @@ async function getGroupDisplayName(sock, groupJid, userJid) {
     } catch (error) {
         return sanitizeText(getNumberFromJid(userJid) || userJid, 120);
     }
+}
+
+function getParticipantDisplayName(participant, fallbackJid = '') {
+    const visibleName = sanitizeText(participant?.notify || participant?.name || participant?.pushName || '', 120);
+    if (visibleName) {
+        return visibleName;
+    }
+    const referenceJid = participant?.id || fallbackJid || '';
+    if (String(referenceJid).includes('@lid')) {
+        return 'Usuario sin nombre visible';
+    }
+    return sanitizeText(getNumberFromJid(referenceJid) || 'Usuario sin nombre visible', 120);
 }
 
 async function senderIsAuthorizedAdmin(sock, msg, remoteJid) {
@@ -1059,12 +1079,11 @@ async function handleGhostsCommand(sock, msg, text, remoteJid) {
         }
         const rec = recordsByUser.get(participant.id);
         if (!rec?.ultimaActividad || new Date(rec.ultimaActividad) < cutoff) {
-            const number = getNumberFromJid(participant.id);
-            const name = sanitizeText(participant.notify || participant.name || participant.id, 120);
+            const name = getParticipantDisplayName(participant, participant.id);
             const lastActivityText = rec?.ultimaActividad
                 ? new Date(rec.ultimaActividad).toISOString().slice(0, 10)
                 : 'sin registro';
-            inactive.push(`• ${name} (@${number}) - última actividad: ${lastActivityText}`);
+            inactive.push(`• ${name} - última actividad: ${lastActivityText}`);
         }
     }
 
@@ -1075,6 +1094,84 @@ async function handleGhostsCommand(sock, msg, text, remoteJid) {
     const privateText = `👻 Reporte de fantasmas\nGrupo: ${metadata.subject}\nRango: ${days} días\nTotal inactivos: ${inactive.length}\n\n${summary}`;
     await sock.sendMessage(senderJid, { text: privateText });
     await sock.sendMessage(remoteJid, { text: '✅ Lista de inactivos enviada por privado al administrador.' }, { quoted: msg });
+}
+
+async function handleTopCommand(sock, msg, remoteJid) {
+    if (!remoteJid.endsWith('@g.us')) {
+        await sock.sendMessage(remoteJid, { text: 'El comando .top solo funciona en grupos.' }, { quoted: msg });
+        return;
+    }
+    if (!isMongoReady) {
+        await sock.sendMessage(remoteJid, { text: '⚠️ El ranking de actividad necesita MongoDB conectado.' }, { quoted: msg });
+        return;
+    }
+
+    const metadata = await sock.groupMetadata(remoteJid);
+    const participants = (metadata.participants || []).filter((participant) => participant.id !== sock.user?.id);
+    const participantIds = participants.map((participant) => participant.id);
+    const records = await ModRecordModel.find(
+        { userId: { $in: participantIds } },
+        { userId: 1, actividadMensajes: 1, ultimaActividad: 1 }
+    ).lean();
+
+    const participantsById = new Map(participants.map((participant) => [participant.id, participant]));
+    const topEntries = records
+        .map((record) => {
+            const participant = participantsById.get(record.userId);
+            if (!participant) {
+                return null;
+            }
+            const displayName = getParticipantDisplayName(participant, record.userId);
+            return {
+                userId: record.userId,
+                displayName,
+                actividadMensajes: Number(record.actividadMensajes || 0),
+                ultimaActividad: record.ultimaActividad ? new Date(record.ultimaActividad).getTime() : 0
+            };
+        })
+        .filter((entry) => entry && entry.actividadMensajes > 0)
+        .sort((a, b) => {
+            if (b.actividadMensajes !== a.actividadMensajes) {
+                return b.actividadMensajes - a.actividadMensajes;
+            }
+            return b.ultimaActividad - a.ultimaActividad;
+        })
+        .slice(0, 10);
+
+    if (!topEntries.length) {
+        await sock.sendMessage(remoteJid, { text: '📊 Aún no hay suficiente actividad registrada para mostrar el top.' }, { quoted: msg });
+        return;
+    }
+
+    const lines = topEntries.map((entry, index) => `${index + 1}. ${entry.displayName} — ${entry.actividadMensajes} mensajes`);
+    await sock.sendMessage(remoteJid, {
+        text: `📊 Top de usuarios más activos\n\n${lines.join('\n')}`
+    }, { quoted: msg });
+}
+
+async function handleRandomCommand(sock, msg, remoteJid) {
+    if (!remoteJid.endsWith('@g.us')) {
+        await sock.sendMessage(remoteJid, { text: 'El comando .random solo funciona en grupos.' }, { quoted: msg });
+        return;
+    }
+
+    const metadata = await sock.groupMetadata(remoteJid);
+    const senderJid = msg.key.participant || msg.key.remoteJid;
+    const candidates = (metadata.participants || [])
+        .map((participant) => participant.id)
+        .filter((participantId) => participantId !== sock.user?.id && participantId !== senderJid);
+
+    if (!candidates.length) {
+        await sock.sendMessage(remoteJid, { text: '🎲 No encontré suficientes usuarios para elegir al azar.' }, { quoted: msg });
+        return;
+    }
+
+    const selectedJid = candidates[Math.floor(Math.random() * candidates.length)];
+    const displayName = await getGroupDisplayName(sock, remoteJid, selectedJid);
+    await sock.sendMessage(remoteJid, {
+        text: `🎲 El castor eligió a @${getNumberFromJid(selectedJid)} (${displayName})`,
+        mentions: [selectedJid]
+    }, { quoted: msg });
 }
 
 async function ensureBotIsAdmin(sock, remoteJid) {
@@ -1535,9 +1632,7 @@ async function startBot() {
                     }
                 }
 
-                if (!senderIsAdmin) {
-                    touchLastActivityAsync(senderJid);
-                }
+                touchLastActivityAsync(senderJid);
 
                 if (remoteJid.endsWith('@g.us') && text && hasGroupInviteLink(text) && !senderIsAdmin) {
                     try {
@@ -1575,6 +1670,10 @@ async function startBot() {
                     await handleUnbanCommand(sock, msg, text, remoteJid);
                 } else if (command === '.sticker') {
                     await handleStickerCommand(sock, msg, remoteJid);
+                } else if (command === '.top') {
+                    await handleTopCommand(sock, msg, remoteJid);
+                } else if (command === '.random') {
+                    await handleRandomCommand(sock, msg, remoteJid);
                 } else if (command === '.fantasmas') {
                     await handleGhostsCommand(sock, msg, text, remoteJid);
                 } else if (command === '.cerrar') {
