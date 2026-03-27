@@ -1135,9 +1135,11 @@ async function handleTopCommand(sock, msg, remoteJid) {
                 return null;
             }
             const displayName = getParticipantDisplayName(participant, record.userId);
+            const mentionLabel = getParticipantMentionLabel(participant, record.userId);
             return {
                 userId: record.userId,
                 displayName,
+                mentionLabel,
                 actividadMensajes: Number(record.actividadMensajes || 0),
                 ultimaActividad: record.ultimaActividad ? new Date(record.ultimaActividad).getTime() : 0
             };
@@ -1156,9 +1158,10 @@ async function handleTopCommand(sock, msg, remoteJid) {
         return;
     }
 
-    const lines = topEntries.map((entry, index) => `${index + 1}. ${entry.displayName} — ${entry.actividadMensajes} mensajes`);
+    const lines = topEntries.map((entry, index) => `${index + 1}. @${entry.mentionLabel} (${entry.displayName}) — ${entry.actividadMensajes} mensajes`);
     await sock.sendMessage(remoteJid, {
-        text: `📊 Top de usuarios más activos\n\n${lines.join('\n')}`
+        text: `📊 Top de usuarios más activos\n\n${lines.join('\n')}`,
+        mentions: topEntries.map((entry) => entry.userId)
     }, { quoted: msg });
 }
 
