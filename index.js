@@ -1485,7 +1485,7 @@ async function handleGhostsCommand(sock, msg, text, remoteJid) {
         : 'No se detectaron usuarios inactivos en ese rango.';
     const privateText = `👻 Reporte de fantasmas\nGrupo: ${metadata.subject}\nRango: ${days} días\nTotal inactivos: ${inactive.length}\n\n${summary}`;
     await sock.sendMessage(senderJid, { text: privateText });
-    await sock.sendMessage(remoteJid, { text: '✅ Lista de inactivos enviada por privado al administrador.' }, { quoted: msg });
+    await sock.sendMessage(remoteJid, { text: '👻 Lista de inactivos enviada por privado al administrador.' }, { quoted: msg });
 }
 
 async function handleTopCommand(sock, msg, remoteJid) {
