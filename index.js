@@ -18,6 +18,7 @@ let AuthStateModel = null;
 let isMongoReady = false;
 const GROUP_INVITE_REGEX = /(chat\.whatsapp\.com\/[a-zA-Z0-9]{20,}|wa\.me\/joinlink\/)/i;
 let keepAliveInterval = null;
+let healthWatchInterval = null;
 const SAFE_MODE = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAFE_MODE || '').toLowerCase());
 const SEND_MIN_DELAY_MS = Number(process.env.SEND_MIN_DELAY_MS || (SAFE_MODE ? 1800 : 600));
 const SEND_MAX_DELAY_MS = Number(process.env.SEND_MAX_DELAY_MS || (SAFE_MODE ? 4200 : 1800));
@@ -39,6 +40,8 @@ let activeSock = null;
 let isStartingBot = false;
 let botRunId = 0;
 let sessionResetDoneThisBoot = false;
+let lastSocketActivityAt = Date.now();
+let lastCommandHandledAt = 0;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
@@ -47,6 +50,8 @@ const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 
 const BAILEYS_CONNECT_TIMEOUT_MS = Number(process.env.BAILEYS_CONNECT_TIMEOUT_MS || 60000);
 const BAILEYS_KEEPALIVE_MS = Number(process.env.BAILEYS_KEEPALIVE_MS || 30000);
 const SEND_ACTION_TIMEOUT_MS = Number(process.env.SEND_ACTION_TIMEOUT_MS || 20000);
+const BOT_HEALTHCHECK_INTERVAL_MS = Number(process.env.BOT_HEALTHCHECK_INTERVAL_MS || 60000);
+const BOT_STALE_SOCKET_MS = Number(process.env.BOT_STALE_SOCKET_MS || 240000);
 const BOT_RECONNECT_BASE_MS = Number(process.env.BOT_RECONNECT_BASE_MS || 4000);
 const BOT_RECONNECT_MAX_MS = Number(process.env.BOT_RECONNECT_MAX_MS || 45000);
 const FLAG_BY_DIAL_CODE = {
@@ -1222,6 +1227,27 @@ function startKeepAlive() {
     }, KEEP_ALIVE_INTERVAL_MS);
 }
 
+function touchSocketActivity() {
+    lastSocketActivityAt = Date.now();
+}
+
+function startHealthWatchdog() {
+    if (healthWatchInterval) {
+        return;
+    }
+    healthWatchInterval = setInterval(() => {
+        if (!activeSock || isStartingBot) {
+            return;
+        }
+        const idleMs = Date.now() - lastSocketActivityAt;
+        if (idleMs >= BOT_STALE_SOCKET_MS) {
+            const lastCommandAgo = lastCommandHandledAt ? `${Date.now() - lastCommandHandledAt}ms` : 'sin comandos previos';
+            console.log(`Watchdog detectó socket inactivo por ${idleMs}ms. Último comando: ${lastCommandAgo}. Reiniciando conexión.`);
+            scheduleReconnect('watchdog_stale_socket');
+        }
+    }, BOT_HEALTHCHECK_INTERVAL_MS);
+}
+
 function getErrorMessage(error) {
     return String(error?.message || error || '').toLowerCase();
 }
@@ -1377,7 +1403,11 @@ async function startBot() {
         const originalSendMessage = sock.sendMessage.bind(sock);
         sock.sendMessage = (jid, content, options) => {
             if (content?.react || content?.delete) {
-                return withTimeout(originalSendMessage(jid, content, options), SEND_ACTION_TIMEOUT_MS, 'send_action');
+                return withTimeout(originalSendMessage(jid, content, options), SEND_ACTION_TIMEOUT_MS, 'send_action')
+                    .then((result) => {
+                        touchSocketActivity();
+                        return result;
+                    });
             }
             const normalizedContent = { ...(content || {}) };
             if (typeof normalizedContent.text === 'string') {
@@ -1396,6 +1426,7 @@ async function startBot() {
                     await new Promise((resolve) => setTimeout(resolve, totalDelay));
                 }
                 const result = await withTimeout(originalSendMessage(jid, normalizedContent, options), SEND_ACTION_TIMEOUT_MS, 'send_message');
+                touchSocketActivity();
                 lastSentAtByJid.set(jid, Date.now());
                 return result;
             };
@@ -1415,6 +1446,7 @@ async function startBot() {
             if (runId !== botRunId) {
                 return;
             }
+            touchSocketActivity();
             const { connection, lastDisconnect, qr } = update;
             if (qr) {
                 qrCodeData = qr;
@@ -1442,6 +1474,7 @@ async function startBot() {
         if (runId !== botRunId) {
             return;
         }
+        touchSocketActivity();
         if (event.action !== 'add') {
             return;
         }
@@ -1473,6 +1506,7 @@ async function startBot() {
         if (runId !== botRunId) {
             return;
         }
+        touchSocketActivity();
         for (const msg of messages) {
             try {
                 if (!msg.message) {
@@ -1532,6 +1566,7 @@ async function startBot() {
                 if (CASTOR_VALID_COMMANDS.has(command) && !SAFE_DISABLE_COMMAND_REACT) {
                     sock.sendMessage(remoteJid, { react: { text: CASTOR_EMOJI, key: msg.key } }).catch(() => {});
                 }
+                lastCommandHandledAt = Date.now();
                 if (command === '.reportar') {
                     await handleReportCommand(sock, msg, text, remoteJid);
                 } else if (command === '.advertir') {
@@ -1566,3 +1601,4 @@ startBot().catch((error) => {
     console.error('Error al iniciar bot:', error);
 });
 startKeepAlive();
+startHealthWatchdog();
