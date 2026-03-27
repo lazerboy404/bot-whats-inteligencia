@@ -848,6 +848,39 @@ function getParticipantMentionLabel(participant, fallbackJid = '') {
     return 'usuario';
 }
 
+function getModerationReferenceText(jid) {
+    const rawJid = sanitizeText(jid || '', 160);
+    const digits = sanitizeText(getNumberFromJid(jid) || '', 80);
+    if (rawJid.endsWith('@lid')) {
+        return digits ? `${digits} (ID interno de WhatsApp)` : rawJid;
+    }
+    return digits || rawJid;
+}
+
+async function getGroupParticipantSummary(sock, groupJid, userJid) {
+    try {
+        const metadata = await sock.groupMetadata(groupJid);
+        const normalizedTarget = normalizePhoneForCompare(getNumberFromJid(userJid));
+        const participant = metadata.participants.find((p) => {
+            const current = normalizePhoneForCompare(getNumberFromJid(p.id));
+            return current === normalizedTarget;
+        }) || null;
+        return {
+            groupName: sanitizeText(metadata.subject || groupJid, 160),
+            displayName: getParticipantDisplayName(participant, userJid),
+            mentionLabel: getParticipantMentionLabel(participant, userJid),
+            moderationReference: getModerationReferenceText(userJid)
+        };
+    } catch (error) {
+        return {
+            groupName: sanitizeText(groupJid, 160),
+            displayName: sanitizeText(getNumberFromJid(userJid) || userJid, 120),
+            mentionLabel: sanitizeText(getNumberFromJid(userJid) || 'usuario', 40),
+            moderationReference: getModerationReferenceText(userJid)
+        };
+    }
+}
+
 async function senderIsAuthorizedAdmin(sock, msg, remoteJid) {
     const senderJid = msg.key.participant || msg.key.remoteJid;
     const senderNumber = getNumberFromJid(senderJid);
@@ -1014,22 +1047,28 @@ async function handleReportCommand(sock, msg, text, remoteJid) {
     const detail = describeQuotedContent(quoted.quotedMessage);
     const reporterId = msg.key.participant || msg.key.remoteJid;
     const offenderId = quoted.quotedParticipant;
-    const reporterName = await getGroupDisplayName(sock, remoteJid, reporterId);
-    const offenderName = await getGroupDisplayName(sock, remoteJid, offenderId);
+    const reporterInfo = await getGroupParticipantSummary(sock, remoteJid, reporterId);
+    const offenderInfo = await getGroupParticipantSummary(sock, remoteJid, offenderId);
     const motive = sanitizeText(text).split(/\s+/).slice(1).join(' ');
     const cleanMotive = motive || 'Sin motivo adicional.';
 
     const reportText = [
         '🧾 REPORTE FORENSE',
-        `Grupo: ${remoteJid}`,
-        `Reportante: ${reporterName}`,
+        `Grupo: ${reporterInfo.groupName}`,
+        `Reportante: ${reporterInfo.displayName}`,
+        `Referencia reportante: ${reporterInfo.moderationReference}`,
         `ID reportante: ${reporterId}`,
-        `Nombre visible infractor: ${offenderName}`,
+        `Infractor: ${offenderInfo.displayName}`,
+        `Referencia infractor: ${offenderInfo.moderationReference}`,
         `ID infractor: ${offenderId}`,
         `Motivo: ${cleanMotive}`,
         `Tipo de contenido: ${detail.mediaType}`,
         `Texto citado: ${detail.text || '(sin texto visible)'}`,
-        `Contenido crudo: ${detail.raw || '(sin contenido)'}`
+        `Contenido crudo: ${detail.raw || '(sin contenido)'}`,
+        '',
+        'Acciones rápidas:',
+        `.advertir ${offenderId}`,
+        `.ban ${offenderId}`
     ].join('\n');
 
     try {
