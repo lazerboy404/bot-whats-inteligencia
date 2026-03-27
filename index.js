@@ -9,12 +9,13 @@ const PORT = process.env.PORT || 3000;
 let qrCodeData = null;
 
 const MONGO_URL = process.env.MONGO_URL || '';
-const ADMIN_PHONE = '5564132674';
+const ADMIN_PHONE = process.env.ADMIN_PHONE || '5215564132674';
 const ADMIN_NUMBER_VARIANTS = new Set(['5564132674', '525564132674', '5215564132674']);
 const reportCooldownByUser = new Map();
 const reportReferenceMap = new Map();
 let ModRecordModel = null;
 let AuthStateModel = null;
+let BotConfigModel = null;
 let isMongoReady = false;
 const GROUP_INVITE_REGEX = /(chat\.whatsapp\.com\/[a-zA-Z0-9]{20,}|wa\.me\/joinlink\/)/i;
 let keepAliveInterval = null;
@@ -51,7 +52,7 @@ let incomingBufferTimeout = null;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random']);
+const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.miid', '.setadmin']);
 const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
 const BAILEYS_CONNECT_TIMEOUT_MS = Number(process.env.BAILEYS_CONNECT_TIMEOUT_MS || 60000);
 const BAILEYS_KEEPALIVE_MS = Number(process.env.BAILEYS_KEEPALIVE_MS || 30000);
@@ -324,6 +325,12 @@ function toJid(number) {
 
 function getAdminJid() {
     const base = cleanDigits(ADMIN_PHONE);
+    if (base.startsWith('521') && base.length >= 13) {
+        return toJid(base);
+    }
+    if (base.startsWith('52') && base.length >= 12) {
+        return toJid(base);
+    }
     if (base.length === 10) {
         return toJid(`52${base}`);
     }
@@ -340,6 +347,60 @@ function getAdminJidCandidates() {
         }
     }
     return [...candidates];
+}
+
+async function getSavedAdminJidCandidates() {
+    if (!isMongoReady || !BotConfigModel) {
+        return [];
+    }
+    const config = await BotConfigModel.findById('main').lean();
+    const candidates = [];
+    if (config?.adminPrivateJid) {
+        candidates.push(config.adminPrivateJid);
+    }
+    if (config?.adminSenderJid && config.adminSenderJid !== config.adminPrivateJid) {
+        candidates.push(config.adminSenderJid);
+    }
+    return candidates;
+}
+
+async function saveAdminPrivateJids(privateJid, senderJid) {
+    if (!isMongoReady || !BotConfigModel) {
+        return false;
+    }
+    await BotConfigModel.updateOne(
+        { _id: 'main' },
+        {
+            $set: {
+                adminPrivateJid: sanitizeText(privateJid || '', 160),
+                adminSenderJid: sanitizeText(senderJid || '', 160),
+                updatedAt: new Date()
+            }
+        },
+        { upsert: true }
+    );
+    return true;
+}
+
+async function resolveAdminJids(sock) {
+    const candidates = [...new Set([...(await getSavedAdminJidCandidates()), ...getAdminJidCandidates()])];
+    const digits = [...new Set(candidates.map((jid) => cleanDigits(jid)))].filter(Boolean);
+    const resolvedJids = new Set();
+
+    try {
+        const matches = await sock.onWhatsApp(...digits);
+        for (const match of matches || []) {
+            if (match?.exists && match?.jid) {
+                resolvedJids.add(match.jid);
+            }
+        }
+    } catch (error) {
+    }
+
+    if (resolvedJids.size > 0) {
+        return [...resolvedJids];
+    }
+    return candidates;
 }
 
 function isOwnerByNumber(number) {
@@ -595,6 +656,18 @@ async function ensureMongo() {
         AuthStateModel = mongoose.model('AuthState');
     }
 
+    if (!mongoose.models.BotConfig) {
+        const botConfigSchema = new mongoose.Schema({
+            _id: String,
+            adminPrivateJid: { type: String, default: '' },
+            adminSenderJid: { type: String, default: '' },
+            updatedAt: { type: Date, default: Date.now }
+        });
+        BotConfigModel = mongoose.model('BotConfig', botConfigSchema, 'bot_config');
+    } else {
+        BotConfigModel = mongoose.model('BotConfig');
+    }
+
     isMongoReady = true;
     return true;
 }
@@ -684,9 +757,12 @@ function touchLastActivityAsync(userId) {
 async function sendPrivateAdminMessage(sock, text) {
     const payload = { text: sanitizeText(text, 9000) };
     let lastError = null;
-    for (const adminJid of getAdminJidCandidates()) {
+    const adminJids = await resolveAdminJids(sock);
+    for (const adminJid of adminJids) {
         try {
-            return await sock.sendMessage(adminJid, payload);
+            const result = await sock.sendMessage(adminJid, payload);
+            console.log(`Mensaje privado al admin entregado a: ${adminJid}`);
+            return result;
         } catch (error) {
             lastError = error;
         }
@@ -934,7 +1010,7 @@ async function handleReportCommand(sock, msg, text, remoteJid) {
         await sock.sendMessage(remoteJid, { text: '✅ Reporte recibido. Evidencia preservada y enviada a administración.' }, { quoted: msg });
     } catch (error) {
         console.error('No pude entregar el reporte al administrador:', error?.message || error);
-        await sock.sendMessage(remoteJid, { text: '⚠️ Recibí el reporte, pero no pude enviarlo a administración. Revisa el número admin configurado.' }, { quoted: msg });
+        await sock.sendMessage(remoteJid, { text: '⚠️ Recibí el reporte, pero no pude enviarlo a administración. En tu chat privado con el bot usa primero .miid y luego .setadmin para vincular correctamente tu ID admin.' }, { quoted: msg });
     }
 }
 
@@ -1389,6 +1465,47 @@ async function handlePingCommand(sock, msg, remoteJid) {
     await sock.sendMessage(remoteJid, { text: '✅ Castor Bot activo.' }, { quoted: msg });
 }
 
+async function handleMyIdCommand(sock, msg, remoteJid) {
+    const senderJid = msg.key.participant || msg.key.remoteJid;
+    const senderNumber = getNumberFromJid(senderJid);
+    if (!isOwnerByNumber(senderNumber)) {
+        await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo el admin principal.' }, { quoted: msg });
+        return;
+    }
+    const privateJid = msg.key.remoteJid || '';
+    const details = [
+        '🪪 Identificadores detectados',
+        `Chat actual: ${privateJid || '(sin dato)'}`,
+        `Sender: ${senderJid || '(sin dato)'}`,
+        `Número detectado: ${senderNumber || '(sin dato)'}`,
+        '',
+        'Si este es tu chat privado correcto, usa .setadmin aquí mismo.'
+    ].join('\n');
+    await sock.sendMessage(remoteJid, { text: details }, { quoted: msg });
+}
+
+async function handleSetAdminCommand(sock, msg, remoteJid) {
+    const senderJid = msg.key.participant || msg.key.remoteJid;
+    const senderNumber = getNumberFromJid(senderJid);
+    if (!isOwnerByNumber(senderNumber)) {
+        await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo el admin principal.' }, { quoted: msg });
+        return;
+    }
+    const privateJid = msg.key.remoteJid || '';
+    if (!privateJid || privateJid.endsWith('@g.us')) {
+        await sock.sendMessage(remoteJid, { text: 'Usa .setadmin en el chat privado del bot contigo, no en el grupo.' }, { quoted: msg });
+        return;
+    }
+    if (!isMongoReady || !BotConfigModel) {
+        await sock.sendMessage(remoteJid, { text: 'No pude guardar el chat admin porque MongoDB no está conectado.' }, { quoted: msg });
+        return;
+    }
+    await saveAdminPrivateJids(privateJid, senderJid);
+    await sock.sendMessage(remoteJid, {
+        text: `✅ Chat admin vinculado.\nChat: ${privateJid}\nSender: ${senderJid}`
+    }, { quoted: msg });
+}
+
 app.get('/', (req, res) => {
     if (qrCodeData) {
         res.send(`
@@ -1633,6 +1750,10 @@ async function processIncomingMessage(sock, msg, runId) {
         await handleOpenGroupCommand(sock, msg, remoteJid);
     } else if (command === '.ping') {
         await handlePingCommand(sock, msg, remoteJid);
+    } else if (command === '.miid') {
+        await handleMyIdCommand(sock, msg, remoteJid);
+    } else if (command === '.setadmin') {
+        await handleSetAdminCommand(sock, msg, remoteJid);
     }
 }
 
