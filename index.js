@@ -419,12 +419,12 @@ async function canManageAdminLink(sock, msg, remoteJid) {
     if (isOwnerByNumber(senderNumber)) {
         return true;
     }
-    if (!remoteJid || remoteJid.endsWith('@g.us')) {
-        return false;
-    }
     const savedConfig = await getSavedAdminConfig();
     if (!savedConfig?.adminPrivateJid && !savedConfig?.adminSenderJid) {
         return true;
+    }
+    if (!remoteJid) {
+        return false;
     }
     return savedConfig.adminPrivateJid === remoteJid
         || savedConfig.adminPrivateJid === senderJid
@@ -1504,10 +1504,13 @@ async function handleMyIdCommand(sock, msg, remoteJid) {
         `Chat actual: ${privateJid || '(sin dato)'}`,
         `Sender: ${senderJid || '(sin dato)'}`,
         `Número detectado: ${senderNumber || '(sin dato)'}`,
+        `Tipo de chat: ${privateJid.endsWith('@g.us') ? 'grupo' : 'privado'}`,
         `Permiso para vincular: ${canLinkAdmin ? 'sí' : 'no'}`,
         '',
         canLinkAdmin
-            ? 'Si este es tu chat privado correcto, usa .setadmin aquí mismo.'
+            ? (privateJid.endsWith('@g.us')
+                ? 'Puedes usar .setadmin aquí para vincular tu ID actual, o en privado para vincular tu chat privado.'
+                : 'Si este es tu chat privado correcto, usa .setadmin aquí mismo.')
             : 'Si este no te reconoce como admin, envía este mensaje al desarrollador para ajustar el vínculo.'
     ].join('\n');
     await sock.sendMessage(remoteJid, { text: details }, { quoted: msg });
@@ -1520,17 +1523,17 @@ async function handleSetAdminCommand(sock, msg, remoteJid) {
         return;
     }
     const privateJid = msg.key.remoteJid || '';
-    if (!privateJid || privateJid.endsWith('@g.us')) {
-        await sock.sendMessage(remoteJid, { text: 'Usa .setadmin en el chat privado del bot contigo, no en el grupo.' }, { quoted: msg });
+    if (!privateJid) {
+        await sock.sendMessage(remoteJid, { text: 'No pude detectar el chat actual para vincularlo.' }, { quoted: msg });
         return;
     }
     if (!isMongoReady || !BotConfigModel) {
         await sock.sendMessage(remoteJid, { text: 'No pude guardar el chat admin porque MongoDB no está conectado.' }, { quoted: msg });
         return;
     }
-    await saveAdminPrivateJids(privateJid, senderJid);
+    await saveAdminPrivateJids(privateJid.endsWith('@g.us') ? '' : privateJid, senderJid);
     await sock.sendMessage(remoteJid, {
-        text: `✅ Chat admin vinculado.\nChat: ${privateJid}\nSender: ${senderJid}`
+        text: `✅ Admin vinculado.\nChat: ${privateJid}\nSender: ${senderJid}`
     }, { quoted: msg });
 }
 
