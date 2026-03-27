@@ -537,6 +537,15 @@ function hasGroupInviteLink(text) {
     return GROUP_INVITE_REGEX.test(String(text || ''));
 }
 
+function getCastorSignatureText() {
+    const dateText = new Intl.DateTimeFormat('es-MX', {
+        day: 'numeric',
+        month: 'long',
+        timeZone: 'UTC'
+    }).format(new Date());
+    return `> 𝗖𝗮𝘀𝘁𝗼𝗿 𝗕𝗼𝘁 ${CASTOR_EMOJI} | ${dateText}`;
+}
+
 function brandCastorText(value) {
     let text = String(value ?? '').trim();
     if (text.length > 9000) {
@@ -549,7 +558,7 @@ function brandCastorText(value) {
         text = `${CASTOR_EMOJI} ${text}`;
     }
     if (!/(dique|estanque|presa|corriente)/i.test(text)) {
-        text = `${text}\n\n${CASTOR_EMOJI} Castor Bot: Estamos reforzando la presa en el dique.`;
+        text = `${text}\n\n${getCastorSignatureText()}`;
     }
     return text;
 }
@@ -698,7 +707,7 @@ function getUserCommandsText() {
         '',
         '.random → menciona alguien al azar',
         '',
-        '🦫 Castor Bot: Estamos reforzando la presa en el dique.'
+        getCastorSignatureText()
     ].join('\n');
 }
 
