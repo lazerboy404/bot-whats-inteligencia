@@ -557,7 +557,7 @@ function brandCastorText(value) {
     if (!text.includes(CASTOR_EMOJI)) {
         text = `${CASTOR_EMOJI} ${text}`;
     }
-    if (!/(dique|estanque|presa|corriente)/i.test(text)) {
+    if (!/(dique|estanque|presa|corriente|𝗖𝗮𝘀𝘁𝗼𝗿 𝗕𝗼𝘁|Castor Bot \ud83e\uddab)/i.test(text)) {
         text = `${text}\n\n${getCastorSignatureText()}`;
     }
     return text;
