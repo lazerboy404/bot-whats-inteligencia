@@ -46,6 +46,7 @@ const CASTOR_VALID_COMMANDS = new Set(['.reporte', '.reportar', '.advertir', '.u
 const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
 const BAILEYS_CONNECT_TIMEOUT_MS = Number(process.env.BAILEYS_CONNECT_TIMEOUT_MS || 60000);
 const BAILEYS_KEEPALIVE_MS = Number(process.env.BAILEYS_KEEPALIVE_MS || 30000);
+const SEND_ACTION_TIMEOUT_MS = Number(process.env.SEND_ACTION_TIMEOUT_MS || 20000);
 const BOT_RECONNECT_BASE_MS = Number(process.env.BOT_RECONNECT_BASE_MS || 4000);
 const BOT_RECONNECT_MAX_MS = Number(process.env.BOT_RECONNECT_MAX_MS || 45000);
 const FLAG_BY_DIAL_CODE = {
@@ -1278,6 +1279,22 @@ function isSocketOpen(sock) {
     return !!sock?.ws && sock.ws.readyState === 1;
 }
 
+async function withTimeout(promise, ms, label) {
+    let timer = null;
+    try {
+        return await Promise.race([
+            promise,
+            new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error(`${label} timeout`)), ms);
+            })
+        ]);
+    } finally {
+        if (timer) {
+            clearTimeout(timer);
+        }
+    }
+}
+
 function scheduleReconnect(reason) {
     if (reconnectTimer) {
         return;
@@ -1393,7 +1410,7 @@ async function startBot() {
         const originalSendMessage = sock.sendMessage.bind(sock);
         sock.sendMessage = (jid, content, options) => {
             if (content?.react || content?.delete) {
-                return originalSendMessage(jid, content, options);
+                return withTimeout(originalSendMessage(jid, content, options), SEND_ACTION_TIMEOUT_MS, 'send_action');
             }
             const normalizedContent = { ...(content || {}) };
             if (typeof normalizedContent.text === 'string') {
@@ -1411,12 +1428,17 @@ async function startBot() {
                 if (totalDelay > 0) {
                     await new Promise((resolve) => setTimeout(resolve, totalDelay));
                 }
-                const result = await originalSendMessage(jid, normalizedContent, options);
+                const result = await withTimeout(originalSendMessage(jid, normalizedContent, options), SEND_ACTION_TIMEOUT_MS, 'send_message');
                 lastSentAtByJid.set(jid, Date.now());
                 return result;
             };
             const queuedResult = globalSendQueue.catch(() => null).then(task);
-            globalSendQueue = queuedResult.catch(() => null);
+            globalSendQueue = queuedResult.catch((error) => {
+                if (/timeout|connection closed|socket no disponible/i.test(error?.message || '')) {
+                    scheduleReconnect(error?.message || 'send_failure');
+                }
+                return null;
+            });
             return queuedResult;
         };
 
@@ -1541,7 +1563,7 @@ async function startBot() {
 
                 const command = text.trim().split(/\s+/)[0].toLowerCase();
                 if (CASTOR_VALID_COMMANDS.has(command) && !SAFE_DISABLE_COMMAND_REACT) {
-                    await sock.sendMessage(remoteJid, { react: { text: CASTOR_EMOJI, key: msg.key } });
+                    sock.sendMessage(remoteJid, { react: { text: CASTOR_EMOJI, key: msg.key } }).catch(() => {});
                 }
                 if (command === '.reporte' || command === '.reportar') {
                     await handleReportCommand(sock, msg, text, remoteJid);
