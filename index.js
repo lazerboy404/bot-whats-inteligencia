@@ -510,9 +510,7 @@ function getUserCommandsText() {
         '🛠️ *Comandos Disponibles*',
         '',
         '* .sticker → crear sticker (responder a imagen)',
-        '* .reportar → reportar un usuario que pudo romper las reglas (revisión por admin, 3 faltas = ban)',
-        '* .fantasmas [días] → lista de inactivos (solo admin)',
-        '* .cerrar [tiempo] / .abrir → controlar mensajes del grupo (solo admin)'
+        '* .reportar → reportar un usuario que pudo romper las reglas (revisión por admin, 3 faltas = ban)'
     ].join('\n');
 }
 
