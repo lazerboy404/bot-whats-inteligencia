@@ -9,6 +9,9 @@ const PORT = process.env.PORT || 3000;
 let qrCodeData = null;
 
 const MONGO_URL = process.env.MONGO_URL || '';
+const AUTH_STATE_COLLECTION = process.env.AUTH_STATE_COLLECTION || 'wa_auth_state';
+const MOD_RECORDS_COLLECTION = process.env.MOD_RECORDS_COLLECTION || 'mod_records';
+const BOT_CONFIG_COLLECTION = process.env.BOT_CONFIG_COLLECTION || 'bot_config';
 const ADMIN_PHONE = process.env.ADMIN_PHONE || '5215564132674';
 const ADMIN_NUMBER_VARIANTS = new Set(['5564132674', '525564132674', '5215564132674']);
 const reportCooldownByUser = new Map();
@@ -382,6 +385,13 @@ async function saveAdminPrivateJids(privateJid, senderJid) {
     return true;
 }
 
+async function getSavedAdminConfig() {
+    if (!isMongoReady || !BotConfigModel) {
+        return null;
+    }
+    return BotConfigModel.findById('main').lean();
+}
+
 async function resolveAdminJids(sock) {
     const candidates = [...new Set([...(await getSavedAdminJidCandidates()), ...getAdminJidCandidates()])];
     const digits = [...new Set(candidates.map((jid) => cleanDigits(jid)))].filter(Boolean);
@@ -401,6 +411,25 @@ async function resolveAdminJids(sock) {
         return [...resolvedJids];
     }
     return candidates;
+}
+
+async function canManageAdminLink(sock, msg, remoteJid) {
+    const senderJid = msg.key.participant || msg.key.remoteJid || '';
+    const senderNumber = getNumberFromJid(senderJid);
+    if (isOwnerByNumber(senderNumber)) {
+        return true;
+    }
+    if (!remoteJid || remoteJid.endsWith('@g.us')) {
+        return false;
+    }
+    const savedConfig = await getSavedAdminConfig();
+    if (!savedConfig?.adminPrivateJid && !savedConfig?.adminSenderJid) {
+        return true;
+    }
+    return savedConfig.adminPrivateJid === remoteJid
+        || savedConfig.adminPrivateJid === senderJid
+        || savedConfig.adminSenderJid === remoteJid
+        || savedConfig.adminSenderJid === senderJid;
 }
 
 function isOwnerByNumber(number) {
@@ -641,7 +670,7 @@ async function ensureMongo() {
         });
         schema.index({ userId: 1 });
         schema.index({ ultimaActividad: 1 });
-        ModRecordModel = mongoose.model('ModRecord', schema, 'mod_records');
+        ModRecordModel = mongoose.model('ModRecord', schema, MOD_RECORDS_COLLECTION);
     } else {
         ModRecordModel = mongoose.model('ModRecord');
     }
@@ -651,7 +680,7 @@ async function ensureMongo() {
             _id: String,
             data: String
         });
-        AuthStateModel = mongoose.model('AuthState', authSchema, 'wa_auth_state');
+        AuthStateModel = mongoose.model('AuthState', authSchema, AUTH_STATE_COLLECTION);
     } else {
         AuthStateModel = mongoose.model('AuthState');
     }
@@ -663,7 +692,7 @@ async function ensureMongo() {
             adminSenderJid: { type: String, default: '' },
             updatedAt: { type: Date, default: Date.now }
         });
-        BotConfigModel = mongoose.model('BotConfig', botConfigSchema, 'bot_config');
+        BotConfigModel = mongoose.model('BotConfig', botConfigSchema, BOT_CONFIG_COLLECTION);
     } else {
         BotConfigModel = mongoose.model('BotConfig');
     }
@@ -1468,26 +1497,25 @@ async function handlePingCommand(sock, msg, remoteJid) {
 async function handleMyIdCommand(sock, msg, remoteJid) {
     const senderJid = msg.key.participant || msg.key.remoteJid;
     const senderNumber = getNumberFromJid(senderJid);
-    if (!isOwnerByNumber(senderNumber)) {
-        await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo el admin principal.' }, { quoted: msg });
-        return;
-    }
     const privateJid = msg.key.remoteJid || '';
+    const canLinkAdmin = await canManageAdminLink(sock, msg, remoteJid);
     const details = [
         '🪪 Identificadores detectados',
         `Chat actual: ${privateJid || '(sin dato)'}`,
         `Sender: ${senderJid || '(sin dato)'}`,
         `Número detectado: ${senderNumber || '(sin dato)'}`,
+        `Permiso para vincular: ${canLinkAdmin ? 'sí' : 'no'}`,
         '',
-        'Si este es tu chat privado correcto, usa .setadmin aquí mismo.'
+        canLinkAdmin
+            ? 'Si este es tu chat privado correcto, usa .setadmin aquí mismo.'
+            : 'Si este no te reconoce como admin, envía este mensaje al desarrollador para ajustar el vínculo.'
     ].join('\n');
     await sock.sendMessage(remoteJid, { text: details }, { quoted: msg });
 }
 
 async function handleSetAdminCommand(sock, msg, remoteJid) {
     const senderJid = msg.key.participant || msg.key.remoteJid;
-    const senderNumber = getNumberFromJid(senderJid);
-    if (!isOwnerByNumber(senderNumber)) {
+    if (!(await canManageAdminLink(sock, msg, remoteJid))) {
         await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo el admin principal.' }, { quoted: msg });
         return;
     }
