@@ -690,10 +690,11 @@ function getParticipantDisplayName(participant, fallbackJid = '') {
         return visibleName;
     }
     const referenceJid = participant?.id || fallbackJid || '';
-    if (String(referenceJid).includes('@lid')) {
-        return 'Usuario sin nombre visible';
+    const phone = sanitizeText(getNumberFromJid(referenceJid) || '', 120);
+    if (phone) {
+        return phone;
     }
-    return sanitizeText(getNumberFromJid(referenceJid) || 'Usuario sin nombre visible', 120);
+    return 'Usuario sin nombre visible';
 }
 
 async function senderIsAuthorizedAdmin(sock, msg, remoteJid) {
