@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers, downloadContentFromMessage, initAuthCreds, BufferJSON, proto } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers, downloadContentFromMessage, initAuthCreds, BufferJSON, proto, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const express = require('express');
 const mongoose = require('mongoose');
@@ -19,6 +19,8 @@ let isMongoReady = false;
 const GROUP_INVITE_REGEX = /(chat\.whatsapp\.com\/[a-zA-Z0-9]{20,}|wa\.me\/joinlink\/)/i;
 let keepAliveInterval = null;
 let healthWatchInterval = null;
+let antiSleepInterval = null;
+let presenceKeepAliveInterval = null;
 const SAFE_MODE = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAFE_MODE || '').toLowerCase());
 const SEND_MIN_DELAY_MS = Number(process.env.SEND_MIN_DELAY_MS || (SAFE_MODE ? 1800 : 600));
 const SEND_MAX_DELAY_MS = Number(process.env.SEND_MAX_DELAY_MS || (SAFE_MODE ? 4200 : 1800));
@@ -49,9 +51,13 @@ const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban
 const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
 const BAILEYS_CONNECT_TIMEOUT_MS = Number(process.env.BAILEYS_CONNECT_TIMEOUT_MS || 60000);
 const BAILEYS_KEEPALIVE_MS = Number(process.env.BAILEYS_KEEPALIVE_MS || 30000);
+const BAILEYS_RETRY_REQUEST_DELAY_MS = Number(process.env.BAILEYS_RETRY_REQUEST_DELAY_MS || 5000);
 const SEND_ACTION_TIMEOUT_MS = Number(process.env.SEND_ACTION_TIMEOUT_MS || 20000);
 const BOT_HEALTHCHECK_INTERVAL_MS = Number(process.env.BOT_HEALTHCHECK_INTERVAL_MS || 60000);
 const BOT_STALE_SOCKET_MS = Number(process.env.BOT_STALE_SOCKET_MS || 240000);
+const BOT_SUSPEND_DETECTION_MS = Number(process.env.BOT_SUSPEND_DETECTION_MS || 60000);
+const BOT_SUSPEND_CHECK_INTERVAL_MS = Number(process.env.BOT_SUSPEND_CHECK_INTERVAL_MS || 5000);
+const BOT_PRESENCE_KEEPALIVE_MS = Number(process.env.BOT_PRESENCE_KEEPALIVE_MS || (10 * 60 * 1000));
 const BOT_RECONNECT_BASE_MS = Number(process.env.BOT_RECONNECT_BASE_MS || 4000);
 const BOT_RECONNECT_MAX_MS = Number(process.env.BOT_RECONNECT_MAX_MS || 45000);
 const FLAG_BY_DIAL_CODE = {
@@ -1417,6 +1423,44 @@ function startHealthWatchdog() {
     }, BOT_HEALTHCHECK_INTERVAL_MS);
 }
 
+function stopConnectionIntervals() {
+    if (antiSleepInterval) {
+        clearInterval(antiSleepInterval);
+        antiSleepInterval = null;
+    }
+    if (presenceKeepAliveInterval) {
+        clearInterval(presenceKeepAliveInterval);
+        presenceKeepAliveInterval = null;
+    }
+}
+
+function startConnectionIntervals(sock) {
+    stopConnectionIntervals();
+    let lastTickAt = Date.now();
+
+    antiSleepInterval = setInterval(() => {
+        const now = Date.now();
+        const diff = now - lastTickAt;
+        lastTickAt = now;
+        if (diff > BOT_SUSPEND_DETECTION_MS) {
+            console.log(`Detección de suspensión/lag por ${diff}ms. Forzando reconexión preventiva.`);
+            scheduleReconnect('suspend_detected');
+        }
+    }, BOT_SUSPEND_CHECK_INTERVAL_MS);
+
+    presenceKeepAliveInterval = setInterval(async () => {
+        if (activeSock !== sock) {
+            return;
+        }
+        try {
+            await sock.sendPresenceUpdate('available');
+            touchSocketActivity();
+        } catch (error) {
+            scheduleReconnect('presence_keepalive_failed');
+        }
+    }, BOT_PRESENCE_KEEPALIVE_MS);
+}
+
 function getErrorMessage(error) {
     return String(error?.message || error || '').toLowerCase();
 }
@@ -1461,6 +1505,7 @@ function scheduleReconnect(reason) {
     if (reconnectTimer) {
         return;
     }
+    stopConnectionIntervals();
     if (activeSock) {
         try {
             activeSock.end(new Error('reconnect_requested'));
@@ -1561,11 +1606,17 @@ async function startBot() {
             version,
             logger: pino({ level: 'info' }),
             printQRInTerminal: true,
-            auth: state,
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
+            },
             browser: Browsers.ubuntu('Chrome'),
             connectTimeoutMs: BAILEYS_CONNECT_TIMEOUT_MS,
             defaultQueryTimeoutMs: BAILEYS_QUERY_TIMEOUT_MS,
-            keepAliveIntervalMs: BAILEYS_KEEPALIVE_MS
+            keepAliveIntervalMs: BAILEYS_KEEPALIVE_MS,
+            syncFullHistory: false,
+            markOnlineOnConnect: true,
+            retryRequestDelayMs: BAILEYS_RETRY_REQUEST_DELAY_MS
         });
         activeSock = sock;
 
@@ -1624,10 +1675,12 @@ async function startBot() {
             if (connection === 'open') {
                 qrCodeData = null;
                 reconnectDelayMs = BOT_RECONNECT_BASE_MS;
+                startConnectionIntervals(sock);
                 console.log('✅ BOT CONECTADO A WHATSAPP');
             }
 
             if (connection === 'close') {
+                stopConnectionIntervals();
                 const code = lastDisconnect?.error?.output?.statusCode;
                 const reason = lastDisconnect?.error?.message || `code_${code || 'unknown'}`;
                 const shouldReconnect = code !== DisconnectReason.loggedOut;
