@@ -2050,7 +2050,9 @@ async function processIncomingMessage(sock, msg, runId) {
 
     const command = text.trim().split(/\s+/)[0].toLowerCase();
     if (CASTOR_VALID_COMMANDS.has(command) && !SAFE_DISABLE_COMMAND_REACT) {
-        sock.sendMessage(remoteJid, { react: { text: CASTOR_EMOJI, key: msg.key } }).catch(() => {});
+        setTimeout(() => {
+            sock.sendMessage(remoteJid, { react: { text: CASTOR_EMOJI, key: msg.key } }).catch(() => {});
+        }, getRandomDelay(500, 1500));
     }
     lastCommandHandledAt = Date.now();
     if (command === '.reportar') {
