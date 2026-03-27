@@ -44,6 +44,10 @@ let botRunId = 0;
 let sessionResetDoneThisBoot = false;
 let lastSocketActivityAt = Date.now();
 let lastCommandHandledAt = 0;
+const processedMessageIds = new Set();
+const incomingQueue = [];
+let isProcessingIncoming = false;
+let incomingBufferTimeout = null;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
@@ -283,6 +287,10 @@ const COUNTRY_BY_DIAL_CODE = {
 };
 
 const SORTED_DIAL_CODES = Object.keys(COUNTRY_BY_DIAL_CODE).sort((a, b) => b.length - a.length);
+
+setInterval(() => {
+    processedMessageIds.clear();
+}, 60 * 60 * 1000);
 
 function cleanDigits(value) {
     return String(value || '').replace(/\D/g, '');
@@ -1501,6 +1509,133 @@ async function withTimeout(promise, ms, label) {
     }
 }
 
+function getMessageTimestampMs(msg) {
+    const rawTimestamp = msg?.messageTimestamp;
+    if (!rawTimestamp) {
+        return 0;
+    }
+    const timestamp = typeof rawTimestamp === 'number'
+        ? rawTimestamp
+        : typeof rawTimestamp?.low === 'number'
+            ? rawTimestamp.low
+            : Number(rawTimestamp) || 0;
+    return timestamp > 0 ? timestamp * 1000 : 0;
+}
+
+async function processIncomingMessage(sock, msg, runId) {
+    if (runId !== botRunId || !msg?.message) {
+        return;
+    }
+    if (msg.key.fromMe && !ALLOW_SELF_COMMANDS) {
+        return;
+    }
+    if (msg.message.protocolMessage || msg.message?.reactionMessage) {
+        return;
+    }
+
+    const messageTime = getMessageTimestampMs(msg);
+    if (messageTime) {
+        const ageMs = Date.now() - messageTime;
+        if (ageMs > 2 * 60 * 1000) {
+            return;
+        }
+    }
+
+    const remoteJid = msg.key.remoteJid;
+    if (!remoteJid) {
+        return;
+    }
+    const senderJid = msg.key.participant || msg.key.remoteJid;
+    const text = extractTextFromMessage(msg.message);
+    let senderIsAdmin = false;
+    if (remoteJid.endsWith('@g.us')) {
+        try {
+            senderIsAdmin = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
+        } catch (error) {
+            senderIsAdmin = false;
+        }
+    }
+
+    touchLastActivityAsync(senderJid);
+
+    if (remoteJid.endsWith('@g.us') && text && hasGroupInviteLink(text) && !senderIsAdmin) {
+        try {
+            await sock.sendMessage(remoteJid, { delete: msg.key });
+        } catch (error) {
+        }
+        if (isMongoReady) {
+            const autoWarnResult = await applyWarning(sock, senderJid, remoteJid, 'Invitación de grupo detectada automáticamente');
+            await sendCastorSealSticker(sock, remoteJid, msg);
+            const mention = `@${getNumberFromJid(senderJid)}`;
+            const warningText = autoWarnResult.warningCount < 3
+                ? `🚫 ${mention}, las invitaciones a otros grupos están prohibidas. Has sido advertido automáticamente.`
+                : `🚫 ${mention}, las invitaciones a otros grupos están prohibidas. Alcanzaste 3/3 advertencias.`;
+            await sock.sendMessage(remoteJid, { text: warningText, mentions: [senderJid] });
+        } else {
+            await sock.sendMessage(remoteJid, { text: '🚫 Las invitaciones a otros grupos están prohibidas.' });
+        }
+        return;
+    }
+
+    if (!text || !text.trim().startsWith('.')) {
+        return;
+    }
+
+    const command = text.trim().split(/\s+/)[0].toLowerCase();
+    if (CASTOR_VALID_COMMANDS.has(command) && !SAFE_DISABLE_COMMAND_REACT) {
+        sock.sendMessage(remoteJid, { react: { text: CASTOR_EMOJI, key: msg.key } }).catch(() => {});
+    }
+    lastCommandHandledAt = Date.now();
+    if (command === '.reportar') {
+        await handleReportCommand(sock, msg, text, remoteJid);
+    } else if (command === '.advertir') {
+        await handleWarnCommand(sock, msg, text, remoteJid);
+    } else if (command === '.ban') {
+        await handleBanCommand(sock, msg, text, remoteJid);
+    } else if (command === '.unban') {
+        await handleUnbanCommand(sock, msg, text, remoteJid);
+    } else if (command === '.sticker') {
+        await handleStickerCommand(sock, msg, remoteJid);
+    } else if (command === '.top') {
+        await handleTopCommand(sock, msg, remoteJid);
+    } else if (command === '.random') {
+        await handleRandomCommand(sock, msg, remoteJid);
+    } else if (command === '.fantasmas') {
+        await handleGhostsCommand(sock, msg, text, remoteJid);
+    } else if (command === '.cerrar') {
+        await handleCloseGroupCommand(sock, msg, text, remoteJid);
+    } else if (command === '.abrir') {
+        await handleOpenGroupCommand(sock, msg, remoteJid);
+    } else if (command === '.ping') {
+        await handlePingCommand(sock, msg, remoteJid);
+    }
+}
+
+async function processIncomingQueue(sock, runId) {
+    if (isProcessingIncoming || incomingQueue.length === 0) {
+        return;
+    }
+    isProcessingIncoming = true;
+    try {
+        while (incomingQueue.length > 0) {
+            const msg = incomingQueue.shift();
+            try {
+                await processIncomingMessage(sock, msg, runId);
+            } catch (error) {
+                const errorMessage = error?.message || String(error || '');
+                if (!/connection closed|socket no disponible/i.test(errorMessage)) {
+                    console.error('Error en procesamiento de comando:', errorMessage);
+                }
+            }
+        }
+    } finally {
+        isProcessingIncoming = false;
+        if (incomingQueue.length > 0) {
+            processIncomingQueue(sock, runId).catch(() => {});
+        }
+    }
+}
+
 function scheduleReconnect(reason) {
     if (reconnectTimer) {
         return;
@@ -1677,6 +1812,7 @@ async function startBot() {
                 reconnectDelayMs = BOT_RECONNECT_BASE_MS;
                 startConnectionIntervals(sock);
                 console.log('✅ BOT CONECTADO A WHATSAPP');
+                processIncomingQueue(sock, runId).catch(() => {});
             }
 
             if (connection === 'close') {
@@ -1724,99 +1860,26 @@ async function startBot() {
         }
     });
 
-        sock.ev.on('messages.upsert', async ({ messages }) => {
+        sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (runId !== botRunId) {
             return;
         }
         touchSocketActivity();
         for (const msg of messages) {
-            try {
-                if (!msg.message) {
-                    continue;
-                }
-                if (msg.key.fromMe && !ALLOW_SELF_COMMANDS) {
-                    continue;
-                }
-                const remoteJid = msg.key.remoteJid;
-                if (!remoteJid) {
-                    continue;
-                }
-                const senderJid = msg.key.participant || msg.key.remoteJid;
-
-                if (msg.message?.reactionMessage) {
-                    continue;
-                }
-
-                const text = extractTextFromMessage(msg.message);
-                let senderIsAdmin = false;
-                if (remoteJid.endsWith('@g.us')) {
-                    try {
-                        senderIsAdmin = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
-                    } catch (error) {
-                        senderIsAdmin = false;
-                    }
-                }
-
-                touchLastActivityAsync(senderJid);
-
-                if (remoteJid.endsWith('@g.us') && text && hasGroupInviteLink(text) && !senderIsAdmin) {
-                    try {
-                        await sock.sendMessage(remoteJid, { delete: msg.key });
-                    } catch (error) {
-                    }
-                    if (isMongoReady) {
-                        const autoWarnResult = await applyWarning(sock, senderJid, remoteJid, 'Invitación de grupo detectada automáticamente');
-                        await sendCastorSealSticker(sock, remoteJid, msg);
-                        const mention = `@${getNumberFromJid(senderJid)}`;
-                        const warningText = autoWarnResult.warningCount < 3
-                            ? `🚫 ${mention}, las invitaciones a otros grupos están prohibidas. Has sido advertido automáticamente.`
-                            : `🚫 ${mention}, las invitaciones a otros grupos están prohibidas. Alcanzaste 3/3 advertencias.`;
-                        await sock.sendMessage(remoteJid, { text: warningText, mentions: [senderJid] });
-                    } else {
-                        await sock.sendMessage(remoteJid, { text: '🚫 Las invitaciones a otros grupos están prohibidas.' });
-                    }
-                    continue;
-                }
-
-                if (!text || !text.trim().startsWith('.')) {
-                    continue;
-                }
-
-                const command = text.trim().split(/\s+/)[0].toLowerCase();
-                if (CASTOR_VALID_COMMANDS.has(command) && !SAFE_DISABLE_COMMAND_REACT) {
-                    sock.sendMessage(remoteJid, { react: { text: CASTOR_EMOJI, key: msg.key } }).catch(() => {});
-                }
-                lastCommandHandledAt = Date.now();
-                if (command === '.reportar') {
-                    await handleReportCommand(sock, msg, text, remoteJid);
-                } else if (command === '.advertir') {
-                    await handleWarnCommand(sock, msg, text, remoteJid);
-                } else if (command === '.ban') {
-                    await handleBanCommand(sock, msg, text, remoteJid);
-                } else if (command === '.unban') {
-                    await handleUnbanCommand(sock, msg, text, remoteJid);
-                } else if (command === '.sticker') {
-                    await handleStickerCommand(sock, msg, remoteJid);
-                } else if (command === '.top') {
-                    await handleTopCommand(sock, msg, remoteJid);
-                } else if (command === '.random') {
-                    await handleRandomCommand(sock, msg, remoteJid);
-                } else if (command === '.fantasmas') {
-                    await handleGhostsCommand(sock, msg, text, remoteJid);
-                } else if (command === '.cerrar') {
-                    await handleCloseGroupCommand(sock, msg, text, remoteJid);
-                } else if (command === '.abrir') {
-                    await handleOpenGroupCommand(sock, msg, remoteJid);
-                } else if (command === '.ping') {
-                    await handlePingCommand(sock, msg, remoteJid);
-                }
-            } catch (error) {
-                const errorMessage = error?.message || String(error || '');
-                if (!/connection closed|socket no disponible/i.test(errorMessage)) {
-                    console.error('Error en procesamiento de comando:', errorMessage);
-                }
+            if (!msg?.key?.id || processedMessageIds.has(msg.key.id)) {
+                continue;
             }
+            processedMessageIds.add(msg.key.id);
+            incomingQueue.push(msg);
         }
+        if (incomingBufferTimeout) {
+            clearTimeout(incomingBufferTimeout);
+        }
+        const bufferDelayMs = type === 'notify' ? 1200 : 600;
+        incomingBufferTimeout = setTimeout(() => {
+            incomingBufferTimeout = null;
+            processIncomingQueue(sock, runId).catch(() => {});
+        }, bufferDelayMs);
     });
     } finally {
         isStartingBot = false;
