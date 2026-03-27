@@ -1369,7 +1369,10 @@ async function handleBanCommand(sock, msg, text, remoteJid) {
         await sock.groupParticipantsUpdate(currentGroup, [resolved.targetJid], 'remove');
         removed = true;
     } catch (error) {
-        await sock.sendMessage(remoteJid, { text: 'Necesito ser administrador del grupo para banear usuarios.' }, { quoted: msg });
+        const failureText = isGroupPermissionError(error)
+            ? 'Necesito ser administrador del grupo para banear usuarios.'
+            : 'No pude completar el ban en este momento. Intenta de nuevo.';
+        await sock.sendMessage(remoteJid, { text: failureText }, { quoted: msg });
         return;
     }
 
@@ -1434,7 +1437,7 @@ async function applyWarning(sock, targetJid, groupJid, reason) {
                 kicked = true;
             } catch (error) {
                 kicked = false;
-                kickPermissionDenied = true;
+                kickPermissionDenied = isGroupPermissionError(error);
             }
         }
     }
@@ -1571,11 +1574,12 @@ async function handleRandomCommand(sock, msg, remoteJid) {
     }, { quoted: msg });
 }
 
-async function ensureBotIsAdmin(sock, remoteJid) {
-    if (!sock?.user?.id) {
-        return false;
-    }
-    return isGroupAdmin(sock, remoteJid, sock.user.id);
+function isGroupPermissionError(error) {
+    const message = String(error?.message || '').toLowerCase();
+    const statusCode = Number(error?.output?.statusCode || error?.data?.statusCode || 0);
+    return statusCode === 401
+        || statusCode === 403
+        || /not-authorized|not authorized|forbidden|admin|permission|allow only admins/i.test(message);
 }
 
 async function handleCloseGroupCommand(sock, msg, text, remoteJid) {
@@ -1606,7 +1610,10 @@ async function handleCloseGroupCommand(sock, msg, text, remoteJid) {
         try {
             await sock.groupSettingUpdate(remoteJid, 'announcement');
         } catch (error) {
-            await sock.sendMessage(remoteJid, { text: 'Necesito ser administrador del grupo para cerrarlo.' }, { quoted: msg });
+            const failureText = isGroupPermissionError(error)
+                ? 'Necesito ser administrador del grupo para cerrarlo.'
+                : 'No pude cerrar el grupo en este momento. Intenta de nuevo.';
+            await sock.sendMessage(remoteJid, { text: failureText }, { quoted: msg });
             return;
         }
         const reopenAt = new Date(Date.now() + durationMs);
@@ -1636,7 +1643,10 @@ async function handleCloseGroupCommand(sock, msg, text, remoteJid) {
     try {
         await sock.groupSettingUpdate(remoteJid, 'announcement');
     } catch (error) {
-        await sock.sendMessage(remoteJid, { text: 'Necesito ser administrador del grupo para cerrarlo.' }, { quoted: msg });
+        const failureText = isGroupPermissionError(error)
+            ? 'Necesito ser administrador del grupo para cerrarlo.'
+            : 'No pude cerrar el grupo en este momento. Intenta de nuevo.';
+        await sock.sendMessage(remoteJid, { text: failureText }, { quoted: msg });
         return;
     }
     await sock.sendMessage(remoteJid, { text: '🔒 Grupo cerrado hasta nuevo aviso. Solo administradores pueden enviar mensajes.' }, { quoted: msg });
@@ -1663,7 +1673,10 @@ async function handleOpenGroupCommand(sock, msg, remoteJid) {
     try {
         await sock.groupSettingUpdate(remoteJid, 'not_announcement');
     } catch (error) {
-        await sock.sendMessage(remoteJid, { text: 'Necesito ser administrador del grupo para abrirlo.' }, { quoted: msg });
+        const failureText = isGroupPermissionError(error)
+            ? 'Necesito ser administrador del grupo para abrirlo.'
+            : 'No pude abrir el grupo en este momento. Intenta de nuevo.';
+        await sock.sendMessage(remoteJid, { text: failureText }, { quoted: msg });
         return;
     }
     await sock.sendMessage(remoteJid, { text: '🔓 Grupo abierto. Todos los miembros ya pueden enviar mensajes.' }, { quoted: msg });
@@ -2227,7 +2240,10 @@ async function startBot() {
                         try {
                             await sock.groupParticipantsUpdate(event.id, [participantJid], 'remove');
                         } catch (error) {
-                            await sendPrivateAdminMessage(sock, `🚨 ALERTA: El usuario baneado ${participantJid} intentó entrar al grupo ${event.id}, pero no pude expulsarlo automáticamente. Usa .unban ${participantJid} si deseas perdonarlo.`);
+                            const failureText = isGroupPermissionError(error)
+                                ? `🚨 ALERTA: El usuario baneado ${participantJid} intentó entrar al grupo ${event.id}, pero necesito ser administrador para expulsarlo automáticamente. Usa .unban ${participantJid} si deseas perdonarlo.`
+                                : `🚨 ALERTA: El usuario baneado ${participantJid} intentó entrar al grupo ${event.id}, pero no pude expulsarlo automáticamente. Usa .unban ${participantJid} si deseas perdonarlo.`;
+                            await sendPrivateAdminMessage(sock, failureText);
                             continue;
                         }
                         await sendPrivateAdminMessage(sock, `🚨 ALERTA: El usuario baneado ${participantJid} intentó entrar al grupo ${event.id}. Fue expulsado automáticamente. Usa .unban ${participantJid} si deseas perdonarlo.`);
