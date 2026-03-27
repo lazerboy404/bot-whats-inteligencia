@@ -657,6 +657,20 @@ async function isGroupAdmin(sock, groupJid, userJid) {
     return participant?.admin === 'admin' || participant?.admin === 'superadmin';
 }
 
+async function getGroupDisplayName(sock, groupJid, userJid) {
+    try {
+        const metadata = await sock.groupMetadata(groupJid);
+        const normalizedTarget = normalizePhoneForCompare(getNumberFromJid(userJid));
+        const participant = metadata.participants.find((p) => {
+            const current = normalizePhoneForCompare(getNumberFromJid(p.id));
+            return current === normalizedTarget;
+        });
+        return sanitizeText(participant?.notify || participant?.name || getNumberFromJid(userJid) || userJid, 120);
+    } catch (error) {
+        return sanitizeText(getNumberFromJid(userJid) || userJid, 120);
+    }
+}
+
 async function senderIsAuthorizedAdmin(sock, msg, remoteJid) {
     const senderJid = msg.key.participant || msg.key.remoteJid;
     const senderNumber = getNumberFromJid(senderJid);
@@ -823,13 +837,17 @@ async function handleReportCommand(sock, msg, text, remoteJid) {
     const detail = describeQuotedContent(quoted.quotedMessage);
     const reporterId = msg.key.participant || msg.key.remoteJid;
     const offenderId = quoted.quotedParticipant;
+    const reporterName = await getGroupDisplayName(sock, remoteJid, reporterId);
+    const offenderName = await getGroupDisplayName(sock, remoteJid, offenderId);
     const motive = sanitizeText(text).split(/\s+/).slice(1).join(' ');
     const cleanMotive = motive || 'Sin motivo adicional.';
 
     const reportText = [
         '🧾 REPORTE FORENSE',
         `Grupo: ${remoteJid}`,
-        `Reportante: ${reporterId}`,
+        `Reportante: ${reporterName}`,
+        `ID reportante: ${reporterId}`,
+        `Nombre visible infractor: ${offenderName}`,
         `ID infractor: ${offenderId}`,
         `Motivo: ${cleanMotive}`,
         `Tipo de contenido: ${detail.mediaType}`,
