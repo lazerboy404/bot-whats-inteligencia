@@ -39,7 +39,7 @@ const RESET_WA_SESSION_ON_BOOT = ['1', 'true', 'yes', 'on'].includes(String(proc
 const SAFE_DISABLE_SEAL_STICKER = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAFE_DISABLE_SEAL_STICKER || (SAFE_MODE ? 'true' : 'false')).toLowerCase());
 const SAFE_DISABLE_COMMAND_REACT = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAFE_DISABLE_COMMAND_REACT || 'false').toLowerCase());
 const SAFE_DISABLE_AUTO_KICK = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAFE_DISABLE_AUTO_KICK || (SAFE_MODE ? 'true' : 'false')).toLowerCase());
-const SAFE_COMPACT_WELCOME = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAFE_COMPACT_WELCOME || (SAFE_MODE ? 'true' : 'false')).toLowerCase());
+const SAFE_COMPACT_WELCOME = ['1', 'true', 'yes', 'on'].includes(String(process.env.SAFE_COMPACT_WELCOME || 'false').toLowerCase());
 const ALLOW_SELF_COMMANDS = ['1', 'true', 'yes', 'on'].includes(String(process.env.ALLOW_SELF_COMMANDS || 'false').toLowerCase());
 const lastSentAtByJid = new Map();
 let globalSendQueue = Promise.resolve();
@@ -688,13 +688,11 @@ function getRulesText() {
 
 function getUserCommandsText() {
     return [
-        '🦫 🛠️ *Comandos Disponibles*',
+        '🦫 🛠️ Comandos disponibles para todos:',
         '',
-        '.sticker → crear sticker de una imagen (responder a imagen)',
+        '.sticker → crear sticker respondiendo a una imagen',
         '',
-        '.reportar → reportar un usuario que pudo romper las reglas',
-        '(debes citar el mensaje a reportar)',
-        '(revisión por admin, 3 faltas = ban)',
+        '.reportar → reportar un mensaje respondiendo o citándolo',
         '',
         '.top → muestra los usuarios más activos del grupo',
         '',
