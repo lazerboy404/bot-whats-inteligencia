@@ -1935,6 +1935,10 @@ async function processIncomingMessage(sock, msg, runId) {
     }
 
     touchLastActivityAsync(senderJid);
+    try {
+        await sock.readMessages([msg.key]);
+    } catch (error) {
+    }
 
     if (remoteJid.endsWith('@g.us') && text && hasGroupInviteLink(text) && !senderIsAdmin) {
         try {
