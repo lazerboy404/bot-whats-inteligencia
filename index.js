@@ -541,7 +541,7 @@ function getCastorSignatureText() {
     const dateText = new Intl.DateTimeFormat('es-MX', {
         day: 'numeric',
         month: 'long',
-        timeZone: 'UTC'
+        timeZone: 'America/Mexico_City'
     }).format(new Date());
     return `> 𝗖𝗮𝘀𝘁𝗼𝗿 𝗕𝗼𝘁 ${CASTOR_EMOJI} | ${dateText}`;
 }
