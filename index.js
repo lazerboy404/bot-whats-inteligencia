@@ -42,7 +42,7 @@ let sessionResetDoneThisBoot = false;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reporte', '.reportar', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.pais', '.ping']);
+const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.unban', '.sticker', '.fantasmas', '.cerrar', '.cerra', '.abrir', '.ping']);
 const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
 const BAILEYS_CONNECT_TIMEOUT_MS = Number(process.env.BAILEYS_CONNECT_TIMEOUT_MS || 60000);
 const BAILEYS_KEEPALIVE_MS = Number(process.env.BAILEYS_KEEPALIVE_MS || 30000);
@@ -512,8 +512,7 @@ function getUserCommandsText() {
         '* .sticker → crear sticker (responder a imagen)',
         '* .reportar → reportar un usuario que pudo romper las reglas (revisión por admin, 3 faltas = ban)',
         '* .fantasmas [días] → lista de inactivos (solo admin)',
-        '* .cerrar [tiempo] / .abrir → controlar mensajes del grupo (solo admin)',
-        '* .pais @usuario País 🇲🇽 → fijar país de bienvenida (solo admin)'
+        '* .cerrar [tiempo] / .abrir → controlar mensajes del grupo (solo admin)'
     ].join('\n');
 }
 
@@ -859,13 +858,13 @@ async function handleReportCommand(sock, msg, text, remoteJid) {
     const last = reportCooldownByUser.get(senderKey) || 0;
     if (now - last < 60000) {
         const wait = Math.ceil((60000 - (now - last)) / 1000);
-        await sock.sendMessage(remoteJid, { text: `Debes esperar ${wait}s para usar .reporte de nuevo.` }, { quoted: msg });
+        await sock.sendMessage(remoteJid, { text: `Debes esperar ${wait}s para usar .reportar de nuevo.` }, { quoted: msg });
         return;
     }
 
     const quoted = getQuotedPayload(msg.message);
     if (!quoted?.quotedParticipant || !quoted?.quotedMessage) {
-        await sock.sendMessage(remoteJid, { text: 'Para usar .reporte debes responder a un mensaje.' }, { quoted: msg });
+        await sock.sendMessage(remoteJid, { text: 'Para usar .reportar debes responder a un mensaje.' }, { quoted: msg });
         return;
     }
 
@@ -1134,11 +1133,11 @@ async function handleCloseGroupCommand(sock, msg, text, remoteJid) {
         return;
     }
 
-    const rawDuration = sanitizeText(text).replace(/^\.cerrar\s*/i, '').trim();
+    const rawDuration = sanitizeText(text).replace(/^\.cerr(?:ar|a)\s*/i, '').trim();
     if (rawDuration) {
         const durationMs = parseCloseDurationMs(rawDuration);
         if (!durationMs) {
-            await sock.sendMessage(remoteJid, { text: 'Formato inválido. Usa por ejemplo: .cerrar 20min o .cerrar 1 hora' }, { quoted: msg });
+            await sock.sendMessage(remoteJid, { text: 'Formato inválido. Usa por ejemplo: .cerrar 20 min, .cerrar 7 horas o .cerra 5 minutos' }, { quoted: msg });
             return;
         }
 
@@ -1565,7 +1564,7 @@ async function startBot() {
                 if (CASTOR_VALID_COMMANDS.has(command) && !SAFE_DISABLE_COMMAND_REACT) {
                     sock.sendMessage(remoteJid, { react: { text: CASTOR_EMOJI, key: msg.key } }).catch(() => {});
                 }
-                if (command === '.reporte' || command === '.reportar') {
+                if (command === '.reportar') {
                     await handleReportCommand(sock, msg, text, remoteJid);
                 } else if (command === '.advertir') {
                     await handleWarnCommand(sock, msg, text, remoteJid);
@@ -1575,12 +1574,10 @@ async function startBot() {
                     await handleStickerCommand(sock, msg, remoteJid);
                 } else if (command === '.fantasmas') {
                     await handleGhostsCommand(sock, msg, text, remoteJid);
-                } else if (command === '.cerrar') {
+                } else if (command === '.cerrar' || command === '.cerra') {
                     await handleCloseGroupCommand(sock, msg, text, remoteJid);
                 } else if (command === '.abrir') {
                     await handleOpenGroupCommand(sock, msg, remoteJid);
-                } else if (command === '.pais') {
-                    await handleSetCountryCommand(sock, msg, text, remoteJid);
                 } else if (command === '.ping') {
                     await handlePingCommand(sock, msg, remoteJid);
                 }
