@@ -44,6 +44,7 @@ const ALLOW_SELF_COMMANDS = ['1', 'true', 'yes', 'on'].includes(String(process.e
 const lastSentAtByJid = new Map();
 let globalSendQueue = Promise.resolve();
 const closeTimersByGroup = new Map();
+const scheduledGroupActionsByGroup = new Map();
 const pendingWelcomesByGroup = new Map();
 let reconnectTimer = null;
 let reconnectDelayMs = 4000;
@@ -693,6 +694,88 @@ function parseCloseDurationMs(rawText) {
         return amount * 60 * 60 * 1000;
     }
     return amount * 60 * 1000;
+}
+
+function parseFutureActionTime(rawText) {
+    const input = sanitizeText(rawText || '').toLowerCase();
+    if (!input) {
+        return null;
+    }
+
+    const relativeMatch = input.match(/^en\s+(\d+)\s*(h|hr|hrs|hora|horas|m|min|mins|minuto|minutos)\b/i);
+    if (relativeMatch) {
+        const amount = Number(relativeMatch[1]);
+        const unit = relativeMatch[2].toLowerCase();
+        if (!Number.isFinite(amount) || amount <= 0) {
+            return null;
+        }
+        const delayMs = ['h', 'hr', 'hrs', 'hora', 'horas'].includes(unit)
+            ? amount * 60 * 60 * 1000
+            : amount * 60 * 1000;
+        return {
+            delayMs,
+            executeAt: new Date(Date.now() + delayMs)
+        };
+    }
+
+    const absoluteMatch = input.match(/^(?:a\s+las\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+    if (!absoluteMatch) {
+        return null;
+    }
+
+    let hour = Number(absoluteMatch[1]);
+    const minute = Number(absoluteMatch[2] || '0');
+    const suffix = String(absoluteMatch[3] || '').toLowerCase();
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute < 0 || minute > 59) {
+        return null;
+    }
+
+    if (suffix) {
+        if (hour < 1 || hour > 12) {
+            return null;
+        }
+        if (suffix === 'am') {
+            hour = hour === 12 ? 0 : hour;
+        } else {
+            hour = hour === 12 ? 12 : hour + 12;
+        }
+    } else if (hour < 0 || hour > 23) {
+        return null;
+    }
+
+    const nowUtc = new Date();
+    const mexicoNow = new Date(nowUtc.toLocaleString('en-US', { timeZone: 'America/Mexico_City' }));
+    const mexicoTarget = new Date(mexicoNow);
+    mexicoTarget.setSeconds(0, 0);
+    mexicoTarget.setHours(hour, minute, 0, 0);
+    if (mexicoTarget.getTime() <= mexicoNow.getTime()) {
+        mexicoTarget.setDate(mexicoTarget.getDate() + 1);
+    }
+    const delayMs = mexicoTarget.getTime() - mexicoNow.getTime();
+    return {
+        delayMs,
+        executeAt: new Date(nowUtc.getTime() + delayMs)
+    };
+}
+
+function setScheduledGroupAction(groupJid, actionName, timer, executeAt) {
+    const current = scheduledGroupActionsByGroup.get(groupJid) || {};
+    current[actionName] = { timer, executeAt };
+    scheduledGroupActionsByGroup.set(groupJid, current);
+}
+
+function clearScheduledGroupAction(groupJid, actionName) {
+    const current = scheduledGroupActionsByGroup.get(groupJid);
+    if (!current?.[actionName]) {
+        return;
+    }
+    clearTimeout(current[actionName].timer);
+    delete current[actionName];
+    if (!current.close && !current.open) {
+        scheduledGroupActionsByGroup.delete(groupJid);
+        return;
+    }
+    scheduledGroupActionsByGroup.set(groupJid, current);
 }
 
 function getRulesText() {
@@ -1679,12 +1762,32 @@ async function handleCloseGroupCommand(sock, msg, text, remoteJid) {
 
     const rawDuration = sanitizeText(text).replace(/^\.cerrar\s*/i, '').trim();
     if (rawDuration) {
-        const durationMs = parseCloseDurationMs(rawDuration);
-        if (!durationMs) {
-            await sock.sendMessage(remoteJid, { text: 'Formato inválido. Usa por ejemplo: .cerrar 20 min o .cerrar 7 horas' }, { quoted: msg });
+        const scheduledClose = parseFutureActionTime(rawDuration);
+        if (scheduledClose) {
+            clearScheduledGroupAction(remoteJid, 'close');
+            const executeAtLabel = formatMexicoDateTime(scheduledClose.executeAt);
+            const timer = setTimeout(async () => {
+                try {
+                    await sock.groupSettingUpdate(remoteJid, 'announcement');
+                    await sock.sendMessage(remoteJid, { text: '🔒 El grupo se cerró automáticamente. Solo administradores pueden enviar mensajes.' });
+                    await sendReactionSticker(sock, remoteJid, 'cerrar.webp');
+                } catch (error) {
+                } finally {
+                    clearScheduledGroupAction(remoteJid, 'close');
+                }
+            }, scheduledClose.delayMs);
+            setScheduledGroupAction(remoteJid, 'close', timer, scheduledClose.executeAt);
+            await sock.sendMessage(remoteJid, { text: `⏳ Grupo programado para cerrarse el ${executeAtLabel}.` }, { quoted: msg });
             return;
         }
 
+        const durationMs = parseCloseDurationMs(rawDuration);
+        if (!durationMs) {
+            await sock.sendMessage(remoteJid, { text: 'Formato inválido. Usa por ejemplo: .cerrar 20 min, .cerrar en 15 min o .cerrar 10 pm' }, { quoted: msg });
+            return;
+        }
+
+        clearScheduledGroupAction(remoteJid, 'close');
         const activeTimer = closeTimersByGroup.get(remoteJid);
         if (activeTimer?.timer) {
             clearTimeout(activeTimer.timer);
@@ -1724,6 +1827,7 @@ async function handleCloseGroupCommand(sock, msg, text, remoteJid) {
         clearTimeout(activeTimer.timer);
         closeTimersByGroup.delete(remoteJid);
     }
+    clearScheduledGroupAction(remoteJid, 'close');
 
     try {
         await sock.groupSettingUpdate(remoteJid, 'announcement');
@@ -1750,11 +1854,41 @@ async function handleOpenGroupCommand(sock, msg, remoteJid) {
         return;
     }
 
+    const rawSchedule = extractTextFromMessage(msg.message).replace(/^\.abrir\s*/i, '').trim();
+    if (rawSchedule) {
+        const scheduledOpen = parseFutureActionTime(rawSchedule);
+        if (!scheduledOpen) {
+            await sock.sendMessage(remoteJid, { text: 'Formato inválido. Usa por ejemplo: .abrir en 2 min o .abrir 7 am' }, { quoted: msg });
+            return;
+        }
+        clearScheduledGroupAction(remoteJid, 'open');
+        const activeCloseTimer = closeTimersByGroup.get(remoteJid);
+        if (activeCloseTimer?.timer) {
+            clearTimeout(activeCloseTimer.timer);
+            closeTimersByGroup.delete(remoteJid);
+        }
+        const executeAtLabel = formatMexicoDateTime(scheduledOpen.executeAt);
+        const timer = setTimeout(async () => {
+            try {
+                await sock.groupSettingUpdate(remoteJid, 'not_announcement');
+                await sock.sendMessage(remoteJid, { text: '🔓 El grupo se abrió automáticamente. Ya todos pueden enviar mensajes.' });
+                await sendReactionSticker(sock, remoteJid, 'abrir.webp');
+            } catch (error) {
+            } finally {
+                clearScheduledGroupAction(remoteJid, 'open');
+            }
+        }, scheduledOpen.delayMs);
+        setScheduledGroupAction(remoteJid, 'open', timer, scheduledOpen.executeAt);
+        await sock.sendMessage(remoteJid, { text: `⏳ Grupo programado para abrirse el ${executeAtLabel}.` }, { quoted: msg });
+        return;
+    }
+
     const activeTimer = closeTimersByGroup.get(remoteJid);
     if (activeTimer?.timer) {
         clearTimeout(activeTimer.timer);
         closeTimersByGroup.delete(remoteJid);
     }
+    clearScheduledGroupAction(remoteJid, 'open');
 
     try {
         await sock.groupSettingUpdate(remoteJid, 'not_announcement');
