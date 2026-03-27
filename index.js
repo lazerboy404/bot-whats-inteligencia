@@ -547,6 +547,19 @@ function getCastorSignatureText() {
     return `> 𝗖𝗮𝘀𝘁𝗼𝗿 𝗕𝗼𝘁 ${CASTOR_EMOJI} | ${dateText}`;
 }
 
+function formatMexicoDateTime(value) {
+    return new Intl.DateTimeFormat('es-MX', {
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        timeZone: 'America/Mexico_City'
+    }).format(value);
+}
+
 function brandCastorText(value) {
     let text = String(value ?? '').trim();
     if (text.length > 9000) {
@@ -1674,7 +1687,7 @@ async function handleCloseGroupCommand(sock, msg, text, remoteJid) {
             return;
         }
         const reopenAt = new Date(Date.now() + durationMs);
-        const reopenAtLabel = reopenAt.toLocaleString('es-MX', { hour12: false });
+        const reopenAtLabel = formatMexicoDateTime(reopenAt);
         await sock.sendMessage(remoteJid, { text: `🔒 Grupo cerrado por ${rawDuration}. Se abrirá automáticamente el ${reopenAtLabel}.` }, { quoted: msg });
 
         const timer = setTimeout(async () => {
