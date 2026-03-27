@@ -3,6 +3,7 @@ const pino = require('pino');
 const express = require('express');
 const mongoose = require('mongoose');
 const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -12,6 +13,9 @@ const MONGO_URL = process.env.MONGO_URL || '';
 const AUTH_STATE_COLLECTION = process.env.AUTH_STATE_COLLECTION || 'wa_auth_state';
 const MOD_RECORDS_COLLECTION = process.env.MOD_RECORDS_COLLECTION || 'mod_records';
 const BOT_CONFIG_COLLECTION = process.env.BOT_CONFIG_COLLECTION || 'bot_config';
+const FORCE_LOCAL_STORAGE = ['1', 'true', 'yes', 'on'].includes(String(process.env.FORCE_LOCAL_STORAGE || '').toLowerCase());
+const LOCAL_STORAGE_ENABLED = FORCE_LOCAL_STORAGE || !MONGO_URL;
+const LOCAL_STORE_FILE = process.env.LOCAL_STORE_FILE || path.join(process.cwd(), 'data', 'castor_store.json');
 const ADMIN_PHONE = process.env.ADMIN_PHONE || '5215564132674';
 const ADMIN_NUMBER_VARIANTS = new Set(['5564132674', '525564132674', '5215564132674']);
 const reportCooldownByUser = new Map();
@@ -20,6 +24,7 @@ let ModRecordModel = null;
 let AuthStateModel = null;
 let BotConfigModel = null;
 let isMongoReady = false;
+let localStoreCache = null;
 const GROUP_INVITE_REGEX = /(chat\.whatsapp\.com\/[a-zA-Z0-9]{20,}|wa\.me\/joinlink\/)/i;
 let keepAliveInterval = null;
 let healthWatchInterval = null;
@@ -300,6 +305,56 @@ function cleanDigits(value) {
     return String(value || '').replace(/\D/g, '');
 }
 
+function getDefaultLocalStore() {
+    return {
+        modRecords: {},
+        botConfig: {
+            adminPrivateJid: '',
+            adminSenderJid: '',
+            updatedAt: null
+        }
+    };
+}
+
+function ensureLocalStoreLoaded() {
+    if (localStoreCache) {
+        return localStoreCache;
+    }
+    try {
+        const raw = fs.readFileSync(LOCAL_STORE_FILE, 'utf8');
+        localStoreCache = { ...getDefaultLocalStore(), ...JSON.parse(raw || '{}') };
+    } catch (error) {
+        localStoreCache = getDefaultLocalStore();
+    }
+    return localStoreCache;
+}
+
+function saveLocalStore() {
+    const store = ensureLocalStoreLoaded();
+    fs.mkdirSync(path.dirname(LOCAL_STORE_FILE), { recursive: true });
+    fs.writeFileSync(LOCAL_STORE_FILE, JSON.stringify(store, null, 2), 'utf8');
+}
+
+function applyUpdateObject(target, update) {
+    const next = { ...(target || {}) };
+    if (update?.$set) {
+        Object.assign(next, update.$set);
+    }
+    if (update?.$inc) {
+        for (const [key, value] of Object.entries(update.$inc)) {
+            next[key] = Number(next[key] || 0) + Number(value || 0);
+        }
+    }
+    if (update?.$push) {
+        for (const [key, value] of Object.entries(update.$push)) {
+            const current = Array.isArray(next[key]) ? [...next[key]] : [];
+            current.push(value);
+            next[key] = current;
+        }
+    }
+    return next;
+}
+
 function normalizePhoneForCompare(value) {
     let digits = cleanDigits(value);
     if (digits.startsWith('00')) {
@@ -353,10 +408,10 @@ function getAdminJidCandidates() {
 }
 
 async function getSavedAdminJidCandidates() {
-    if (!isMongoReady || !BotConfigModel) {
+    const config = await getSavedAdminConfig();
+    if (!config) {
         return [];
     }
-    const config = await BotConfigModel.findById('main').lean();
     const candidates = [];
     if (config?.adminPrivateJid) {
         candidates.push(config.adminPrivateJid);
@@ -368,25 +423,30 @@ async function getSavedAdminJidCandidates() {
 }
 
 async function saveAdminPrivateJids(privateJid, senderJid) {
-    if (!isMongoReady || !BotConfigModel) {
+    if (!isMongoReady) {
         return false;
     }
-    await BotConfigModel.updateOne(
-        { _id: 'main' },
+    await saveBotConfigRecord(
         {
             $set: {
                 adminPrivateJid: sanitizeText(privateJid || '', 160),
                 adminSenderJid: sanitizeText(senderJid || '', 160),
                 updatedAt: new Date()
             }
-        },
-        { upsert: true }
+        }
     );
     return true;
 }
 
 async function getSavedAdminConfig() {
-    if (!isMongoReady || !BotConfigModel) {
+    if (!isMongoReady) {
+        return null;
+    }
+    if (LOCAL_STORAGE_ENABLED) {
+        const store = ensureLocalStoreLoaded();
+        return store.botConfig ? { ...store.botConfig } : null;
+    }
+    if (!BotConfigModel) {
         return null;
     }
     return BotConfigModel.findById('main').lean();
@@ -648,6 +708,12 @@ async function ensureMongo() {
     if (isMongoReady) {
         return true;
     }
+    if (LOCAL_STORAGE_ENABLED) {
+        ensureLocalStoreLoaded();
+        isMongoReady = true;
+        console.log(`Almacenamiento local activado en ${LOCAL_STORE_FILE}`);
+        return true;
+    }
     if (!MONGO_URL) {
         console.error('MONGO_URL no está configurado. Moderación desactivada.');
         return false;
@@ -762,7 +828,50 @@ async function useMongoAuthState() {
     };
 }
 
+async function saveBotConfigRecord(update) {
+    if (LOCAL_STORAGE_ENABLED) {
+        const store = ensureLocalStoreLoaded();
+        store.botConfig = applyUpdateObject(store.botConfig || {}, update);
+        saveLocalStore();
+        return store.botConfig;
+    }
+    await BotConfigModel.updateOne({ _id: 'main' }, update, { upsert: true });
+    return getSavedAdminConfig();
+}
+
+async function findModRecordsByUserIds(userIds) {
+    if (LOCAL_STORAGE_ENABLED) {
+        const store = ensureLocalStoreLoaded();
+        return userIds
+            .map((userId) => ({ userId, ...(store.modRecords?.[userId] || {}) }))
+            .filter((record) => Object.keys(record).length > 1);
+    }
+    return ModRecordModel.find(
+        { userId: { $in: userIds } },
+        { userId: 1, actividadMensajes: 1, ultimaActividad: 1 }
+    ).lean();
+}
+
 async function upsertModRecord(userId, update) {
+    if (LOCAL_STORAGE_ENABLED) {
+        const store = ensureLocalStoreLoaded();
+        const current = store.modRecords?.[userId] || {
+            userId,
+            advertencias: 0,
+            motivos: [],
+            isBanned: false,
+            intentosReingreso: 0,
+            actividadMensajes: 0,
+            ultimaActividad: null,
+            countryOverride: '',
+            flagOverride: ''
+        };
+        const next = applyUpdateObject(current, update);
+        next.userId = userId;
+        store.modRecords[userId] = next;
+        saveLocalStore();
+        return { ...next };
+    }
     return ModRecordModel.findOneAndUpdate(
         { userId },
         update,
@@ -771,6 +880,10 @@ async function upsertModRecord(userId, update) {
 }
 
 async function getModRecord(userId) {
+    if (LOCAL_STORAGE_ENABLED) {
+        const store = ensureLocalStoreLoaded();
+        return store.modRecords?.[userId] ? { ...store.modRecords[userId] } : null;
+    }
     return ModRecordModel.findOne({ userId }).lean();
 }
 
@@ -1314,10 +1427,7 @@ async function handleGhostsCommand(sock, msg, text, remoteJid) {
     const metadata = await sock.groupMetadata(remoteJid);
     const participants = metadata.participants || [];
     const participantIds = participants.map((p) => p.id);
-    const records = await ModRecordModel.find(
-        { userId: { $in: participantIds } },
-        { userId: 1, ultimaActividad: 1 }
-    ).lean();
+    const records = await findModRecordsByUserIds(participantIds);
 
     const recordsByUser = new Map(records.map((item) => [item.userId, item]));
     const inactive = [];
@@ -1359,10 +1469,7 @@ async function handleTopCommand(sock, msg, remoteJid) {
     const metadata = await sock.groupMetadata(remoteJid);
     const participants = (metadata.participants || []).filter((participant) => participant.id !== sock.user?.id);
     const participantIds = participants.map((participant) => participant.id);
-    const records = await ModRecordModel.find(
-        { userId: { $in: participantIds } },
-        { userId: 1, actividadMensajes: 1, ultimaActividad: 1 }
-    ).lean();
+    const records = await findModRecordsByUserIds(participantIds);
 
     const participantsById = new Map(participants.map((participant) => [participant.id, participant]));
     const topEntries = records
@@ -1894,6 +2001,14 @@ function setupProcessErrorGuard() {
             return;
         }
         scheduleReconnect('uncaught_error');
+    });
+    process.on('SIGTERM', () => {
+        console.error('SIGTERM detectado: Render o el contenedor terminó el proceso.');
+        stopConnectionIntervals();
+    });
+    process.on('SIGINT', () => {
+        console.error('SIGINT detectado: detención manual del proceso.');
+        stopConnectionIntervals();
     });
 }
 
