@@ -44,6 +44,7 @@ const ALLOW_SELF_COMMANDS = ['1', 'true', 'yes', 'on'].includes(String(process.e
 const lastSentAtByJid = new Map();
 let globalSendQueue = Promise.resolve();
 const closeTimersByGroup = new Map();
+const pendingWelcomesByGroup = new Map();
 let reconnectTimer = null;
 let reconnectDelayMs = 4000;
 let processErrorGuardReady = false;
@@ -1161,6 +1162,57 @@ async function sendWelcome(sock, groupJid, participantJid) {
     }
 }
 
+async function sendBatchedWelcome(sock, groupJid, participantJids) {
+    const welcomeMentions = [];
+    const mentionsArray = [];
+
+    for (const jid of participantJids) {
+        const number = getNumberFromJid(jid);
+        if (number) {
+            welcomeMentions.push(`@${number}`);
+            mentionsArray.push(jid);
+        }
+    }
+
+    if (welcomeMentions.length === 0) {
+        return;
+    }
+
+    const isMultiple = welcomeMentions.length > 1;
+    const title = isMultiple
+        ? `${CASTOR_EMOJI} ¡Nuevos castores han llegado al estanque! Bienvenidos:`
+        : `${CASTOR_EMOJI} ¡Un nuevo castor ha llegado al estanque! Bienvenido/a:`;
+
+    const welcomeAndRulesText = [
+        title,
+        welcomeMentions.join(', '),
+        '',
+        'Soy Castor Bot, el guardián de este dique. ¡Pónganse cómodos y ayudemos a construir!',
+        '',
+        getRulesText()
+    ].join('\n');
+
+    const imageUrl = CASTOR_DEFAULT_IMAGE_URL;
+
+    try {
+        await sock.sendMessage(groupJid, {
+            image: { url: imageUrl },
+            caption: welcomeAndRulesText,
+            mentions: mentionsArray
+        });
+
+        if (!SAFE_COMPACT_WELCOME) {
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            await sock.sendMessage(groupJid, { text: getUserCommandsText() });
+        }
+    } catch (error) {
+        await sock.sendMessage(groupJid, {
+            text: welcomeAndRulesText,
+            mentions: mentionsArray
+        });
+    }
+}
+
 async function handleReportCommand(sock, msg, text, remoteJid) {
     if (!remoteJid.endsWith('@g.us')) {
         await sock.sendMessage(remoteJid, { text: 'Este comando solo funciona en grupos.' }, { quoted: msg });
@@ -2243,6 +2295,9 @@ async function startBot() {
             return;
         }
 
+        const groupJid = event.id;
+        const validNewParticipants = [];
+
         for (const participantJid of event.participants) {
             try {
                 if (isMongoReady) {
@@ -2250,23 +2305,60 @@ async function startBot() {
                     if (record?.isBanned) {
                         await upsertModRecord(participantJid, { $inc: { intentosReingreso: 1 } });
                         try {
-                            await sock.groupParticipantsUpdate(event.id, [participantJid], 'remove');
+                            await sock.groupParticipantsUpdate(groupJid, [participantJid], 'remove');
                         } catch (error) {
                             const failureText = isGroupPermissionError(error)
-                                ? `🚨 ALERTA: El usuario baneado ${participantJid} intentó entrar al grupo ${event.id}, pero necesito ser administrador para expulsarlo automáticamente. Usa .unban ${participantJid} si deseas perdonarlo.`
-                                : `🚨 ALERTA: El usuario baneado ${participantJid} intentó entrar al grupo ${event.id}, pero no pude expulsarlo automáticamente. Usa .unban ${participantJid} si deseas perdonarlo.`;
+                                ? `🚨 ALERTA: El usuario baneado ${participantJid} intentó entrar al grupo ${groupJid}, pero necesito ser administrador para expulsarlo automáticamente. Usa .unban ${participantJid} si deseas perdonarlo.`
+                                : `🚨 ALERTA: El usuario baneado ${participantJid} intentó entrar al grupo ${groupJid}, pero no pude expulsarlo automáticamente. Usa .unban ${participantJid} si deseas perdonarlo.`;
                             await sendPrivateAdminMessage(sock, failureText);
                             continue;
                         }
-                        await sendPrivateAdminMessage(sock, `🚨 ALERTA: El usuario baneado ${participantJid} intentó entrar al grupo ${event.id}. Fue expulsado automáticamente. Usa .unban ${participantJid} si deseas perdonarlo.`);
+                        await sendPrivateAdminMessage(sock, `🚨 ALERTA: El usuario baneado ${participantJid} intentó entrar al grupo ${groupJid}. Fue expulsado automáticamente. Usa .unban ${participantJid} si deseas perdonarlo.`);
                         continue;
                     }
                 }
-                await sendWelcome(sock, event.id, participantJid);
+                validNewParticipants.push(participantJid);
             } catch (error) {
                 console.error('Error procesando ingreso al grupo:', error?.message || error);
             }
         }
+
+        if (validNewParticipants.length === 0) {
+            return;
+        }
+
+        if (!pendingWelcomesByGroup.has(groupJid)) {
+            pendingWelcomesByGroup.set(groupJid, {
+                participants: new Set(),
+                timer: null
+            });
+        }
+
+        const groupQueue = pendingWelcomesByGroup.get(groupJid);
+        validNewParticipants.forEach((jid) => groupQueue.participants.add(jid));
+
+        if (groupQueue.timer) {
+            clearTimeout(groupQueue.timer);
+        }
+
+        try {
+            await sock.sendPresenceUpdate('composing', groupJid);
+        } catch (error) {
+        }
+
+        groupQueue.timer = setTimeout(async () => {
+            const jidsToWelcome = Array.from(groupQueue.participants);
+            pendingWelcomesByGroup.delete(groupJid);
+
+            try {
+                await sock.sendPresenceUpdate('paused', groupJid);
+            } catch (error) {
+            }
+
+            if (jidsToWelcome.length > 0) {
+                await sendBatchedWelcome(sock, groupJid, jidsToWelcome);
+            }
+        }, 5000);
     });
 
         sock.ev.on('messages.upsert', async ({ messages, type }) => {
