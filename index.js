@@ -1946,7 +1946,7 @@ async function handleDinamicaCommand(sock, msg, remoteJid) {
         '',
         '🎯 *Reglas:*',
         '',
-        '1️⃣ Escribe un mensaje que le guste al grupo.',
+        '1️⃣ Comparte un aporte de calidad en el grupo.',
         '',
         '2️⃣ Otros miembros deben reaccionar con alguno de estos emojis:',
         '👍 ❤️ 👏 🤯 🔥 💯 🧠 🤖 🦫 💡',
