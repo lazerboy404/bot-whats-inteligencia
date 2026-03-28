@@ -52,7 +52,7 @@ let incomingBufferTimeout = null;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.comandos', '.reglas', '.miid', '.setadmin', '.troncos']);
+const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.comandos', '.reglas', '.miid', '.setadmin', '.troncos', '.dinamica']);
 const POSITIVE_REACTION_EMOJIS = new Set(['👍', '❤️', '👏', '🤯', '🔥', '💯', '🧠', '🤖', '🦫', '💡']);
 const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
 const BAILEYS_CONNECT_TIMEOUT_MS = Number(process.env.BAILEYS_CONNECT_TIMEOUT_MS || 60000);
@@ -798,6 +798,8 @@ function getUserCommandsText() {
         '.random → menciona alguien al azar',
         '',
         '.comandos → muestra la lista de comandos para usuarios',
+        '',
+        '.dinamica → explica cómo ganar troncos 🪵',
         '',
         '.reglas → muestra las reglas del grupo',
         '',
@@ -1936,6 +1938,35 @@ async function handleTroncosCommand(sock, msg, remoteJid) {
     }, { quoted: msg });
 }
 
+async function handleDinamicaCommand(sock, msg, remoteJid) {
+    const dinamicaText = [
+        '🪵 *¿Cómo ganar Troncos?*',
+        '',
+        'Los troncos son la moneda del estanque. Se ganan cuando tus mensajes reciben reacciones de otros castores.',
+        '',
+        '🎯 *Reglas:*',
+        '',
+        '1️⃣ Escribe un mensaje que le guste al grupo.',
+        '',
+        '2️⃣ Otros miembros deben reaccionar con alguno de estos emojis:',
+        '👍 ❤️ 👏 🤯 🔥 💯 🧠 🤖 🦫 💡',
+        '',
+        '3️⃣ Cuando tu mensaje alcance *5 reacciones* de personas distintas, ganas *1 tronco* 🪵',
+        '',
+        '4️⃣ Si ese mismo mensaje llega a *10 reacciones*, ganas *1 tronco extra* 🪵🪵',
+        '',
+        '⚠️ *Importante:*',
+        '• Reaccionarte a ti mismo no cuenta.',
+        '• Quitar y poner la reacción no suma más.',
+        '• Cada persona solo cuenta una vez por mensaje.',
+        '',
+        '📊 Usa *.top* para ver el ranking y *.troncos* para ver los tuyos.',
+        '',
+        '¡A construir el dique! 🦫'
+    ].join('\n');
+    await sock.sendMessage(remoteJid, { text: dinamicaText }, { quoted: msg });
+}
+
 app.get('/', (req, res) => {
     if (qrCodeData) {
         res.send(`
@@ -2200,6 +2231,8 @@ async function processIncomingMessage(sock, msg, runId) {
         await handleSetAdminCommand(sock, msg, remoteJid);
     } else if (command === '.troncos') {
         await handleTroncosCommand(sock, msg, remoteJid);
+    } else if (command === '.dinamica') {
+        await handleDinamicaCommand(sock, msg, remoteJid);
     }
 }
 
