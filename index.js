@@ -1116,7 +1116,9 @@ async function sendWelcome(sock, groupJid, participantJid) {
         `${CASTOR_EMOJI} ¡Un nuevo castor ha llegado al estanque! Bienvenido/a ${mention}`,
         `Nos saludas desde ${flag} ${country}. Soy Castor Bot, el guardián de este dique. ¡Ponte cómodo y ayudemos a construir!`,
         '',
-        getRulesText()
+        getRulesText(),
+        '',
+        '🔗 Link del grupo: https://chat.whatsapp.com/IIiwVeYGLUV8gbGXU4SfEz'
     ].join('\n');
     const commandsInfoText = getUserCommandsText();
 
@@ -1185,7 +1187,9 @@ async function sendBatchedWelcome(sock, groupJid, participantJids) {
         '',
         locationLine,
         '',
-        getRulesText()
+        getRulesText(),
+        '',
+        '🔗 Link del grupo: https://chat.whatsapp.com/IIiwVeYGLUV8gbGXU4SfEz'
     ].join('\n');
 
     const imageUrl = CASTOR_DEFAULT_IMAGE_URL;
