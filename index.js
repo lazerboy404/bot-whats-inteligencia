@@ -1,7 +1,6 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers, downloadContentFromMessage, initAuthCreds, BufferJSON, proto, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers, downloadContentFromMessage, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const express = require('express');
-const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
 
@@ -9,21 +8,12 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 let qrCodeData = null;
 
-const MONGO_URL = process.env.MONGO_URL || '';
-const AUTH_STATE_COLLECTION = process.env.AUTH_STATE_COLLECTION || 'wa_auth_state';
-const MOD_RECORDS_COLLECTION = process.env.MOD_RECORDS_COLLECTION || 'mod_records';
-const BOT_CONFIG_COLLECTION = process.env.BOT_CONFIG_COLLECTION || 'bot_config';
-const FORCE_LOCAL_STORAGE = ['1', 'true', 'yes', 'on'].includes(String(process.env.FORCE_LOCAL_STORAGE || '').toLowerCase());
-const LOCAL_STORAGE_ENABLED = FORCE_LOCAL_STORAGE || !MONGO_URL;
 const LOCAL_STORE_FILE = process.env.LOCAL_STORE_FILE || path.join(process.cwd(), 'data', 'castor_store.json');
 const ADMIN_PHONE = process.env.ADMIN_PHONE || '5215564132674';
 const ADMIN_NUMBER_VARIANTS = new Set(['5564132674', '525564132674', '5215564132674']);
 const reportCooldownByUser = new Map();
 const reportReferenceMap = new Map();
-let ModRecordModel = null;
-let AuthStateModel = null;
-let BotConfigModel = null;
-let isMongoReady = false;
+let isStorageReady = false;
 let localStoreCache = null;
 const GROUP_INVITE_REGEX = /(chat\.whatsapp\.com\/[a-zA-Z0-9]{20,}|wa\.me\/joinlink\/)/i;
 let keepAliveInterval = null;
@@ -425,7 +415,7 @@ async function getSavedAdminJidCandidates() {
 }
 
 async function saveAdminPrivateJids(privateJid, senderJid) {
-    if (!isMongoReady) {
+    if (!isStorageReady) {
         return false;
     }
     await saveBotConfigRecord(
@@ -441,17 +431,11 @@ async function saveAdminPrivateJids(privateJid, senderJid) {
 }
 
 async function getSavedAdminConfig() {
-    if (!isMongoReady) {
+    if (!isStorageReady) {
         return null;
     }
-    if (LOCAL_STORAGE_ENABLED) {
-        const store = ensureLocalStoreLoaded();
-        return store.botConfig ? { ...store.botConfig } : null;
-    }
-    if (!BotConfigModel) {
-        return null;
-    }
-    return BotConfigModel.findById('main').lean();
+    const store = ensureLocalStoreLoaded();
+    return store.botConfig ? { ...store.botConfig } : null;
 }
 
 async function resolveAdminJids(sock) {
@@ -813,191 +797,57 @@ function getUserCommandsText() {
     ].join('\n');
 }
 
-async function ensureMongo() {
-    if (isMongoReady) {
+async function ensureLocalStorage() {
+    if (isStorageReady) {
         return true;
     }
-    if (LOCAL_STORAGE_ENABLED) {
-        ensureLocalStoreLoaded();
-        isMongoReady = true;
-        console.log(`Almacenamiento local activado en ${LOCAL_STORE_FILE}`);
-        return true;
-    }
-    if (!MONGO_URL) {
-        console.error('MONGO_URL no está configurado. Moderación desactivada.');
-        return false;
-    }
-    if (mongoose.connection.readyState === 0) {
-        await mongoose.connect(MONGO_URL, { serverSelectionTimeoutMS: 5000 });
-    }
-
-    if (!mongoose.models.ModRecord) {
-        const schema = new mongoose.Schema({
-            userId: { type: String, required: true, unique: true, index: true },
-            advertencias: { type: Number, default: 0 },
-            motivos: { type: [String], default: [] },
-            isBanned: { type: Boolean, default: false },
-            intentosReingreso: { type: Number, default: 0 },
-            actividadMensajes: { type: Number, default: 0 },
-            ultimaActividad: { type: Date, default: null },
-            countryOverride: { type: String, default: '' },
-            flagOverride: { type: String, default: '' }
-        });
-        schema.index({ userId: 1 });
-        schema.index({ ultimaActividad: 1 });
-        ModRecordModel = mongoose.model('ModRecord', schema, MOD_RECORDS_COLLECTION);
-    } else {
-        ModRecordModel = mongoose.model('ModRecord');
-    }
-
-    if (!mongoose.models.AuthState) {
-        const authSchema = new mongoose.Schema({
-            _id: String,
-            data: String
-        });
-        AuthStateModel = mongoose.model('AuthState', authSchema, AUTH_STATE_COLLECTION);
-    } else {
-        AuthStateModel = mongoose.model('AuthState');
-    }
-
-    if (!mongoose.models.BotConfig) {
-        const botConfigSchema = new mongoose.Schema({
-            _id: String,
-            adminPrivateJid: { type: String, default: '' },
-            adminSenderJid: { type: String, default: '' },
-            updatedAt: { type: Date, default: Date.now }
-        });
-        BotConfigModel = mongoose.model('BotConfig', botConfigSchema, BOT_CONFIG_COLLECTION);
-    } else {
-        BotConfigModel = mongoose.model('BotConfig');
-    }
-
-    isMongoReady = true;
+    ensureLocalStoreLoaded();
+    isStorageReady = true;
+    console.log(`Almacenamiento local activado en ${LOCAL_STORE_FILE}`);
     return true;
 }
 
-async function useMongoAuthState() {
-    const writeData = async (data, id) => {
-        await AuthStateModel.updateOne(
-            { _id: id },
-            { $set: { data: JSON.stringify(data, BufferJSON.replacer) } },
-            { upsert: true }
-        );
-    };
-
-    const readData = async (id) => {
-        const result = await AuthStateModel.findById(id).lean();
-        if (!result?.data) {
-            return null;
-        }
-        return JSON.parse(result.data, BufferJSON.reviver);
-    };
-
-    const removeData = async (id) => {
-        await AuthStateModel.deleteOne({ _id: id });
-    };
-
-    const creds = await readData('creds') || initAuthCreds();
-
-    return {
-        state: {
-            creds,
-            keys: {
-                get: async (type, ids) => {
-                    const data = {};
-                    await Promise.all(ids.map(async (id) => {
-                        let value = await readData(`${type}-${id}`);
-                        if (type === 'app-state-sync-key' && value) {
-                            value = proto.Message.AppStateSyncKeyData.fromObject(value);
-                        }
-                        if (value) {
-                            data[id] = value;
-                        }
-                    }));
-                    return data;
-                },
-                set: async (newData) => {
-                    const tasks = [];
-                    for (const category of Object.keys(newData)) {
-                        for (const id of Object.keys(newData[category])) {
-                            const value = newData[category][id];
-                            const key = `${category}-${id}`;
-                            if (value) {
-                                tasks.push(writeData(value, key));
-                            } else {
-                                tasks.push(removeData(key));
-                            }
-                        }
-                    }
-                    await Promise.all(tasks);
-                }
-            }
-        },
-        saveCreds: async () => writeData(creds, 'creds')
-    };
-}
-
 async function saveBotConfigRecord(update) {
-    if (LOCAL_STORAGE_ENABLED) {
-        const store = ensureLocalStoreLoaded();
-        store.botConfig = applyUpdateObject(store.botConfig || {}, update);
-        saveLocalStore();
-        return store.botConfig;
-    }
-    await BotConfigModel.updateOne({ _id: 'main' }, update, { upsert: true });
-    return getSavedAdminConfig();
+    const store = ensureLocalStoreLoaded();
+    store.botConfig = applyUpdateObject(store.botConfig || {}, update);
+    saveLocalStore();
+    return store.botConfig;
 }
 
 async function findModRecordsByUserIds(userIds) {
-    if (LOCAL_STORAGE_ENABLED) {
-        const store = ensureLocalStoreLoaded();
-        return userIds
-            .map((userId) => ({ userId, ...(store.modRecords?.[userId] || {}) }))
-            .filter((record) => Object.keys(record).length > 1);
-    }
-    return ModRecordModel.find(
-        { userId: { $in: userIds } },
-        { userId: 1, actividadMensajes: 1, ultimaActividad: 1 }
-    ).lean();
+    const store = ensureLocalStoreLoaded();
+    return userIds
+        .map((userId) => ({ userId, ...(store.modRecords?.[userId] || {}) }))
+        .filter((record) => Object.keys(record).length > 1);
 }
 
 async function upsertModRecord(userId, update) {
-    if (LOCAL_STORAGE_ENABLED) {
-        const store = ensureLocalStoreLoaded();
-        const current = store.modRecords?.[userId] || {
-            userId,
-            advertencias: 0,
-            motivos: [],
-            isBanned: false,
-            intentosReingreso: 0,
-            actividadMensajes: 0,
-            ultimaActividad: null,
-            countryOverride: '',
-            flagOverride: ''
-        };
-        const next = applyUpdateObject(current, update);
-        next.userId = userId;
-        store.modRecords[userId] = next;
-        saveLocalStore();
-        return { ...next };
-    }
-    return ModRecordModel.findOneAndUpdate(
-        { userId },
-        update,
-        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
-    );
+    const store = ensureLocalStoreLoaded();
+    const current = store.modRecords?.[userId] || {
+        userId,
+        advertencias: 0,
+        motivos: [],
+        isBanned: false,
+        intentosReingreso: 0,
+        actividadMensajes: 0,
+        ultimaActividad: null,
+        countryOverride: '',
+        flagOverride: ''
+    };
+    const next = applyUpdateObject(current, update);
+    next.userId = userId;
+    store.modRecords[userId] = next;
+    saveLocalStore();
+    return { ...next };
 }
 
 async function getModRecord(userId) {
-    if (LOCAL_STORAGE_ENABLED) {
-        const store = ensureLocalStoreLoaded();
-        return store.modRecords?.[userId] ? { ...store.modRecords[userId] } : null;
-    }
-    return ModRecordModel.findOne({ userId }).lean();
+    const store = ensureLocalStoreLoaded();
+    return store.modRecords?.[userId] ? { ...store.modRecords[userId] } : null;
 }
 
 function touchLastActivityAsync(userId) {
-    if (!isMongoReady || !userId) {
+    if (!isStorageReady || !userId) {
         return;
     }
     upsertModRecord(userId, {
@@ -1152,7 +1002,7 @@ function isLikelyPhoneNumber(number) {
 }
 
 async function resolveCountryAndFlag(sock, groupJid, participantJid) {
-    if (isMongoReady) {
+    if (isStorageReady) {
         const overrideRecord = await getModRecord(participantJid);
         if (overrideRecord?.countryOverride) {
             return {
@@ -1423,8 +1273,8 @@ async function handleWarnCommand(sock, msg, text, remoteJid) {
         await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
         return;
     }
-    if (!isMongoReady) {
-        await sock.sendMessage(remoteJid, { text: 'Moderación no disponible: MongoDB no está conectado.' }, { quoted: msg });
+    if (!isStorageReady) {
+        await sock.sendMessage(remoteJid, { text: 'Moderación no disponible: almacenamiento local no está listo.' }, { quoted: msg });
         return;
     }
 
@@ -1469,8 +1319,8 @@ async function handleUnbanCommand(sock, msg, text, remoteJid) {
         await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
         return;
     }
-    if (!isMongoReady) {
-        await sock.sendMessage(remoteJid, { text: 'Moderación no disponible: MongoDB no está conectado.' }, { quoted: msg });
+    if (!isStorageReady) {
+        await sock.sendMessage(remoteJid, { text: 'Moderación no disponible: almacenamiento local no está listo.' }, { quoted: msg });
         return;
     }
 
@@ -1497,8 +1347,8 @@ async function handleBanCommand(sock, msg, text, remoteJid) {
         await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
         return;
     }
-    if (!isMongoReady) {
-        await sock.sendMessage(remoteJid, { text: 'Moderación no disponible: MongoDB no está conectado.' }, { quoted: msg });
+    if (!isStorageReady) {
+        await sock.sendMessage(remoteJid, { text: 'Moderación no disponible: almacenamiento local no está listo.' }, { quoted: msg });
         return;
     }
 
@@ -1620,8 +1470,8 @@ async function handleGhostsCommand(sock, msg, text, remoteJid) {
         await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
         return;
     }
-    if (!isMongoReady) {
-        await sock.sendMessage(remoteJid, { text: 'Moderación no disponible: MongoDB no está conectado.' }, { quoted: msg });
+    if (!isStorageReady) {
+        await sock.sendMessage(remoteJid, { text: 'Moderación no disponible: almacenamiento local no está listo.' }, { quoted: msg });
         return;
     }
 
@@ -1665,8 +1515,8 @@ async function handleTopCommand(sock, msg, remoteJid) {
         await sock.sendMessage(remoteJid, { text: 'El comando .top solo funciona en grupos.' }, { quoted: msg });
         return;
     }
-    if (!isMongoReady) {
-        await sock.sendMessage(remoteJid, { text: '⚠️ El ranking de actividad necesita MongoDB conectado.' }, { quoted: msg });
+    if (!isStorageReady) {
+        await sock.sendMessage(remoteJid, { text: '⚠️ El ranking de actividad necesita almacenamiento local activo.' }, { quoted: msg });
         return;
     }
 
@@ -1953,8 +1803,8 @@ async function handleSetAdminCommand(sock, msg, remoteJid) {
         await sock.sendMessage(remoteJid, { text: 'No pude detectar el chat actual para vincularlo.' }, { quoted: msg });
         return;
     }
-    if (!isMongoReady || !BotConfigModel) {
-        await sock.sendMessage(remoteJid, { text: 'No pude guardar el chat admin porque MongoDB no está conectado.' }, { quoted: msg });
+    if (!isStorageReady) {
+        await sock.sendMessage(remoteJid, { text: 'No pude guardar el chat admin porque el almacenamiento local no está listo.' }, { quoted: msg });
         return;
     }
     await saveAdminPrivateJids(privateJid.endsWith('@g.us') ? '' : privateJid, senderJid);
@@ -2166,7 +2016,7 @@ async function processIncomingMessage(sock, msg, runId) {
             await sock.sendMessage(remoteJid, { delete: msg.key });
         } catch (error) {
         }
-        if (isMongoReady) {
+        if (isStorageReady) {
             const autoWarnResult = await applyWarning(sock, senderJid, remoteJid, 'Invitación de grupo detectada automáticamente');
             await sendCastorSealSticker(sock, remoteJid, msg);
             const mention = `@${getNumberFromJid(senderJid)}`;
@@ -2309,11 +2159,7 @@ async function startBot() {
     isStartingBot = true;
     const runId = ++botRunId;
     setupProcessErrorGuard();
-        try {
-        await ensureMongo();
-        } catch (error) {
-        console.error('No se pudo conectar MongoDB al iniciar:', error?.message || error);
-        }
+    await ensureLocalStorage();
     try {
         if (activeSock) {
             try {
@@ -2323,10 +2169,6 @@ async function startBot() {
         }
 
         if (RESET_WA_SESSION_ON_BOOT && !sessionResetDoneThisBoot) {
-            if (isMongoReady && AuthStateModel) {
-                await AuthStateModel.deleteMany({});
-                console.log('RESET_WA_SESSION_ON_BOOT activo: sesión de Mongo reiniciada.');
-            }
             try {
                 fs.rmSync('auth_info_baileys', { recursive: true, force: true });
                 console.log('RESET_WA_SESSION_ON_BOOT activo: auth_info_baileys eliminado.');
@@ -2337,24 +2179,10 @@ async function startBot() {
 
         let state;
         let saveCreds;
-        if (isMongoReady && AuthStateModel) {
-            try {
-                const auth = await useMongoAuthState();
-                state = auth.state;
-                saveCreds = auth.saveCreds;
-                console.log('Sesión de WhatsApp usando MongoDB Atlas');
-            } catch (error) {
-                const auth = await useMultiFileAuthState('auth_info_baileys');
-                state = auth.state;
-                saveCreds = auth.saveCreds;
-                console.log('Sesión de WhatsApp usando archivos locales por fallback');
-            }
-        } else {
-            const auth = await useMultiFileAuthState('auth_info_baileys');
-            state = auth.state;
-            saveCreds = auth.saveCreds;
-            console.log('Sesión de WhatsApp usando archivos locales');
-        }
+        const auth = await useMultiFileAuthState('auth_info_baileys');
+        state = auth.state;
+        saveCreds = auth.saveCreds;
+        console.log('Sesión de WhatsApp usando archivos locales');
 
         const { version } = await fetchLatestBaileysVersion();
 
@@ -2471,7 +2299,7 @@ async function startBot() {
 
         for (const participantJid of event.participants) {
             try {
-                if (isMongoReady) {
+                if (isStorageReady) {
                     const record = await getModRecord(participantJid);
                     if (record?.isBanned) {
                         await upsertModRecord(participantJid, { $inc: { intentosReingreso: 1 } });
