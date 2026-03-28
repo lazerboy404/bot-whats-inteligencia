@@ -52,7 +52,8 @@ let incomingBufferTimeout = null;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.comandos', '.reglas', '.miid', '.setadmin']);
+const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.comandos', '.reglas', '.miid', '.setadmin', '.troncos']);
+const POSITIVE_REACTION_EMOJIS = new Set(['👍', '❤️', '👏', '🤯', '🔥', '💯', '🧠', '🤖', '🦫', '💡']);
 const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
 const BAILEYS_CONNECT_TIMEOUT_MS = Number(process.env.BAILEYS_CONNECT_TIMEOUT_MS || 60000);
 const BAILEYS_KEEPALIVE_MS = Number(process.env.BAILEYS_KEEPALIVE_MS || 30000);
@@ -293,6 +294,10 @@ setInterval(() => {
     processedMessageIds.clear();
 }, 60 * 60 * 1000);
 
+setInterval(() => {
+    cleanOldReactionRecords();
+}, 6 * 60 * 60 * 1000);
+
 function cleanDigits(value) {
     return String(value || '').replace(/\D/g, '');
 }
@@ -300,6 +305,7 @@ function cleanDigits(value) {
 function getDefaultLocalStore() {
     return {
         modRecords: {},
+        messageReactions: {},
         botConfig: {
             adminPrivateJid: '',
             adminSenderJid: '',
@@ -785,7 +791,9 @@ function getUserCommandsText() {
         '',
         '.reportar → reportar un mensaje respondiendo o citándolo',
         '',
-        '.top → muestra los usuarios más activos del grupo',
+        '.top → muestra el ranking de troncos del grupo',
+        '',
+        '.troncos → consulta cuántos troncos 🪵 tienes',
         '',
         '.random → menciona alguien al azar',
         '',
@@ -832,7 +840,8 @@ async function upsertModRecord(userId, update) {
         actividadMensajes: 0,
         ultimaActividad: null,
         countryOverride: '',
-        flagOverride: ''
+        flagOverride: '',
+        troncos: 0
     };
     const next = applyUpdateObject(current, update);
     next.userId = userId;
@@ -844,6 +853,39 @@ async function upsertModRecord(userId, update) {
 async function getModRecord(userId) {
     const store = ensureLocalStoreLoaded();
     return store.modRecords?.[userId] ? { ...store.modRecords[userId] } : null;
+}
+
+function getMessageReactionRecord(messageId) {
+    const store = ensureLocalStoreLoaded();
+    if (!store.messageReactions) {
+        store.messageReactions = {};
+    }
+    return store.messageReactions[messageId] || null;
+}
+
+function upsertMessageReactionRecord(messageId, data) {
+    const store = ensureLocalStoreLoaded();
+    if (!store.messageReactions) {
+        store.messageReactions = {};
+    }
+    store.messageReactions[messageId] = data;
+    saveLocalStore();
+}
+
+function cleanOldReactionRecords() {
+    const store = ensureLocalStoreLoaded();
+    if (!store.messageReactions) return;
+    const cutoff = Date.now() - (7 * 24 * 60 * 60 * 1000);
+    let cleaned = 0;
+    for (const [msgId, record] of Object.entries(store.messageReactions)) {
+        if (record.createdAt && new Date(record.createdAt).getTime() < cutoff) {
+            delete store.messageReactions[msgId];
+            cleaned++;
+        }
+    }
+    if (cleaned > 0) {
+        saveLocalStore();
+    }
 }
 
 function touchLastActivityAsync(userId) {
@@ -1538,27 +1580,28 @@ async function handleTopCommand(sock, msg, remoteJid) {
                 userId: record.userId,
                 displayName,
                 mentionLabel,
+                troncos: Number(record.troncos || 0),
                 actividadMensajes: Number(record.actividadMensajes || 0),
                 ultimaActividad: record.ultimaActividad ? new Date(record.ultimaActividad).getTime() : 0
             };
         })
-        .filter((entry) => entry && entry.actividadMensajes > 0)
+        .filter((entry) => entry && (entry.troncos > 0 || entry.actividadMensajes > 0))
         .sort((a, b) => {
-            if (b.actividadMensajes !== a.actividadMensajes) {
-                return b.actividadMensajes - a.actividadMensajes;
+            if (b.troncos !== a.troncos) {
+                return b.troncos - a.troncos;
             }
-            return b.ultimaActividad - a.ultimaActividad;
+            return b.actividadMensajes - a.actividadMensajes;
         })
         .slice(0, 10);
 
     if (!topEntries.length) {
-        await sock.sendMessage(remoteJid, { text: '📊 Aún no hay suficiente actividad registrada para mostrar el top.' }, { quoted: msg });
+        await sock.sendMessage(remoteJid, { text: '🪵 Aún no hay troncos ni actividad registrada para mostrar el ranking.' }, { quoted: msg });
         return;
     }
 
-    const lines = topEntries.map((entry, index) => `${index + 1}. @${entry.mentionLabel} (${entry.displayName}) — ${entry.actividadMensajes} mensajes`);
+    const lines = topEntries.map((entry, index) => `${index + 1}. @${entry.mentionLabel} (${entry.displayName}) — 🪵 ${entry.troncos} tronco${entry.troncos !== 1 ? 's' : ''} | ${entry.actividadMensajes} msgs`);
     await sock.sendMessage(remoteJid, {
-        text: `📊 Top de usuarios más activos\n\n${lines.join('\n')}`,
+        text: `🪵 Ranking de Troncos del Estanque\n\n${lines.join('\n')}`,
         mentions: topEntries.map((entry) => entry.userId)
     }, { quoted: msg });
 }
@@ -1813,6 +1856,86 @@ async function handleSetAdminCommand(sock, msg, remoteJid) {
     }, { quoted: msg });
 }
 
+async function handleReactionForTroncos(sock, msg) {
+    if (!isStorageReady) return;
+    const reaction = msg.message?.reactionMessage;
+    if (!reaction) return;
+    const emoji = reaction.text || '';
+    const reactedMessageKey = reaction.key;
+    if (!reactedMessageKey?.id) return;
+    const remoteJid = msg.key.remoteJid;
+    if (!remoteJid || !remoteJid.endsWith('@g.us')) return;
+    if (!emoji || !POSITIVE_REACTION_EMOJIS.has(emoji)) return;
+
+    const reactorJid = msg.key.participant || msg.key.remoteJid;
+    if (!reactorJid) return;
+    const authorJid = reactedMessageKey.participant || '';
+    if (!authorJid) return;
+
+    if (normalizePhoneForCompare(getNumberFromJid(reactorJid)) === normalizePhoneForCompare(getNumberFromJid(authorJid))) return;
+
+    const messageId = reactedMessageKey.id;
+    let record = getMessageReactionRecord(messageId);
+    if (!record) {
+        record = {
+            authorJid,
+            groupJid: remoteJid,
+            reactors: [],
+            milestone5: false,
+            milestone10: false,
+            createdAt: new Date().toISOString()
+        };
+    }
+
+    const reactorNormalized = normalizePhoneForCompare(getNumberFromJid(reactorJid));
+    const alreadyReacted = record.reactors.some(r =>
+        normalizePhoneForCompare(getNumberFromJid(r)) === reactorNormalized
+    );
+    if (alreadyReacted) return;
+
+    record.reactors.push(reactorJid);
+    const uniqueCount = record.reactors.length;
+
+    if (uniqueCount >= 5 && !record.milestone5) {
+        record.milestone5 = true;
+        await upsertModRecord(authorJid, { $inc: { troncos: 1 } });
+        const authorNumber = getNumberFromJid(authorJid);
+        const mention = authorNumber ? `@${authorNumber}` : 'alguien';
+        await sock.sendMessage(remoteJid, {
+            text: `\ud83e\udeb5 \u00a1${mention} gan\u00f3 1 tronco! Su mensaje alcanz\u00f3 5 reacciones. \u00a1Sigue construyendo el dique!`,
+            mentions: authorJid ? [authorJid] : []
+        });
+    }
+
+    if (uniqueCount >= 10 && !record.milestone10) {
+        record.milestone10 = true;
+        await upsertModRecord(authorJid, { $inc: { troncos: 1 } });
+        const authorNumber = getNumberFromJid(authorJid);
+        const mention = authorNumber ? `@${authorNumber}` : 'alguien';
+        await sock.sendMessage(remoteJid, {
+            text: `\ud83e\udeb5\ud83e\udeb5 \u00a1${mention} gan\u00f3 1 tronco extra! Su mensaje alcanz\u00f3 10 reacciones. \u00a1Eres la estrella del estanque!`,
+            mentions: authorJid ? [authorJid] : []
+        });
+    }
+
+    upsertMessageReactionRecord(messageId, record);
+}
+
+async function handleTroncosCommand(sock, msg, remoteJid) {
+    if (!isStorageReady) {
+        await sock.sendMessage(remoteJid, { text: '\u26a0\ufe0f El sistema de troncos necesita almacenamiento local activo.' }, { quoted: msg });
+        return;
+    }
+    const senderJid = msg.key.participant || msg.key.remoteJid;
+    const record = await getModRecord(senderJid);
+    const troncos = record?.troncos || 0;
+    const mention = `@${getNumberFromJid(senderJid)}`;
+    await sock.sendMessage(remoteJid, {
+        text: `\ud83e\udeb5 ${mention}, tienes ${troncos} tronco${troncos !== 1 ? 's' : ''} acumulado${troncos !== 1 ? 's' : ''}.`,
+        mentions: [senderJid]
+    }, { quoted: msg });
+}
+
 app.get('/', (req, res) => {
     if (qrCodeData) {
         res.send(`
@@ -1978,7 +2101,11 @@ async function processIncomingMessage(sock, msg, runId) {
     if (msg.key.fromMe && !ALLOW_SELF_COMMANDS) {
         return;
     }
-    if (msg.message.protocolMessage || msg.message?.reactionMessage) {
+    if (msg.message?.reactionMessage) {
+        await handleReactionForTroncos(sock, msg);
+        return;
+    }
+    if (msg.message.protocolMessage) {
         return;
     }
 
@@ -2071,6 +2198,8 @@ async function processIncomingMessage(sock, msg, runId) {
         await handleMyIdCommand(sock, msg, remoteJid);
     } else if (command === '.setadmin') {
         await handleSetAdminCommand(sock, msg, remoteJid);
+    } else if (command === '.troncos') {
+        await handleTroncosCommand(sock, msg, remoteJid);
     }
 }
 
