@@ -2645,12 +2645,8 @@ Reglas:
 
     const sentencePrompts = [
         {
-            system: "Eres copywriter experto en prompts visuales. Escribe una sola frase en español (18-34 palabras) que describa exactamente qué produce el prompt. Debe incluir sujeto + estilo visual + encuadre/acabado + al menos dos detalles concretos de escena. Evita frases genéricas.",
-            user: `Título: ${title}\nPrompt: ${prompt}\nIncluye 2+ detalles concretos de escena como: ${cues.join(', ') || 'elementos visuales explícitos del prompt'}.\nNo uses frases como "este prompt te ayuda".`
-        },
-        {
-            system: "Resume prompts visuales en una sola frase clara en español. Formato obligatorio: 'Un prompt para ...'. No uses markdown.",
-            user: `Describe qué hace este prompt con detalles visuales concretos.\nTítulo: ${title}\nPrompt: ${prompt}`
+            system: "Eres un redactor experto. Devuelve ÚNICAMENTE la descripción solicitada. NO agregues introducciones, saludos, ni explicaciones. Solo el texto final.",
+            user: `Describe qué hace este prompt en una sola frase en español (18-34 palabras). Formato obligatorio: 'Un prompt para ...'. \nTítulo: ${title}\nPrompt: ${prompt}`
         }
     ];
 
@@ -2661,7 +2657,7 @@ Reglas:
             debug.reason = 'sentence_empty_response';
             continue;
         }
-        if (!isWeakShowcaseDescription(sentence) && descriptionHasCue(sentence, cues)) {
+        if (sentence.length > 10 && sentence.length < 500) {
             return { text: sentence, source: 'sentence_direct', reason: 'ok', rawLen: sentence.length };
         }
         debug.reason = 'sentence_rejected_by_filters';
@@ -2808,8 +2804,8 @@ async function sendPromptShowcase(sock) {
             console.log(`[SHOWCASE] Omitido: sin descripcion IA valida para "${showcase.title}" (repo: ${repoDef.id})`);
         }
         if (!finalDescription || !showcase || selectedIndex < 0) {
-            console.log(`[SHOWCASE] No se pudo generar descripción IA válida en ${maxAttempts} intento(s) para repo ${repoDef.id}.`);
-            return;
+            console.log(`[SHOWCASE] Usando fallback manual para descripción tras ${maxAttempts} intentos fallidos con la IA.`);
+            finalDescription = buildShortPromptDescription(finalTitle, finalPrompt);
         }
 
         const isLongPrompt = finalPrompt.length > SHOWCASE_PROMPT_INLINE_MAX_LENGTH;
