@@ -2268,6 +2268,25 @@ function buildModelComparisonLabels(imageUrls) {
     return models.map((model) => `🤖 _${model}_`);
 }
 
+function buildShortPromptDescription(title, prompt) {
+    const cleanTitle = String(title || '').replace(/[*_`#>\[\]]/g, '').trim();
+    const cleanPrompt = String(prompt || '')
+        .replace(/[`*_#>]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    if (cleanTitle) {
+        return `Prompt para crear "${cleanTitle}" con estilo visual detallado y resultado realista.`;
+    }
+
+    if (cleanPrompt) {
+        const short = cleanPrompt.slice(0, 90).trim();
+        return `Prompt para generar una imagen a partir de esta idea: ${short}${cleanPrompt.length > 90 ? '...' : ''}`;
+    }
+
+    return 'Prompt para generar una imagen creativa con instrucciones visuales claras.';
+}
+
 async function fetchShowcaseData(repoDef) {
     try {
         const controller = new AbortController();
@@ -2339,7 +2358,8 @@ async function sendPromptShowcase(sock) {
             `Título: ${finalTitle}\nPrompt: ${finalPrompt}`,
             150
         );
-        const finalDescription = descriptionAI ? descriptionAI.replace(/^["'`]|["'`]$/g, '').trim() : '';
+        const finalDescriptionAI = descriptionAI ? descriptionAI.replace(/^["'`]|["'`]$/g, '').trim() : '';
+        const finalDescription = finalDescriptionAI || buildShortPromptDescription(finalTitle, finalPrompt);
 
         const isLongPrompt = finalPrompt.length > SHOWCASE_PROMPT_INLINE_MAX_LENGTH;
         const captionLines = [
@@ -2349,9 +2369,7 @@ async function sendPromptShowcase(sock) {
             `👤 por ${showcase.author}`,
         ];
 
-        if (finalDescription) {
-            captionLines.push(`ℹ️ ${finalDescription}`);
-        }
+        captionLines.push(`ℹ️ ${finalDescription}`);
 
         if (!isLongPrompt) {
             captionLines.push('', '📝 *Prompt:*', finalPrompt);
