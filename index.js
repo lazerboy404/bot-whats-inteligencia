@@ -2300,6 +2300,11 @@ function extractPromptFromSection(section) {
     return '';
 }
 
+function extractUsageInstructions(section) {
+    const match = section.match(/(?:Usage\s*Instructions|Instructions|使用说明)\s*[:：]?\s*\n([\s\S]*?)(?:\n{2,}###|\n{2,}---|(?=\n\s*###)|$)/i);
+    return match ? match[1].trim() : '';
+}
+
 function parseCaseStyleShowcases(markdown, repoDef) {
     const showcases = [];
     const sectionRegex = /(?:^|\n)\s*###\s*(?:Example|Case|案例)\s+\d+\s*[:：][\s\S]*?(?=(?:\n\s*###\s*(?:Example|Case|案例)\s+\d+\s*[:：])|$)/gi;
@@ -2327,7 +2332,8 @@ function parseCaseStyleShowcases(markdown, repoDef) {
                 continue;
             }
 
-            showcases.push({ title, author, imageUrls, prompt });
+            const usage = extractUsageInstructions(section);
+            showcases.push({ title, author, imageUrls, prompt, usage });
         } catch (e) {
             continue;
         }
@@ -2366,7 +2372,8 @@ function parseNumberedPromptShowcases(markdown, repoDef) {
                 continue;
             }
 
-            showcases.push({ title, author, imageUrls, prompt });
+            const usage = extractUsageInstructions(section);
+            showcases.push({ title, author, imageUrls, prompt, usage });
         } catch (e) {
             continue;
         }
@@ -2758,6 +2765,10 @@ async function sendPromptShowcase(sock) {
         ];
 
         captionLines.push(`ℹ️ ${finalDescription}`);
+
+        if (showcase.usage) {
+            captionLines.push('', '🛠️ *Instrucciones:*', showcase.usage);
+        }
 
         if (!isLongPrompt) {
             captionLines.push('', '📝 *Prompt:*', finalPrompt);
