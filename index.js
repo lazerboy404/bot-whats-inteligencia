@@ -2445,6 +2445,64 @@ function isWeakShowcaseDescription(text) {
     return !visualSignals.some((signal) => value.includes(signal));
 }
 
+function cleanModelOutputText(text) {
+    return String(text || '')
+        .replace(/```json|```/gi, '')
+        .replace(/^["'`]|["'`]$/g, '')
+        .trim();
+}
+
+async function generateShowcaseDescription(title, prompt) {
+    const analysisSystemPrompt = 'Analiza prompts visuales y responde SOLO JSON válido.';
+    const analysisUserPrompt = `Analiza este prompt y extrae su intención visual.
+
+Título: ${title}
+Prompt: ${prompt}
+
+Devuelve SOLO este JSON (sin markdown):
+{
+  "subject": "qué objeto o escena principal se genera",
+  "style": "estilo visual principal",
+  "framing": "encuadre o tipo de toma",
+  "finish": "acabado/resultado esperado"
+}
+
+Reglas:
+- Español neutro.
+- Campos cortos y concretos.
+- Si no hay dato claro, usa "no especificado".`;
+
+    try {
+        const analysisRaw = await generateAIContent(analysisSystemPrompt, analysisUserPrompt, 220);
+        const cleaned = cleanModelOutputText(analysisRaw);
+        if (cleaned) {
+            const parsed = JSON.parse(cleaned);
+            const subject = String(parsed?.subject || '').trim();
+            const style = String(parsed?.style || '').trim();
+            const framing = String(parsed?.framing || '').trim();
+            const finish = String(parsed?.finish || '').trim();
+            const parts = [];
+            if (subject && subject !== 'no especificado') parts.push(subject);
+            if (style && style !== 'no especificado') parts.push(`con ${style}`);
+            if (framing && framing !== 'no especificado') parts.push(`en ${framing}`);
+            if (finish && finish !== 'no especificado') parts.push(`y acabado ${finish}`);
+            const built = parts.length > 0
+                ? `Genera ${parts.join(', ')}.`
+                : '';
+            if (!isWeakShowcaseDescription(built)) {
+                return built;
+            }
+        }
+    } catch (error) {
+    }
+
+    const sentenceSystemPrompt = "Eres copywriter experto en prompts visuales. Escribe una sola frase en español (18-34 palabras) que describa exactamente qué produce el prompt. Debe incluir sujeto + estilo visual + encuadre/acabado. Evita frases genéricas.";
+    const sentenceUserPrompt = `Título: ${title}\nPrompt: ${prompt}\nNo uses frases como "este prompt te ayuda".`;
+    const sentenceRaw = await generateAIContent(sentenceSystemPrompt, sentenceUserPrompt, 180);
+    const sentence = cleanModelOutputText(sentenceRaw);
+    return !isWeakShowcaseDescription(sentence) ? sentence : '';
+}
+
 function buildShortPromptDescription(title, prompt) {
     const cleanTitle = String(title || '').replace(/[*_`#>\[\]]/g, '').trim();
     const cleanPrompt = String(prompt || '')
@@ -2560,15 +2618,8 @@ async function sendPromptShowcase(sock) {
         if (engPrompt) finalPrompt = engPrompt;
 
         
-        const descriptionAI = await generateAIContent(
-            "Eres copywriter experto en prompts visuales. Escribe una sola frase en español (18-34 palabras) que describa el resultado final del prompt de forma concreta. Debe incluir sujeto principal + estilo visual + tipo de acabado o encuadre. Prohibido usar frases genéricas como 'Este prompt te ayuda' o 'Con este prompt'. Sin comillas, sin markdown.",
-            `Título: ${finalTitle}\nPrompt: ${finalPrompt}\nEjemplo de estilo esperado: "Un prompt para generar una alfombra artesanal con forma de emoji, colorida y esponjosa, con estética DIY y vista cenital muy limpia."`,
-            180
-        );
-        const finalDescriptionAI = descriptionAI ? descriptionAI.replace(/^["'`]|["'`]$/g, '').trim() : '';
-        const finalDescription = !isWeakShowcaseDescription(finalDescriptionAI)
-            ? finalDescriptionAI
-            : buildShortPromptDescription(finalTitle, finalPrompt);
+        const descriptionAI = await generateShowcaseDescription(finalTitle, finalPrompt);
+        const finalDescription = descriptionAI || buildShortPromptDescription(finalTitle, finalPrompt);
 
         const isLongPrompt = finalPrompt.length > SHOWCASE_PROMPT_INLINE_MAX_LENGTH;
         const captionLines = [
