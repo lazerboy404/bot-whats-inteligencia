@@ -2588,25 +2588,26 @@ function descriptionHasCue(text, cues) {
 }
 
 async function generateShowcaseDescription(title, prompt) {
-    const systemPrompt = "Eres un experto en Prompt Engineering y arte generativo. Tu objetivo es explicar de forma breve, natural y atractiva qué resultado visual produce el prompt.";
-    const userPrompt = `Analiza el siguiente prompt y redacta una descripción en español (entre 20 y 40 palabras) explicando exactamente qué tipo de imagen genera, su estilo visual, su iluminación y su atmósfera.
+    const systemPrompt = "Eres un experto en arte con IA. Describe el resultado del prompt de forma súper concisa, directa y con estilo.";
+    const userPrompt = `Redacta una descripción MUY CORTA en español de México (máximo 15 a 20 palabras) sobre la imagen que genera este prompt.
+    Solo capta la esencia y el estilo visual, sin enlistar cada detalle técnico.
+    
     REGLAS:
-    - Obligatorio usar Español de México (ej. usa "gis" o "tiza", no "cal"; usa "chamarra", no "cazadora", etc).
-    - No uses saludos, introducciones ni frases genéricas como "Este prompt te ayuda a".
-    - Ve directo al grano.
-    - Haz que suene atractivo y experto.
+    - MÁXIMO 20 palabras. Sé directo, punchy y al grano.
+    - Usa español de México fluido y natural.
+    - NADA de "Este prompt genera..." o "Una imagen de...". Empieza directo con el concepto (ej. "Selfie fotorrealista de un grupo de amigos con luz natural...").
     
     Título: ${title}
     Prompt: ${prompt}`;
 
     try {
-        const aiResponse = await generateAIContent(systemPrompt, userPrompt, 180);
+        const aiResponse = await generateAIContent(systemPrompt, userPrompt, 150);
         const sentence = cleanModelOutputText(aiResponse);
 
-        if (sentence && sentence.length > 15 && sentence.length < 500) {
-            return { text: sentence, source: 'ia_natural', reason: 'ok', rawLen: sentence.length };
+        if (sentence && sentence.length > 10 && sentence.length < 300) {
+            return { text: sentence, source: 'ia_corta_mx', reason: 'ok', rawLen: sentence.length };
         }
-        return { text: '', source: 'none', reason: 'respuesta_corta_o_invalida', rawLen: sentence ? sentence.length : 0 };
+        return { text: '', source: 'none', reason: 'respuesta_invalida', rawLen: sentence ? sentence.length : 0 };
     } catch (error) {
         return { text: '', source: 'none', reason: 'error_api', rawLen: 0 };
     }
