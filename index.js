@@ -2757,6 +2757,17 @@ async function sendPromptShowcase(sock) {
         }
 
         const isLongPrompt = finalPrompt.length > SHOWCASE_PROMPT_INLINE_MAX_LENGTH;
+        let finalUsage = showcase.usage || '';
+        if (finalUsage) {
+            const translatedUsage = await generateAIContent(
+                "You are a strict translation engine. Translate the provided text to Mexican Spanish. Keep bullet points and emojis if present. Output ONLY the translation, without markdown wrappers or quotes.",
+                `Text to translate:\n"""\n${finalUsage}\n"""`,
+                320
+            );
+            if (translatedUsage && !translatedUsage.toLowerCase().includes("i cannot fulfill") && !translatedUsage.toLowerCase().includes("as an ai")) {
+                finalUsage = translatedUsage.replace(/^"""|"""$/g, '').trim();
+            }
+        }
         const captionLines = [
             `${CASTOR_EMOJI} *✨ Showcase del Día*`,
             '',
@@ -2766,14 +2777,13 @@ async function sendPromptShowcase(sock) {
 
         captionLines.push(`ℹ️ ${finalDescription}`);
 
-        if (showcase.usage) {
-            captionLines.push('', '🛠️ *Instrucciones:*', showcase.usage);
-        }
-
         if (!isLongPrompt) {
             captionLines.push('', '📝 *Prompt:*', finalPrompt);
         } else {
             captionLines.push('', '📝 El prompt completo se envía como archivo adjunto ⬇️');
+        }
+        if (finalUsage) {
+            captionLines.push('', '🛠️ *Instrucciones de uso:*', finalUsage);
         }
         captionLines.push('', '💡 ¡Prueba este prompt en tu IA favorita y comparte el resultado! 👇');
         const captionText = captionLines.join('\n');
