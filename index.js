@@ -2428,6 +2428,15 @@ function looksSpanishText(text) {
     return markers.some((marker) => value.includes(marker));
 }
 
+function hasEnglishTitleMarkers(text) {
+    const value = String(text || '').toLowerCase();
+    const englishMarkers = [
+        ' thoughts ', ' moving ', ' train ', ' style ', ' portrait ', ' shot ', ' image ',
+        ' with ', ' on ', ' by ', ' the ', ' create ', ' add '
+    ];
+    return englishMarkers.some((marker) => value.includes(marker));
+}
+
 function isWeakShowcaseDescription(text) {
     const value = String(text || '').toLowerCase().trim();
     if (!value) return true;
@@ -2438,7 +2447,8 @@ function isWeakShowcaseDescription(text) {
         /con este prompt puedes/i,
         /esta pensado para/i,
         /prompt para crear/i,
-        /prompt para generar una imagen/i
+        /prompt para generar una imagen/i,
+        /con buena profundidad y detalles de iluminacion/i
     ];
     if (weakPatterns.some((pattern) => pattern.test(value))) return true;
     const visualSignals = ['estilo', 'ilumin', 'textur', 'encuadre', 'vista', 'realista', 'cinematic', '3d', 'detalle'];
@@ -2452,7 +2462,32 @@ function cleanModelOutputText(text) {
         .trim();
 }
 
+function extractPromptCues(prompt) {
+    const source = String(prompt || '').toLowerCase();
+    const cues = [];
+    if (source.includes('train')) cues.push('un tren en movimiento');
+    if (source.includes('window')) cues.push('ventana lateral');
+    if (source.includes('night')) cues.push('escena nocturna');
+    if (source.includes('neon')) cues.push('reflejos de neón');
+    if (source.includes('bokeh')) cues.push('bokeh colorido');
+    if (source.includes('city')) cues.push('luces urbanas');
+    if (source.includes('hoodie')) cues.push('persona con sudadera oscura');
+    if (source.includes('shallow depth of field')) cues.push('fondo desenfocado');
+    if (source.includes('cinematic')) cues.push('estética cinematográfica');
+    return [...new Set(cues)].slice(0, 3);
+}
+
+function descriptionHasCue(text, cues) {
+    const value = String(text || '').toLowerCase();
+    if (!Array.isArray(cues) || cues.length === 0) return true;
+    return cues.some((cue) => {
+        const parts = cue.toLowerCase().split(/\s+/).filter((p) => p.length > 3);
+        return parts.some((part) => value.includes(part));
+    });
+}
+
 async function generateShowcaseDescription(title, prompt) {
+    const cues = extractPromptCues(prompt);
     const analysisSystemPrompt = 'Analiza prompts visuales y responde SOLO JSON válido.';
     const analysisUserPrompt = `Analiza este prompt y extrae su intención visual.
 
@@ -2486,21 +2521,22 @@ Reglas:
             if (style && style !== 'no especificado') parts.push(`con ${style}`);
             if (framing && framing !== 'no especificado') parts.push(`en ${framing}`);
             if (finish && finish !== 'no especificado') parts.push(`y acabado ${finish}`);
+            const cueText = cues.length > 0 ? `, destacando ${cues.join(', ')}` : '';
             const built = parts.length > 0
-                ? `Genera ${parts.join(', ')}.`
+                ? `Un prompt para crear ${parts.join(', ')}${cueText}.`
                 : '';
-            if (!isWeakShowcaseDescription(built)) {
+            if (!isWeakShowcaseDescription(built) && descriptionHasCue(built, cues)) {
                 return built;
             }
         }
     } catch (error) {
     }
 
-    const sentenceSystemPrompt = "Eres copywriter experto en prompts visuales. Escribe una sola frase en español (18-34 palabras) que describa exactamente qué produce el prompt. Debe incluir sujeto + estilo visual + encuadre/acabado. Evita frases genéricas.";
-    const sentenceUserPrompt = `Título: ${title}\nPrompt: ${prompt}\nNo uses frases como "este prompt te ayuda".`;
+    const sentenceSystemPrompt = "Eres copywriter experto en prompts visuales. Escribe una sola frase en español (18-34 palabras) que describa exactamente qué produce el prompt. Debe incluir sujeto + estilo visual + encuadre/acabado + al menos dos detalles concretos de escena. Evita frases genéricas.";
+    const sentenceUserPrompt = `Título: ${title}\nPrompt: ${prompt}\nIncluye 2+ detalles concretos de escena como: ${cues.join(', ') || 'elementos visuales explícitos del prompt'}.\nNo uses frases como "este prompt te ayuda".`;
     const sentenceRaw = await generateAIContent(sentenceSystemPrompt, sentenceUserPrompt, 180);
     const sentence = cleanModelOutputText(sentenceRaw);
-    return !isWeakShowcaseDescription(sentence) ? sentence : '';
+    return (!isWeakShowcaseDescription(sentence) && descriptionHasCue(sentence, cues)) ? sentence : '';
 }
 
 function buildShortPromptDescription(title, prompt) {
@@ -2536,7 +2572,7 @@ function buildShortPromptDescription(title, prompt) {
     if (source.includes('tuft') || source.includes('fluffy') || source.includes('rug')) styleParts.push('con textura esponjosa y artesanal');
     if (styleParts.length === 0) styleParts.push('con estilo visual detallado');
 
-    let framing = 'con buena profundidad y detalles de iluminación';
+    let framing = 'con encuadre visual cuidado';
     if (source.includes('top view') || source.includes('from above') || source.includes('vista desde arriba')) {
         framing = 'en vista desde arriba';
     } else if (source.includes('close-up') || source.includes('macro')) {
@@ -2545,7 +2581,9 @@ function buildShortPromptDescription(title, prompt) {
         framing = 'con encuadre isométrico';
     }
 
-    return `Un prompt para generar ${subject}, ${styleParts.join(', ')} y ${framing}.`;
+    const cues = extractPromptCues(cleanPrompt);
+    const cueText = cues.length > 0 ? `, destacando ${cues.join(', ')}` : '';
+    return `Un prompt para generar ${subject}, ${styleParts.join(', ')} y ${framing}${cueText}.`;
 }
 
 async function fetchShowcaseData(repoDef) {
@@ -2605,7 +2643,7 @@ async function sendPromptShowcase(sock) {
             100
         );
         if (translatedTitle) finalTitle = translatedTitle.replace(/^["'`]|["'`]$/g, '').trim();
-        if (!looksSpanishText(finalTitle)) {
+        if (!looksSpanishText(finalTitle) || hasEnglishTitleMarkers(` ${finalTitle} `)) {
             const fallbackTitle = translateTitleFallbackEs(showcase.title);
             if (fallbackTitle) finalTitle = fallbackTitle;
         }
@@ -2620,6 +2658,7 @@ async function sendPromptShowcase(sock) {
         
         const descriptionAI = await generateShowcaseDescription(finalTitle, finalPrompt);
         const finalDescription = descriptionAI || buildShortPromptDescription(finalTitle, finalPrompt);
+        console.log(`[SHOWCASE-DESC] ${repoDef.id}: fuente=${descriptionAI ? 'ia' : 'fallback'}`);
 
         const isLongPrompt = finalPrompt.length > SHOWCASE_PROMPT_INLINE_MAX_LENGTH;
         const captionLines = [
