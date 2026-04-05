@@ -2105,6 +2105,28 @@ function normalizeGroqModelName(modelName) {
     return String(modelName || '').trim();
 }
 
+function extractGroqResponseText(data) {
+    const choice = data?.choices?.[0];
+    const message = choice?.message || {};
+    const content = message?.content;
+    if (typeof content === 'string' && content.trim()) return content.trim();
+    if (Array.isArray(content)) {
+        const joined = content
+            .map((part) => {
+                if (typeof part === 'string') return part;
+                if (typeof part?.text === 'string') return part.text;
+                return '';
+            })
+            .join(' ')
+            .trim();
+        if (joined) return joined;
+    }
+    if (typeof message?.reasoning === 'string' && message.reasoning.trim()) return message.reasoning.trim();
+    if (typeof choice?.text === 'string' && choice.text.trim()) return choice.text.trim();
+    if (typeof data?.output_text === 'string' && data.output_text.trim()) return data.output_text.trim();
+    return '';
+}
+
 async function generateAIContent(systemPrompt, userPrompt, maxTokens = 150) {
     if (!GROQ_API_KEY) return null;
     try {
@@ -2133,8 +2155,35 @@ async function generateAIContent(systemPrompt, userPrompt, maxTokens = 150) {
 
             if (response.ok) {
                 const data = await response.json();
-                const text = data?.choices?.[0]?.message?.content;
-                if (text && text.trim()) return text.trim();
+                const text = extractGroqResponseText(data);
+                if (text) return text;
+                const finishReason = data?.choices?.[0]?.finish_reason || 'unknown';
+                console.warn(`[PROACTIVO-IA] Respuesta vacía en ${modelName} (groq). finish_reason=${finishReason}. Reintentando con prompt simple.`);
+
+                const retryController = new AbortController();
+                const retryTimeout = setTimeout(() => retryController.abort(), 15000);
+                const retryResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${GROQ_API_KEY}`
+                    },
+                    body: JSON.stringify({
+                        model: modelName,
+                        messages: [
+                            { role: 'user', content: `${systemPrompt}\n\n${userPrompt}` }
+                        ],
+                        temperature: 0.4,
+                        max_tokens: maxTokens
+                    }),
+                    signal: retryController.signal
+                });
+                clearTimeout(retryTimeout);
+                if (retryResponse.ok) {
+                    const retryData = await retryResponse.json();
+                    const retryText = extractGroqResponseText(retryData);
+                    if (retryText) return retryText;
+                }
                 continue;
             }
 
