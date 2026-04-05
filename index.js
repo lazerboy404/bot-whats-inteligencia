@@ -2301,7 +2301,7 @@ function extractPromptFromSection(section) {
 }
 
 function extractUsageInstructions(section) {
-    const match = section.match(/(?:Usage\s*Instructions|Instructions|使用说明)\s*[:：]?\s*\n([\s\S]*?)(?:\n{2,}###|\n{2,}---|(?=\n\s*###)|$)/i);
+    const match = section.match(/^\s*(?:\*\*)?\s*(?:Usage\s*Instructions|Instructions|使用说明)\s*(?:\*\*)?\s*[:：]?\s*\n([\s\S]*?)(?=\n\s*###|\n\s*##|\n{2,}---|$)/im);
     return match ? match[1].trim() : '';
 }
 
