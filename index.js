@@ -83,7 +83,7 @@ const PROACTIVE_SEND_SHOWCASE_ON_START = !['0', 'false', 'no', 'off'].includes(S
 const SHOWCASE_REPOS = [
     {
         id: 'picotrex',
-        url: 'https://raw.githubusercontent.com/PicoTrex/Awesome-Nano-Banana-images/main/README_en.md',
+        url: 'https://raw.githubusercontent.com/PicoTrex/Awesome-Nano-Banana-images/main/README_es.md',
         imageBaseUrl: 'https://raw.githubusercontent.com/PicoTrex/Awesome-Nano-Banana-images/main/'
     },
     {
