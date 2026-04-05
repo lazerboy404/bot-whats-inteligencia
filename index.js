@@ -2349,35 +2349,66 @@ function looksSpanishText(text) {
     return markers.some((marker) => value.includes(marker));
 }
 
+function isWeakShowcaseDescription(text) {
+    const value = String(text || '').toLowerCase().trim();
+    if (!value) return true;
+    if (value.length < 40) return true;
+    if (value.length > 240) return true;
+    const weakPatterns = [
+        /este prompt te ayuda/i,
+        /con este prompt puedes/i,
+        /esta pensado para/i,
+        /prompt para crear/i,
+        /prompt para generar una imagen/i
+    ];
+    if (weakPatterns.some((pattern) => pattern.test(value))) return true;
+    const visualSignals = ['estilo', 'ilumin', 'textur', 'encuadre', 'vista', 'realista', 'cinematic', '3d', 'detalle'];
+    return !visualSignals.some((signal) => value.includes(signal));
+}
+
 function buildShortPromptDescription(title, prompt) {
     const cleanTitle = String(title || '').replace(/[*_`#>\[\]]/g, '').trim();
     const cleanPrompt = String(prompt || '')
         .replace(/[`*_#>]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
+    const source = `${cleanTitle} ${cleanPrompt}`.toLowerCase();
 
-    if (cleanTitle) {
-        const starters = [
-            `Este prompt te ayuda a crear "${cleanTitle}"`,
-            `Con este prompt puedes generar "${cleanTitle}"`,
-            `Este prompt está pensado para producir "${cleanTitle}"`
-        ];
-        const endings = [
-            'con una estética cuidada y muchos detalles visuales.',
-            'con acabado realista y buena composición de escena.',
-            'enfocando iluminación, textura y profundidad para que se vea profesional.'
-        ];
-        const starter = starters[Math.floor(Math.random() * starters.length)];
-        const ending = endings[Math.floor(Math.random() * endings.length)];
-        return `${starter} ${ending}`;
+    let subject = cleanTitle || 'una escena visual';
+    const subjectRules = [
+        { key: 'emoji', label: 'un emoji' },
+        { key: 'rug', label: 'una alfombra artesanal' },
+        { key: 'fish', label: 'un pez mecánico' },
+        { key: 'car', label: 'un coche personalizado' },
+        { key: 'portrait', label: 'un retrato' },
+        { key: 'icon', label: 'un ícono' },
+        { key: 'diorama', label: 'un diorama miniatura' }
+    ];
+    for (const rule of subjectRules) {
+        if (source.includes(rule.key)) {
+            subject = rule.label;
+            break;
+        }
     }
 
-    if (cleanPrompt) {
-        const short = cleanPrompt.slice(0, 90).trim();
-        return `Prompt para generar una imagen a partir de esta idea: ${short}${cleanPrompt.length > 90 ? '...' : ''}`;
+    const styleParts = [];
+    if (source.includes('steampunk')) styleParts.push('con estética steampunk');
+    if (source.includes('voxel')) styleParts.push('en estilo voxel 3D');
+    if (source.includes('cinematic')) styleParts.push('con look cinematográfico');
+    if (source.includes('realistic') || source.includes('realista')) styleParts.push('con acabado realista');
+    if (source.includes('tuft') || source.includes('fluffy') || source.includes('rug')) styleParts.push('con textura esponjosa y artesanal');
+    if (styleParts.length === 0) styleParts.push('con estilo visual detallado');
+
+    let framing = 'con buena profundidad y detalles de iluminación';
+    if (source.includes('top view') || source.includes('from above') || source.includes('vista desde arriba')) {
+        framing = 'en vista desde arriba';
+    } else if (source.includes('close-up') || source.includes('macro')) {
+        framing = 'en primer plano';
+    } else if (source.includes('isometric')) {
+        framing = 'con encuadre isométrico';
     }
 
-    return 'Prompt para generar una imagen creativa con instrucciones visuales claras.';
+    return `Un prompt para generar ${subject}, ${styleParts.join(', ')} y ${framing}.`;
 }
 
 async function fetchShowcaseData(repoDef) {
@@ -2451,12 +2482,14 @@ async function sendPromptShowcase(sock) {
 
         
         const descriptionAI = await generateAIContent(
-            "Eres un experto en IA. Basado en el título y el prompt, escribe UNA MUY BREVE descripción (máximo 2 líneas) en español sobre lo que hace este prompt. Ve directo al grano sin saludos.",
-            `Título: ${finalTitle}\nPrompt: ${finalPrompt}`,
-            150
+            "Eres copywriter experto en prompts visuales. Escribe una sola frase en español (18-34 palabras) que describa el resultado final del prompt de forma concreta. Debe incluir sujeto principal + estilo visual + tipo de acabado o encuadre. Prohibido usar frases genéricas como 'Este prompt te ayuda' o 'Con este prompt'. Sin comillas, sin markdown.",
+            `Título: ${finalTitle}\nPrompt: ${finalPrompt}\nEjemplo de estilo esperado: "Un prompt para generar una alfombra artesanal con forma de emoji, colorida y esponjosa, con estética DIY y vista cenital muy limpia."`,
+            180
         );
         const finalDescriptionAI = descriptionAI ? descriptionAI.replace(/^["'`]|["'`]$/g, '').trim() : '';
-        const finalDescription = finalDescriptionAI || buildShortPromptDescription(finalTitle, finalPrompt);
+        const finalDescription = !isWeakShowcaseDescription(finalDescriptionAI)
+            ? finalDescriptionAI
+            : buildShortPromptDescription(finalTitle, finalPrompt);
 
         const isLongPrompt = finalPrompt.length > SHOWCASE_PROMPT_INLINE_MAX_LENGTH;
         const captionLines = [
