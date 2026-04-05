@@ -2588,25 +2588,28 @@ function descriptionHasCue(text, cues) {
 }
 
 async function generateShowcaseDescription(title, prompt) {
-    const systemPrompt = "Eres un analista lógico de prompts. Tu trabajo es deducir la acción literal. ESTRICTAMENTE PROHIBIDO inventar detalles, estilos (ej. futurista, cyberpunk) o atmósferas que no estén explícitas en el texto.";
-    const userPrompt = `Redacta una descripción MUY CORTA en español de México (máximo 15 a 20 palabras) sobre lo que hace este prompt.
+    const systemPrompt = "Eres un curador experto de arte de IA. Lees prompts (o plantillas de prompts) y describes la imagen final que producirían.";
+    const userPrompt = `Describe la imagen resultante de este prompt en español de México (máximo 15-20 palabras).
     
-    REGLAS CRÍTICAS:
-    - NO ALUCINES NI INVENTES. Limítate a lo que dice el título y el prompt.
-    - Si el prompt hace referencia a una imagen o marca (ej. "dibuja lo que ve la flecha" o "usa la foto 1"), deduce la función lógica basándote en el título (ej. "Generación de la vista real a nivel de calle a partir de un mapa").
-    - MÁXIMO 20 palabras.
-    - Usa español de México.
-    - No uses frases de relleno como "Este prompt genera...".
+    REGLAS ESTRICTAS:
+    - NO hagas meta-comentarios (prohibido decir "Es un análisis", "Es un prompt", "Es un texto").
+    - Si hay variables en mayúsculas (ej. NEON_OBJECT o SUBJECT_DESCRIPTION), asume que es una plantilla y describe la atmósfera general visual.
+    - Ve directo a lo visual. (Ejemplo de lo que quiero: "Retrato estilo cyberpunk iluminado con neón, atmósfera futurista y alto contraste").
     
     Título: ${title}
     Prompt: ${prompt}`;
 
     try {
         const aiResponse = await generateAIContent(systemPrompt, userPrompt, 150);
-        const sentence = cleanModelOutputText(aiResponse);
+        let sentence = cleanModelOutputText(aiResponse);
+
+        // Filtro post-procesamiento por si la IA es necia y mete relleno
+        sentence = sentence.replace(/^(Este prompt genera|Una imagen de|Un prompt para|Es un análisis de|Es una descripción de|La imagen muestra) /i, '').trim();
 
         if (sentence && sentence.length > 10 && sentence.length < 300) {
-            return { text: sentence, source: 'ia_logica_mx', reason: 'ok', rawLen: sentence.length };
+            // Asegurar que empiece con mayúscula después del recorte
+            sentence = sentence.charAt(0).toUpperCase() + sentence.slice(1);
+            return { text: sentence, source: 'ia_visual_mx', reason: 'ok', rawLen: sentence.length };
         }
         return { text: '', source: 'none', reason: 'respuesta_invalida', rawLen: sentence ? sentence.length : 0 };
     } catch (error) {
