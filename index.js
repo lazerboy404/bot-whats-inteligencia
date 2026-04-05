@@ -88,7 +88,7 @@ const SHOWCASE_REPOS = [
     {
         id: 'jimmylv',
         url: 'https://raw.githubusercontent.com/JimmyLv/awesome-nano-banana/main/README.md',
-        imageBaseUrl: ''
+        imageBaseUrl: 'https://raw.githubusercontent.com/JimmyLv/awesome-nano-banana/main/'
     },
     {
         id: 'supermaker',
@@ -2187,26 +2187,30 @@ Genera la pregunta:`;
 
 function parsePromptShowcases(markdown, repoDef) {
     const showcases = [];
-    const sections = markdown.split(/###\s+(?:Example|Case|案例)\s+\d+/i);
+    const sectionRegex = /(?:^|\n)\s*(?:###\s+)?(?:Example|Case|案例)\s+\d+\s*[:：][\s\S]*?(?=(?:\n\s*(?:###\s+)?(?:Example|Case|案例)\s+\d+\s*[:：])|$)/gi;
+    const sections = markdown.match(sectionRegex) || [];
+    let imgMissCount = 0;
+    let promptMissCount = 0;
     for (const section of sections) {
         try {
-            const titleMatch = section.match(/[:：]\s*(?:\[([^\]]+)\]\([^)]*\)|([^()]+?))\s*\(by\s*\[?@?([^\]\)]+)/i);
+            const titleMatch = section.match(/(?:Example|Case|案例)\s+\d+\s*[:：]\s*(?:\[([^\]]+)\]\([^)]*\)|([^\n(]+?))\s*\(by\s*\[?@?([^\]\)\n]+)/i);
             if (!titleMatch) {
-                // console.log(`[DEBUG-PARSE] ${repoDef.id}: titleMatch failed: `, section.substring(0, 50));
                 continue;
             }
             
             const title = (titleMatch[1] || titleMatch[2]).trim();
             const author = titleMatch[3].replace(/[\])].*$/, '').trim();
             
-            const imgMatches = [...section.matchAll(/<img\s+src="([^"]+)"/g)];
+            const htmlImages = [...section.matchAll(/<img[^>]+src=["']([^"']+)["']/gi)].map((m) => m[1]);
+            const markdownImages = [...section.matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)].map((m) => m[1]);
+            const imgMatches = [...new Set([...htmlImages, ...markdownImages])];
             if (imgMatches.length === 0) {
-                console.log(`[DEBUG-PARSE] ${repoDef.id}: imgMatches failed for title: ${title}`);
+                imgMissCount++;
                 continue;
             }
             
             const imageUrls = imgMatches.map(m => {
-                const src = m[1];
+                const src = m;
                 return src.startsWith('http') ? src : (repoDef.imageBaseUrl + src);
             });
             
@@ -2224,19 +2228,20 @@ function parsePromptShowcases(markdown, repoDef) {
                 }
             }
             if (!prompt) {
-                console.log(`[DEBUG-PARSE] ${repoDef.id}: promptMatch failed for title: ${title}`);
+                promptMissCount++;
                 continue;
             }
             if (prompt.length < 10) {
-                console.log(`[DEBUG-PARSE] ${repoDef.id}: prompt too short for title: ${title}`);
                 continue;
             }
             
             showcases.push({ title, author, imageUrls, prompt });
         } catch (e) {
-            console.log(`[DEBUG-PARSE] Exception in parse: `, e?.message);
             continue;
         }
+    }
+    if (imgMissCount > 0 || promptMissCount > 0) {
+        console.log(`[SHOWCASE-PARSE] ${repoDef.id}: omitidos sin imagen=${imgMissCount}, sin prompt=${promptMissCount}`);
     }
     return showcases;
 }
