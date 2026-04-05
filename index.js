@@ -52,7 +52,7 @@ let incomingBufferTimeout = null;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.comandos', '.reglas', '.miid', '.setadmin', '.troncos', '.dinamica']);
+const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.comandos', '.reglas', '.miid', '.setadmin', '.troncos', '.dinamica', '.grupoid']);
 const POSITIVE_REACTION_EMOJIS = new Set(['👍', '❤️', '👏', '🤯', '🔥', '💯', '🧠', '🤖', '🦫', '💡']);
 const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
 const BAILEYS_CONNECT_TIMEOUT_MS = Number(process.env.BAILEYS_CONNECT_TIMEOUT_MS || 60000);
@@ -66,6 +66,19 @@ const BOT_SUSPEND_CHECK_INTERVAL_MS = Number(process.env.BOT_SUSPEND_CHECK_INTER
 const BOT_PRESENCE_KEEPALIVE_MS = Number(process.env.BOT_PRESENCE_KEEPALIVE_MS || (10 * 60 * 1000));
 const BOT_RECONNECT_BASE_MS = Number(process.env.BOT_RECONNECT_BASE_MS || 4000);
 const BOT_RECONNECT_MAX_MS = Number(process.env.BOT_RECONNECT_MAX_MS || 45000);
+const PROACTIVE_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.PROACTIVE_ENABLED || 'true').toLowerCase());
+const PROACTIVE_GROUP_JIDS = (process.env.PROACTIVE_GROUP_JID || '').split(',').map(s => s.trim()).filter(Boolean);
+const PROACTIVE_PROMPT_INTERVAL_MS = Number(process.env.PROACTIVE_PROMPT_INTERVAL_MS || (24 * 60 * 60 * 1000));
+const PROACTIVE_RANDOM_USER_INTERVAL_MS = Number(process.env.PROACTIVE_RANDOM_USER_INTERVAL_MS || (24 * 60 * 60 * 1000));
+const PROACTIVE_INACTIVITY_THRESHOLD_MS = Number(process.env.PROACTIVE_INACTIVITY_THRESHOLD_MS || (18 * 60 * 60 * 1000));
+const PROACTIVE_NIGHT_START_HOUR = Number(process.env.PROACTIVE_NIGHT_START_HOUR || 23);
+const PROACTIVE_NIGHT_END_HOUR = Number(process.env.PROACTIVE_NIGHT_END_HOUR || 9);
+const PROACTIVE_JITTER_MS = Number(process.env.PROACTIVE_JITTER_MS || (30 * 60 * 1000));
+const PROACTIVE_SHOWCASE_INTERVAL_MS = Number(process.env.PROACTIVE_SHOWCASE_INTERVAL_MS || (24 * 60 * 60 * 1000));
+const PROACTIVE_SHOWCASE_PROMPT_GAP_MS = Number(process.env.PROACTIVE_SHOWCASE_PROMPT_GAP_MS || (90 * 60 * 1000));
+const SHOWCASE_REPO_README_URL = 'https://raw.githubusercontent.com/PicoTrex/Awesome-Nano-Banana-images/main/README_en.md';
+const SHOWCASE_IMAGE_BASE_URL = 'https://raw.githubusercontent.com/PicoTrex/Awesome-Nano-Banana-images/main/';
+const SHOWCASE_PROMPT_INLINE_MAX_LENGTH = 500;
 const FLAG_BY_DIAL_CODE = {
     '1': '🇺🇸',
     '34': '🇪🇸',
@@ -290,6 +303,60 @@ const COUNTRY_BY_DIAL_CODE = {
 
 const SORTED_DIAL_CODES = Object.keys(COUNTRY_BY_DIAL_CODE).sort((a, b) => b.length - a.length);
 
+const PROACTIVE_PROMPT_CHALLENGES = [
+    { emoji: '🎨', topic: 'Generación de Imágenes', challenge: 'generar una imagen de un robot futurista estilo cyberpunk en una ciudad lluviosa de noche' },
+    { emoji: '✍️', topic: 'Mejora de Prompt', challenge: 'mejorar este prompt básico: "Hazme un resumen de este texto" → hazlo más preciso, con formato y contexto' },
+    { emoji: '🤖', topic: 'System Prompt', challenge: 'crear un system prompt para un chatbot de atención al cliente de una tienda de tecnología' },
+    { emoji: '💻', topic: 'Generación de Código', challenge: 'crear un prompt que le pida a la IA generar una función en Python que ordene una lista de diccionarios por múltiples campos' },
+    { emoji: '📊', topic: 'Análisis de Datos', challenge: 'escribir un prompt para que la IA analice datos de ventas mensuales y detecte tendencias y anomalías' },
+    { emoji: '🧠', topic: 'Chain of Thought', challenge: 'crear un prompt que use razonamiento paso a paso (chain-of-thought) para resolver un problema de lógica' },
+    { emoji: '🏔️', topic: 'Arte con IA', challenge: 'generar una imagen de un paisaje de fantasía con montañas flotantes, cascadas y dragones al atardecer' },
+    { emoji: '📧', topic: 'Escritura Profesional', challenge: 'crear un prompt para redactar un correo profesional pidiendo un aumento de sueldo de forma convincente' },
+    { emoji: '🌍', topic: 'Traducción Inteligente', challenge: 'escribir un prompt para traducir un texto del inglés al español manteniendo modismos y contexto cultural' },
+    { emoji: '📖', topic: 'Storytelling', challenge: 'crear un prompt para generar una historia corta de ciencia ficción con un giro inesperado al final' },
+    { emoji: '🐛', topic: 'Debugging con IA', challenge: 'escribir un prompt para que la IA te ayude a encontrar y corregir bugs en un fragmento de código' },
+    { emoji: '📸', topic: 'Fotografía con IA', challenge: 'generar una imagen de un retrato fotorrealista estilo cinematográfico con iluminación dramática' },
+    { emoji: '📚', topic: 'Plan de Estudios', challenge: 'crear un prompt para que la IA genere un plan de estudios de 30 días para aprender los fundamentos de IA' },
+    { emoji: '🔍', topic: 'Extracción de Datos', challenge: 'escribir un prompt para extraer información estructurada (nombre, fecha, monto) de un texto desordenado' },
+    { emoji: '📱', topic: 'Marketing con IA', challenge: 'crear un prompt para generar 5 ideas de contenido para redes sociales de una marca de tecnología' },
+    { emoji: '🎵', topic: 'Prompt Creativo', challenge: 'escribir un prompt para que la IA componga la letra de una canción sobre inteligencia artificial en estilo reggaetón' },
+    { emoji: '🏗️', topic: 'Arquitectura de Prompts', challenge: 'diseñar un mega-prompt con rol, contexto, instrucciones, formato de salida y ejemplos para resumir artículos científicos' }
+];
+
+const PROACTIVE_USER_TOPICS = [
+    '¿Cuál es tu herramienta de IA favorita y por qué? 🤖',
+    'Comparte un prompt que te haya funcionado increíble ✨',
+    '¿Para qué usas la IA en tu día a día? 💡',
+    'Cuéntanos tu mejor experiencia usando IA 🧠',
+    '¿Qué modelo de IA prefieres? ChatGPT, Claude, Gemini...? 🤔',
+    '¿Has usado IA para generar imágenes? Comparte tu experiencia 🎨',
+    '¿Cuál es el prompt más creativo que has usado? 🎯',
+    '¿Qué tarea te ha resuelto la IA que antes te costaba mucho? ⚡',
+    '¿Conoces algún truco de prompting que quieras compartir? 🔑',
+    '¿Cómo ves el futuro de la IA en tu campo laboral? 🔮',
+    '¿Qué app o herramienta de IA descubriste recientemente? 📱',
+    '¿Has automatizado algo con IA? Cuéntanos cómo 🤖'
+];
+
+const PROACTIVE_REACTIVATION_MESSAGES = [
+    '¿Siguen vivos o ya se secó el dique? 😴\n\nCompartan algo de IA para revivir el estanque 👇',
+    'Detecto poca actividad...\n\nCompartan un prompt que hayan usado hoy 👇',
+    'El estanque está muy tranquilo... 🌊\n\n¿Alguien ha probado alguna herramienta de IA nueva?',
+    '¡Castores! El dique necesita actividad 🪵\n\n¿Qué es lo último que le pidieron a una IA?',
+    'Aquí no ha pasado nada en un buen rato...\n\n¿Alguien tiene un prompt interesante para compartir? 🤖',
+    'El río está detenido 🌿\n\nCuéntenme: ¿para qué usaron IA hoy?',
+    '¿Se quedaron sin prompts? 🤔\n\nTiren uno que les haya funcionado esta semana',
+    'El grupo necesita leña... digo, troncos 🪵\n\n¡Compartan algo sobre IA!',
+    'Esto está más callado que servidor sin internet 🔇\n\n¿Nadie tiene un descubrimiento de IA que compartir?',
+    'Últiiiima llamada para castores activos 📢\n\n¿Qué herramienta de IA han estado usando?'
+];
+
+let lastGroupActivityAt = 0;
+let proactiveCheckInterval = null;
+let proactiveCheckRunning = false;
+let showcaseCacheData = null;
+let showcaseCacheTimestamp = 0;
+
 setInterval(() => {
     processedMessageIds.clear();
 }, 60 * 60 * 1000);
@@ -310,7 +377,8 @@ function getDefaultLocalStore() {
             adminPrivateJid: '',
             adminSenderJid: '',
             updatedAt: null
-        }
+        },
+        proactiveState: {}
     };
 }
 
@@ -899,6 +967,33 @@ function touchLastActivityAsync(userId) {
         $inc: { actividadMensajes: 1 }
     }).catch(() => {});
 }
+
+function touchGroupActivity(groupJid) {
+    if (PROACTIVE_GROUP_JIDS.length > 0 && PROACTIVE_GROUP_JIDS.includes(groupJid)) {
+        lastGroupActivityAt = Date.now();
+    }
+}
+
+function getProactiveState() {
+    const store = ensureLocalStoreLoaded();
+    return store.proactiveState || {};
+}
+
+function updateProactiveState(updates) {
+    const store = ensureLocalStoreLoaded();
+    store.proactiveState = { ...(store.proactiveState || {}), ...updates };
+    saveLocalStore();
+}
+
+function isNightTime() {
+    const mexicoNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Mexico_City' }));
+    const hour = mexicoNow.getHours();
+    if (PROACTIVE_NIGHT_START_HOUR > PROACTIVE_NIGHT_END_HOUR) {
+        return hour >= PROACTIVE_NIGHT_START_HOUR || hour < PROACTIVE_NIGHT_END_HOUR;
+    }
+    return hour >= PROACTIVE_NIGHT_START_HOUR && hour < PROACTIVE_NIGHT_END_HOUR;
+}
+
 async function sendPrivateAdminMessage(sock, text) {
     const payload = typeof text === 'string'
         ? { text: sanitizeText(text, 9000) }
@@ -1971,6 +2066,421 @@ async function handleDinamicaCommand(sock, msg, remoteJid) {
     await sock.sendMessage(remoteJid, { text: dinamicaText }, { quoted: msg });
 }
 
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+
+async function generateAIContent(systemPrompt, userPrompt, maxTokens = 150) {
+    if (!GEMINI_API_KEY) return null;
+    try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [
+                    { role: 'user', parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }
+                ],
+                generationConfig: {
+                    maxOutputTokens: maxTokens,
+                    temperature: 0.95,
+                    topP: 0.95
+                }
+            }),
+            signal: controller.signal
+        });
+        clearTimeout(timeout);
+        if (!response.ok) return null;
+        const data = await response.json();
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        return text ? text.trim() : null;
+    } catch (error) {
+        console.error('[PROACTIVO-IA] Error generando contenido:', error?.message || error);
+        return null;
+    }
+}
+
+async function generateDailyChallenge() {
+    const categories = [
+        'generación de imágenes con IA', 'prompts para texto creativo', 'generación de código',
+        'automatización de tareas', 'análisis de datos con IA', 'marketing y redes sociales con IA',
+        'escritura y copywriting con IA', 'traducción y localización', 'debugging y revisión de código',
+        'educación y aprendizaje con IA', 'productividad personal con IA', 'diseño gráfico con IA',
+        'música y audio con IA', 'video y animación con IA', 'chatbots y asistentes',
+        'prompt engineering avanzado', 'investigación con IA', 'negocio y emprendimiento con IA',
+        'fotografía y edición con IA', 'storytelling y narrativa con IA'
+    ];
+    const category = categories[Math.floor(Math.random() * categories.length)];
+    const systemPrompt = 'Eres un experto en inteligencia artificial y prompt engineering. Tu trabajo es crear retos diarios para un grupo de WhatsApp enfocado en IA y prompts.';
+    const userPrompt = `Genera UN reto breve para el "Prompt del Día" de un grupo de IA.
+
+Categoría sugerida: ${category}
+
+Reglas:
+- Máximo 2 líneas para el reto
+- Debe ser un reto concreto y accionable (NO genérico como "habla de IA")
+- Enfocado en crear un prompt específico para una tarea de IA
+- Tono motivador y claro
+- NO incluyas emojis, títulos, formato, comillas ni texto extra
+- Solo devuelve la descripción del reto en una oración
+
+Ejemplo: crear un prompt para que una IA genere un logo minimalista de una startup tech
+
+Genera el reto:`;
+    const result = await generateAIContent(systemPrompt, userPrompt, 100);
+    if (!result) return null;
+    let clean = result.replace(/^["'`\s*•\-]+|["'`\s]+$/g, '').replace(/\n+/g, ' ').trim();
+    if (clean.length > 200) clean = clean.slice(0, 197) + '...';
+    if (clean.length < 15) return null;
+    const emojis = ['🎨', '✍️', '🤖', '💻', '📊', '🧠', '📧', '🌍', '📖', '🐛', '📸', '📚', '🔍', '📱', '🎵', '🏗️', '⚡', '🎯', '🔮', '💡'];
+    const emoji = emojis[Math.floor(Math.random() * emojis.length)];
+    return { emoji, challenge: clean };
+}
+
+async function generateRandomUserTopic() {
+    const systemPrompt = 'Eres un community manager de un grupo de WhatsApp sobre inteligencia artificial y prompts.';
+    const userPrompt = `Genera UNA pregunta breve para hacerle a un miembro seleccionado al azar del grupo de IA.
+
+Reglas:
+- Máximo 1-2 líneas
+- Sobre IA, prompts, automatización o herramientas de IA
+- Debe invitar a compartir algo útil (experiencia, tip, prompt, herramienta, descubrimiento)
+- Tono casual y amigable
+- NO incluyas emojis, formato, comillas ni texto extra
+- Solo devuelve la pregunta, nada más
+
+Ejemplo: ¿Cuál fue el último prompt que te ahorró tiempo en tu trabajo?
+
+Genera la pregunta:`;
+    const result = await generateAIContent(systemPrompt, userPrompt, 80);
+    if (!result) return null;
+    let clean = result.replace(/^["'`\s*•\-]+|["'`\s]+$/g, '').replace(/\n+/g, ' ').trim();
+    if (clean.length > 150) clean = clean.slice(0, 147) + '...';
+    if (clean.length < 15) return null;
+    return clean;
+}
+
+function parsePromptShowcases(markdown) {
+    const showcases = [];
+    const sections = markdown.split(/###\s+(?:Example|Case)\s+\d+/i);
+    for (const section of sections) {
+        try {
+            const titleMatch = section.match(/:\s*\[([^\]]+)\]\(([^)]*)\)\s*\(by\s*\[?@?([^\]\)]+)/);
+            if (!titleMatch) continue;
+            const title = titleMatch[1].trim();
+            const sourceUrl = titleMatch[2].trim();
+            const author = titleMatch[3].replace(/[\])].*$/, '').trim();
+            const imgMatches = [...section.matchAll(/<img\s+src="(images\/[^"]+)"/g)];
+            if (imgMatches.length === 0) continue;
+            const imageRelPath = imgMatches[imgMatches.length - 1][1];
+            const imageUrl = SHOWCASE_IMAGE_BASE_URL + imageRelPath;
+            const promptMatch = section.match(/\*\*Prompt:\*\*[\s\S]*?```\n?([\s\S]*?)```/);
+            if (!promptMatch) continue;
+            const prompt = promptMatch[1].trim();
+            if (prompt.length < 10) continue;
+            showcases.push({ title, author, sourceUrl, imageUrl, prompt });
+        } catch (e) {
+            continue;
+        }
+    }
+    return showcases;
+}
+
+async function fetchShowcaseData() {
+    const now = Date.now();
+    if (showcaseCacheData && (now - showcaseCacheTimestamp) < 24 * 60 * 60 * 1000) {
+        return showcaseCacheData;
+    }
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        const response = await fetch(SHOWCASE_REPO_README_URL, { signal: controller.signal });
+        clearTimeout(timeout);
+        if (!response.ok) return showcaseCacheData || null;
+        const markdown = await response.text();
+        const parsed = parsePromptShowcases(markdown);
+        if (parsed.length > 0) {
+            showcaseCacheData = parsed;
+            showcaseCacheTimestamp = now;
+            console.log(`[SHOWCASE] Parseados ${parsed.length} ejemplos del repo`);
+        }
+        return showcaseCacheData;
+    } catch (error) {
+        console.error('[SHOWCASE] Error descargando repo:', error?.message || error);
+        return showcaseCacheData || null;
+    }
+}
+
+async function sendPromptShowcase(sock) {
+    if (PROACTIVE_GROUP_JIDS.length === 0) return;
+    try {
+        const showcases = await fetchShowcaseData();
+        if (!showcases || showcases.length === 0) {
+            console.log('[SHOWCASE] No hay showcases disponibles');
+            return;
+        }
+        const state = getProactiveState();
+        const sentIndices = state.showcaseSentIndices || [];
+        let available = showcases.map((s, i) => i).filter((i) => !sentIndices.includes(i));
+        if (available.length === 0) {
+            available = showcases.map((s, i) => i);
+            updateProactiveState({ showcaseSentIndices: [] });
+            console.log('[SHOWCASE] Todos los showcases enviados, reiniciando rotación');
+        }
+        const selectedIndex = available[Math.floor(Math.random() * available.length)];
+        const showcase = showcases[selectedIndex];
+        const isLongPrompt = showcase.prompt.length > SHOWCASE_PROMPT_INLINE_MAX_LENGTH;
+        const captionLines = [
+            `${CASTOR_EMOJI} *✨ Prompt Showcase del Día*`,
+            '',
+            `📌 *${showcase.title}*`,
+            `👤 by ${showcase.author}`,
+        ];
+        if (!isLongPrompt) {
+            captionLines.push('', '📝 *Prompt:*', showcase.prompt);
+        } else {
+            captionLines.push('', '📝 El prompt completo se envía como archivo adjunto ⬇️');
+        }
+        captionLines.push('', '💡 ¡Prueba este prompt en tu IA favorita y comparte el resultado! 👇');
+        const captionText = captionLines.join('\n');
+        for (const groupJid of PROACTIVE_GROUP_JIDS) {
+            try {
+                try {
+                    await sock.sendMessage(groupJid, {
+                        image: { url: showcase.imageUrl },
+                        caption: captionText
+                    });
+                } catch (imgError) {
+                    console.error(`[SHOWCASE] Error enviando imagen a ${groupJid}, enviando solo texto:`, imgError?.message);
+                    await sock.sendMessage(groupJid, { text: captionText });
+                }
+                if (isLongPrompt) {
+                    const fileName = `prompt_${showcase.title.replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 40)}.txt`;
+                    const fileContent = [
+                        `=== PROMPT SHOWCASE: ${showcase.title} ===`,
+                        `Autor: ${showcase.author}`,
+                        `Fuente: ${showcase.sourceUrl}`,
+                        '',
+                        '=== PROMPT ===',
+                        '',
+                        showcase.prompt
+                    ].join('\n');
+                    await sock.sendMessage(groupJid, {
+                        document: Buffer.from(fileContent, 'utf-8'),
+                        mimetype: 'text/plain',
+                        fileName: fileName
+                    });
+                }
+            } catch (groupError) {
+                console.error(`[SHOWCASE] Error enviando a ${groupJid}:`, groupError?.message);
+            }
+            if (PROACTIVE_GROUP_JIDS.length > 1) await new Promise((r) => setTimeout(r, 3000));
+        }
+        const newSentIndices = [...sentIndices, selectedIndex];
+        updateProactiveState({
+            lastShowcaseSentAt: new Date().toISOString(),
+            showcaseSentIndices: newSentIndices
+        });
+        console.log(`[SHOWCASE] Enviado: "${showcase.title}" (index: ${selectedIndex}, quedan ${available.length - 1} sin enviar)`);
+    } catch (error) {
+        console.error('[SHOWCASE] Error enviando showcase:', error?.message || error);
+    }
+}
+
+async function sendPromptOfTheDay(sock) {
+    if (PROACTIVE_GROUP_JIDS.length === 0) return;
+    try {
+        let emoji = '🎯';
+        let challenge = '';
+        const aiChallenge = await generateDailyChallenge();
+        if (aiChallenge) {
+            emoji = aiChallenge.emoji;
+            challenge = aiChallenge.challenge;
+            console.log('[PROACTIVO] Reto generado por IA');
+        } else {
+            const state = getProactiveState();
+            let index = Math.floor(Math.random() * PROACTIVE_PROMPT_CHALLENGES.length);
+            if (state.lastPromptIndex === index && PROACTIVE_PROMPT_CHALLENGES.length > 1) {
+                index = (index + 1) % PROACTIVE_PROMPT_CHALLENGES.length;
+            }
+            const fallback = PROACTIVE_PROMPT_CHALLENGES[index];
+            emoji = fallback.emoji;
+            challenge = fallback.challenge;
+            updateProactiveState({ lastPromptIndex: index });
+            console.log(`[PROACTIVO] Usando reto local (fallback index: ${index})`);
+        }
+        const text = [
+            `${CASTOR_EMOJI} *Prompt del Día* ${emoji}`,
+            '',
+            'Crea un prompt para:',
+            `👉 ${challenge}`,
+            '',
+            '💡 El mejor prompt gana 🪵 +10',
+            '',
+            '¡Compartan sus propuestas! 👇'
+        ].join('\n');
+        for (const groupJid of PROACTIVE_GROUP_JIDS) {
+            try {
+                await sock.sendMessage(groupJid, { text });
+            } catch (groupError) {
+                console.error(`[PROACTIVO] Error enviando prompt a ${groupJid}:`, groupError?.message);
+            }
+            if (PROACTIVE_GROUP_JIDS.length > 1) await new Promise((r) => setTimeout(r, 3000));
+        }
+        updateProactiveState({ lastPromptSentAt: new Date().toISOString() });
+        console.log('[PROACTIVO] Prompt del día enviado');
+    } catch (error) {
+        console.error('[PROACTIVO] Error enviando prompt del día:', error?.message || error);
+    }
+}
+
+async function sendRandomUserSelection(sock) {
+    if (PROACTIVE_GROUP_JIDS.length === 0) return;
+    for (const groupJid of PROACTIVE_GROUP_JIDS) {
+        try {
+            const metadata = await sock.groupMetadata(groupJid);
+            const candidates = (metadata.participants || []).filter((p) => {
+                if (p.id === sock.user?.id) return false;
+                if (p.admin === 'admin' || p.admin === 'superadmin') return false;
+                return true;
+            });
+            if (candidates.length === 0) {
+                console.log(`[PROACTIVO] No hay candidatos en ${groupJid}.`);
+                continue;
+            }
+            const selected = candidates[Math.floor(Math.random() * candidates.length)];
+            const displayName = getParticipantDisplayName(selected, selected.id);
+            const mentionLabel = getParticipantMentionLabel(selected, selected.id);
+            let topic = '';
+            const aiTopic = await generateRandomUserTopic();
+            if (aiTopic) {
+                topic = aiTopic;
+                console.log('[PROACTIVO] Tema random generado por IA');
+            } else {
+                topic = PROACTIVE_USER_TOPICS[Math.floor(Math.random() * PROACTIVE_USER_TOPICS.length)];
+                console.log('[PROACTIVO] Usando tema random local (fallback)');
+            }
+            const text = [
+                `${CASTOR_EMOJI} *Castor seleccionó a alguien...*`,
+                '',
+                `@${mentionLabel} cuéntanos algo:`,
+                `👉 ${topic}`,
+                '',
+                '¡Tu aporte vale 🪵 troncos! Reaccionen a su mensaje 👆'
+            ].join('\n');
+            await sock.sendMessage(groupJid, { text, mentions: [selected.id] });
+            console.log(`[PROACTIVO] Selección aleatoria enviada en ${groupJid}: ${mentionLabel}`);
+        } catch (groupError) {
+            console.error(`[PROACTIVO] Error en selección aleatoria para ${groupJid}:`, groupError?.message);
+        }
+        if (PROACTIVE_GROUP_JIDS.length > 1) await new Promise((r) => setTimeout(r, 3000));
+    }
+    updateProactiveState({ lastRandomUserAt: new Date().toISOString() });
+}
+
+async function sendInactivityReactivation(sock) {
+    if (PROACTIVE_GROUP_JIDS.length === 0) return;
+    try {
+        const message = PROACTIVE_REACTIVATION_MESSAGES[Math.floor(Math.random() * PROACTIVE_REACTIVATION_MESSAGES.length)];
+        const text = `${CASTOR_EMOJI} ${message}`;
+        for (const groupJid of PROACTIVE_GROUP_JIDS) {
+            try {
+                await sock.sendMessage(groupJid, { text });
+            } catch (groupError) {
+                console.error(`[PROACTIVO] Error enviando reactivación a ${groupJid}:`, groupError?.message);
+            }
+            if (PROACTIVE_GROUP_JIDS.length > 1) await new Promise((r) => setTimeout(r, 3000));
+        }
+        updateProactiveState({ lastReactivationAt: new Date().toISOString() });
+        lastGroupActivityAt = Date.now();
+        console.log('[PROACTIVO] Mensaje de reactivación enviado');
+    } catch (error) {
+        console.error('[PROACTIVO] Error en mensaje de reactivación:', error?.message || error);
+    }
+}
+
+function startProactiveScheduler(sock) {
+    if (!PROACTIVE_ENABLED || PROACTIVE_GROUP_JIDS.length === 0) {
+        console.log('[PROACTIVO] Sistema deshabilitado o sin grupo configurado.');
+        return;
+    }
+    stopProactiveScheduler();
+    const state = getProactiveState();
+    if (state.lastGroupActivityAt) {
+        lastGroupActivityAt = Math.max(lastGroupActivityAt, new Date(state.lastGroupActivityAt).getTime());
+    }
+    if (!lastGroupActivityAt) {
+        lastGroupActivityAt = Date.now();
+    }
+    console.log(`[PROACTIVO] Scheduler iniciado. Grupos: ${PROACTIVE_GROUP_JIDS.join(', ')}`);
+    console.log(`[PROACTIVO] Prompt: cada ${PROACTIVE_PROMPT_INTERVAL_MS / 3600000}h | Random: cada ${PROACTIVE_RANDOM_USER_INTERVAL_MS / 3600000}h | Inactividad: ${PROACTIVE_INACTIVITY_THRESHOLD_MS / 3600000}h`);
+    console.log(`[PROACTIVO] Ventana nocturna: ${PROACTIVE_NIGHT_START_HOUR}:00 - ${PROACTIVE_NIGHT_END_HOUR}:00 (CDMX)`);
+    proactiveCheckInterval = setInterval(async () => {
+        if (activeSock !== sock) return;
+        if (isNightTime()) return;
+        if (proactiveCheckRunning) return;
+        proactiveCheckRunning = true;
+        try {
+            const now = Date.now();
+            const currentState = getProactiveState();
+            if (lastGroupActivityAt > 0) {
+                const savedTs = currentState.lastGroupActivityAt ? new Date(currentState.lastGroupActivityAt).getTime() : 0;
+                if (lastGroupActivityAt > savedTs) {
+                    updateProactiveState({ lastGroupActivityAt: new Date(lastGroupActivityAt).toISOString() });
+                }
+            }
+            const lastShowcase = currentState.lastShowcaseSentAt ? new Date(currentState.lastShowcaseSentAt).getTime() : 0;
+            if (now - lastShowcase >= PROACTIVE_SHOWCASE_INTERVAL_MS) {
+                const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
+                await new Promise((resolve) => setTimeout(resolve, jitter));
+                if (activeSock === sock && !isNightTime()) {
+                    await sendPromptShowcase(sock);
+                }
+                return;
+            }
+            const lastPrompt = currentState.lastPromptSentAt ? new Date(currentState.lastPromptSentAt).getTime() : 0;
+            const timeSinceShowcase = now - lastShowcase;
+            if (now - lastPrompt >= PROACTIVE_PROMPT_INTERVAL_MS && timeSinceShowcase >= PROACTIVE_SHOWCASE_PROMPT_GAP_MS) {
+                const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
+                await new Promise((resolve) => setTimeout(resolve, jitter));
+                if (activeSock === sock && !isNightTime()) {
+                    await sendPromptOfTheDay(sock);
+                }
+                return;
+            }
+            const lastRandom = currentState.lastRandomUserAt ? new Date(currentState.lastRandomUserAt).getTime() : 0;
+            if (now - lastRandom >= PROACTIVE_RANDOM_USER_INTERVAL_MS) {
+                const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
+                await new Promise((resolve) => setTimeout(resolve, jitter));
+                if (activeSock === sock && !isNightTime()) {
+                    await sendRandomUserSelection(sock);
+                }
+                return;
+            }
+            const lastReactivation = currentState.lastReactivationAt ? new Date(currentState.lastReactivationAt).getTime() : 0;
+            const timeSinceActivity = now - lastGroupActivityAt;
+            const timeSinceReactivation = now - lastReactivation;
+            if (timeSinceActivity >= PROACTIVE_INACTIVITY_THRESHOLD_MS && timeSinceReactivation >= PROACTIVE_INACTIVITY_THRESHOLD_MS) {
+                await sendInactivityReactivation(sock);
+            }
+        } catch (error) {
+            console.error('[PROACTIVO] Error en ciclo de verificación:', error?.message || error);
+        } finally {
+            proactiveCheckRunning = false;
+        }
+    }, 30 * 60 * 1000);
+}
+
+function stopProactiveScheduler() {
+    if (proactiveCheckInterval) {
+        clearInterval(proactiveCheckInterval);
+        proactiveCheckInterval = null;
+        proactiveCheckRunning = false;
+        console.log('[PROACTIVO] Scheduler detenido.');
+    }
+}
+
 app.get('/', (req, res) => {
     if (qrCodeData) {
         res.send(`
@@ -2047,6 +2557,7 @@ function stopConnectionIntervals() {
         clearInterval(presenceKeepAliveInterval);
         presenceKeepAliveInterval = null;
     }
+    stopProactiveScheduler();
 }
 
 function startConnectionIntervals(sock) {
@@ -2168,6 +2679,7 @@ async function processIncomingMessage(sock, msg, runId) {
     }
 
     touchLastActivityAsync(senderJid);
+    touchGroupActivity(remoteJid);
     try {
         await sock.readMessages([msg.key]);
     } catch (error) {
@@ -2237,6 +2749,17 @@ async function processIncomingMessage(sock, msg, runId) {
         await handleTroncosCommand(sock, msg, remoteJid);
     } else if (command === '.dinamica') {
         await handleDinamicaCommand(sock, msg, remoteJid);
+    } else if (command === '.grupoid') {
+        const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
+        if (!isAuthorized) {
+            await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
+        } else if (!remoteJid.endsWith('@g.us')) {
+            await sock.sendMessage(remoteJid, { text: 'Este comando solo funciona en grupos.' }, { quoted: msg });
+        } else {
+            const senderPrivateJid = msg.key.participant || msg.key.remoteJid;
+            await sock.sendMessage(senderPrivateJid, { text: `📋 JID del grupo:\n\n${remoteJid}\n\nCopia este valor en PROACTIVE_GROUP_JID de tu configuración.` });
+            await sock.sendMessage(remoteJid, { text: '📋 Información enviada por privado.' }, { quoted: msg });
+        }
     }
 }
 
@@ -2434,6 +2957,7 @@ async function startBot() {
                 qrCodeData = null;
                 reconnectDelayMs = BOT_RECONNECT_BASE_MS;
                 startConnectionIntervals(sock);
+                startProactiveScheduler(sock);
                 console.log('✅ BOT CONECTADO A WHATSAPP');
                 processIncomingQueue(sock, runId).catch(() => {});
             }
