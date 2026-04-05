@@ -83,7 +83,7 @@ const PROACTIVE_RANDOM_DAILY_MINUTE = Number(process.env.PROACTIVE_RANDOM_DAILY_
 const PROACTIVE_JITTER_MS = Number(process.env.PROACTIVE_JITTER_MS || (5 * 1000));
 const PROACTIVE_SHOWCASE_INTERVAL_MS = Number(process.env.PROACTIVE_SHOWCASE_INTERVAL_MS || (60 * 1000));
 const PROACTIVE_SHOWCASE_PROMPT_GAP_MS = Number(process.env.PROACTIVE_SHOWCASE_PROMPT_GAP_MS || (2 * 60 * 1000));
-const PROACTIVE_SEND_SHOWCASE_ON_START = !['0', 'false', 'no', 'off'].includes(String(process.env.PROACTIVE_SEND_SHOWCASE_ON_START || 'true').toLowerCase());
+const PROACTIVE_SEND_SHOWCASE_ON_START = !['0', 'false', 'no', 'off'].includes(String(process.env.PROACTIVE_SEND_SHOWCASE_ON_START || 'false').toLowerCase());
 const SHOWCASE_REPOS = [
     {
         id: 'picotrex',
