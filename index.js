@@ -2176,17 +2176,20 @@ function parsePromptShowcases(markdown, repoDef) {
     const sections = markdown.split(/###\s+(?:Example|Case|案例)\s+\d+/i);
     for (const section of sections) {
         try {
-            // Soporta formatos múltiples: 
-            // - [Título](Url) (by @Author)
-            // - 标题中文 (by @Author)
             const titleMatch = section.match(/[:：]\s*(?:\[([^\]]+)\]\([^)]*\)|([^()]+?))\s*\(by\s*\[?@?([^\]\)]+)/i);
-            if (!titleMatch) continue;
+            if (!titleMatch) {
+                // console.log(`[DEBUG-PARSE] ${repoDef.id}: titleMatch failed: `, section.substring(0, 50));
+                continue;
+            }
             
             const title = (titleMatch[1] || titleMatch[2]).trim();
             const author = titleMatch[3].replace(/[\])].*$/, '').trim();
             
             const imgMatches = [...section.matchAll(/<img\s+src="([^"]+)"/g)];
-            if (imgMatches.length === 0) continue;
+            if (imgMatches.length === 0) {
+                console.log(`[DEBUG-PARSE] ${repoDef.id}: imgMatches failed for title: ${title}`);
+                continue;
+            }
             
             const imageUrls = imgMatches.map(m => {
                 const src = m[1];
@@ -2194,12 +2197,19 @@ function parsePromptShowcases(markdown, repoDef) {
             });
             
             const promptMatch = section.match(/\*\*(?:Prompt|提示词):?\*\*[\s\S]*?```[^\n]*\n([\s\S]*?)```/i);
-            if (!promptMatch) continue;
+            if (!promptMatch) {
+                console.log(`[DEBUG-PARSE] ${repoDef.id}: promptMatch failed for title: ${title}`);
+                continue;
+            }
             const prompt = promptMatch[1].trim();
-            if (prompt.length < 10) continue;
+            if (prompt.length < 10) {
+                console.log(`[DEBUG-PARSE] ${repoDef.id}: prompt too short for title: ${title}`);
+                continue;
+            }
             
             showcases.push({ title, author, imageUrls, prompt });
         } catch (e) {
+            console.log(`[DEBUG-PARSE] Exception in parse: `, e?.message);
             continue;
         }
     }
