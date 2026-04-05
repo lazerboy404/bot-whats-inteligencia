@@ -2494,6 +2494,20 @@ function cleanModelOutputText(text) {
         .trim();
 }
 
+function tryExtractJsonObject(text) {
+    const raw = String(text || '').trim();
+    if (!raw) return null;
+    const first = raw.indexOf('{');
+    const last = raw.lastIndexOf('}');
+    if (first === -1 || last === -1 || last <= first) return null;
+    const candidate = raw.slice(first, last + 1);
+    try {
+        return JSON.parse(candidate);
+    } catch (_) {
+        return null;
+    }
+}
+
 function extractPromptCues(prompt) {
     const source = String(prompt || '').toLowerCase();
     const cues = [];
@@ -2525,6 +2539,7 @@ function descriptionHasCue(text, cues) {
 
 async function generateShowcaseDescription(title, prompt) {
     const cues = extractPromptCues(prompt);
+    const debug = { reason: 'unknown', source: 'none', rawLen: 0 };
     const analysisSystemPrompt = 'Analiza prompts visuales y responde SOLO JSON válido.';
     const analysisUserPrompt = `Analiza este prompt y extrae su intención visual.
 
@@ -2547,8 +2562,12 @@ Reglas:
     try {
         const analysisRaw = await generateAIContent(analysisSystemPrompt, analysisUserPrompt, 220);
         const cleaned = cleanModelOutputText(analysisRaw);
+        debug.rawLen = cleaned.length;
         if (cleaned) {
-            const parsed = JSON.parse(cleaned);
+            const parsed = tryExtractJsonObject(cleaned);
+            if (!parsed) {
+                debug.reason = 'json_parse_failed';
+            } else {
             const subject = String(parsed?.subject || '').trim();
             const style = String(parsed?.style || '').trim();
             const framing = String(parsed?.framing || '').trim();
@@ -2563,17 +2582,38 @@ Reglas:
                 ? `Un prompt para crear ${parts.join(', ')}${cueText}.`
                 : '';
             if (!isWeakShowcaseDescription(built) && descriptionHasCue(built, cues)) {
-                return built;
+                return { text: built, source: 'analysis_json', reason: 'ok', rawLen: cleaned.length };
+            }
+            debug.reason = !built ? 'json_empty_fields' : 'json_rejected_by_filters';
             }
         }
     } catch (error) {
+        debug.reason = 'analysis_exception';
     }
 
-    const sentenceSystemPrompt = "Eres copywriter experto en prompts visuales. Escribe una sola frase en español (18-34 palabras) que describa exactamente qué produce el prompt. Debe incluir sujeto + estilo visual + encuadre/acabado + al menos dos detalles concretos de escena. Evita frases genéricas.";
-    const sentenceUserPrompt = `Título: ${title}\nPrompt: ${prompt}\nIncluye 2+ detalles concretos de escena como: ${cues.join(', ') || 'elementos visuales explícitos del prompt'}.\nNo uses frases como "este prompt te ayuda".`;
-    const sentenceRaw = await generateAIContent(sentenceSystemPrompt, sentenceUserPrompt, 180);
-    const sentence = cleanModelOutputText(sentenceRaw);
-    return (!isWeakShowcaseDescription(sentence) && descriptionHasCue(sentence, cues)) ? sentence : '';
+    const sentencePrompts = [
+        {
+            system: "Eres copywriter experto en prompts visuales. Escribe una sola frase en español (18-34 palabras) que describa exactamente qué produce el prompt. Debe incluir sujeto + estilo visual + encuadre/acabado + al menos dos detalles concretos de escena. Evita frases genéricas.",
+            user: `Título: ${title}\nPrompt: ${prompt}\nIncluye 2+ detalles concretos de escena como: ${cues.join(', ') || 'elementos visuales explícitos del prompt'}.\nNo uses frases como "este prompt te ayuda".`
+        },
+        {
+            system: "Resume prompts visuales en una sola frase clara en español. Formato obligatorio: 'Un prompt para ...'. No uses markdown.",
+            user: `Describe qué hace este prompt con detalles visuales concretos.\nTítulo: ${title}\nPrompt: ${prompt}`
+        }
+    ];
+
+    for (const variant of sentencePrompts) {
+        const sentenceRaw = await generateAIContent(variant.system, variant.user, 180);
+        const sentence = cleanModelOutputText(sentenceRaw);
+        if (!sentence) continue;
+        if (!isWeakShowcaseDescription(sentence) && descriptionHasCue(sentence, cues)) {
+            return { text: sentence, source: 'sentence_direct', reason: 'ok', rawLen: sentence.length };
+        }
+        debug.reason = 'sentence_rejected_by_filters';
+        debug.rawLen = sentence.length;
+    }
+
+    return { text: '', source: 'none', reason: debug.reason, rawLen: debug.rawLen };
 }
 
 function buildShortPromptDescription(title, prompt) {
@@ -2696,10 +2736,11 @@ async function sendPromptShowcase(sock) {
         if (engPrompt) finalPrompt = engPrompt;
 
         
-        const descriptionAI = await generateShowcaseDescription(finalTitle, finalPrompt);
+        const descriptionResult = await generateShowcaseDescription(finalTitle, finalPrompt);
+        const descriptionAI = descriptionResult?.text || '';
         const finalDescription = descriptionAI;
         const debugCues = extractPromptCues(finalPrompt);
-        console.log(`[SHOWCASE-DESC] ${repoDef.id}: fuente=${descriptionAI ? 'ia' : 'sin_descripcion'} cues=${debugCues.length || 0}`);
+        console.log(`[SHOWCASE-DESC] ${repoDef.id}: fuente=${descriptionAI ? 'ia' : 'sin_descripcion'} origen=${descriptionResult?.source || 'none'} motivo=${descriptionResult?.reason || 'unknown'} cues=${debugCues.length || 0} prompt_chars=${finalPrompt.length} desc_chars=${finalDescription.length}`);
         if (!finalDescription) {
             console.log(`[SHOWCASE] Omitido: sin descripcion IA valida para "${showcase.title}" (repo: ${repoDef.id})`);
             return;
