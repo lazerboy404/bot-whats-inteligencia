@@ -68,14 +68,14 @@ const BOT_RECONNECT_BASE_MS = Number(process.env.BOT_RECONNECT_BASE_MS || 4000);
 const BOT_RECONNECT_MAX_MS = Number(process.env.BOT_RECONNECT_MAX_MS || 45000);
 const PROACTIVE_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.PROACTIVE_ENABLED || 'true').toLowerCase());
 const PROACTIVE_GROUP_JIDS = (process.env.PROACTIVE_GROUP_JID || '').split(',').map(s => s.trim()).filter(Boolean);
-const PROACTIVE_PROMPT_INTERVAL_MS = Number(process.env.PROACTIVE_PROMPT_INTERVAL_MS || (24 * 60 * 60 * 1000));
+const PROACTIVE_PROMPT_INTERVAL_MS = Number(process.env.PROACTIVE_PROMPT_INTERVAL_MS || (60 * 1000));
 const PROACTIVE_RANDOM_USER_INTERVAL_MS = Number(process.env.PROACTIVE_RANDOM_USER_INTERVAL_MS || (24 * 60 * 60 * 1000));
 const PROACTIVE_INACTIVITY_THRESHOLD_MS = Number(process.env.PROACTIVE_INACTIVITY_THRESHOLD_MS || (18 * 60 * 60 * 1000));
 const PROACTIVE_NIGHT_START_HOUR = Number(process.env.PROACTIVE_NIGHT_START_HOUR || 23);
 const PROACTIVE_NIGHT_END_HOUR = Number(process.env.PROACTIVE_NIGHT_END_HOUR || 9);
-const PROACTIVE_JITTER_MS = Number(process.env.PROACTIVE_JITTER_MS || (30 * 60 * 1000));
-const PROACTIVE_SHOWCASE_INTERVAL_MS = Number(process.env.PROACTIVE_SHOWCASE_INTERVAL_MS || (24 * 60 * 60 * 1000));
-const PROACTIVE_SHOWCASE_PROMPT_GAP_MS = Number(process.env.PROACTIVE_SHOWCASE_PROMPT_GAP_MS || (90 * 60 * 1000));
+const PROACTIVE_JITTER_MS = Number(process.env.PROACTIVE_JITTER_MS || (5 * 1000));
+const PROACTIVE_SHOWCASE_INTERVAL_MS = Number(process.env.PROACTIVE_SHOWCASE_INTERVAL_MS || (60 * 1000));
+const PROACTIVE_SHOWCASE_PROMPT_GAP_MS = Number(process.env.PROACTIVE_SHOWCASE_PROMPT_GAP_MS || (2 * 60 * 1000));
 const SHOWCASE_REPOS = [
     {
         id: 'picotrex',
