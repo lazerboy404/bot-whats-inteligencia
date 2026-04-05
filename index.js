@@ -89,6 +89,16 @@ const SHOWCASE_REPOS = [
         id: 'jimmylv',
         url: 'https://raw.githubusercontent.com/JimmyLv/awesome-nano-banana/main/README.md',
         imageBaseUrl: ''
+    },
+    {
+        id: 'supermaker',
+        url: 'https://raw.githubusercontent.com/Super-Maker-AI/awesome-nano-banana/main/README.md',
+        imageBaseUrl: 'https://raw.githubusercontent.com/Super-Maker-AI/awesome-nano-banana/main/'
+    },
+    {
+        id: 'zerolu',
+        url: 'https://raw.githubusercontent.com/ZeroLu/awesome-nanobanana-pro/main/README.md',
+        imageBaseUrl: 'https://raw.githubusercontent.com/ZeroLu/awesome-nanobanana-pro/main/'
     }
 ];
 const SHOWCASE_PROMPT_INLINE_MAX_LENGTH = 500;
