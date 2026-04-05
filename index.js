@@ -2316,20 +2316,20 @@ function extractPromptFromSection(section) {
 }
 
 function extractUsageInstructions(section) {
-    const match = section.match(/^\s*(?:\*\*)?\s*(?:Usage\s*Instructions|Instructions|使用说明)\s*(?:\*\*)?\s*[:：]?\s*\n([\s\S]*?)(?=\n\s*###|\n\s*##|\n{2,}---|$)/im);
+    const match = section.match(/^\s*(?:\*\*)?\s*(?:Usage\s*Instructions|Instructions|Instrucciones\s*de\s*uso|使用说明)\s*(?:\*\*)?\s*[:：]?\s*\n([\s\S]*?)(?=\n\s*###|\n\s*##|\n{2,}---|$)/im);
     return match ? match[1].trim() : '';
 }
 
 function parseCaseStyleShowcases(markdown, repoDef) {
     const showcases = [];
-    const sectionRegex = /(?:^|\n)\s*###\s*(?:Example|Case|案例)\s+\d+\s*[:：][\s\S]*?(?=(?:\n\s*###\s*(?:Example|Case|案例)\s+\d+\s*[:：])|$)/gi;
+    const sectionRegex = /(?:^|\n)\s*###\s*(?:Example|Case|Caso|案例)\s+\d+\s*[:：][\s\S]*?(?=(?:\n\s*###\s*(?:Example|Case|Caso|案例)\s+\d+\s*[:：])|$)/gi;
     const sections = markdown.match(sectionRegex) || [];
     let imgMissCount = 0;
     let promptMissCount = 0;
 
     for (const section of sections) {
         try {
-            const titleMatch = section.match(/(?:Example|Case|案例)\s+\d+\s*[:：]\s*(?:\[([^\]]+)\]\([^)]*\)|([^\n(]+?))\s*\(by\s*\[?@?([^\]\)\n]+)/i);
+            const titleMatch = section.match(/(?:Example|Case|Caso|案例)\s+\d+\s*[:：]\s*(?:\[([^\]]+)\]\([^)]*\)|([^\n(]+?))\s*\((?:by|por)\s*\[?@?([^\]\)\n]+)/i);
             if (!titleMatch) continue;
             const title = (titleMatch[1] || titleMatch[2] || '').trim();
             const author = (titleMatch[3] || '').replace(/[\])].*$/, '').trim();
