@@ -11,7 +11,7 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         PORT: 3000,
-        RESET_WA_SESSION_ON_BOOT: 'true',
+        RESET_WA_SESSION_ON_BOOT: 'false',
         LOCAL_STORE_FILE: '/root/bot-whats-inteligencia/data/castor_store.json',
         SAFE_MODE: 'true',
         ALLOW_SELF_COMMANDS: 'false',
