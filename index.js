@@ -2288,20 +2288,35 @@ async function sendPromptShowcase(sock) {
         
         for (const groupJid of PROACTIVE_GROUP_JIDS) {
             try {
-                // Enviar imágenes (soporte para multiples input/output)
-                for (let i = 0; i < showcase.imageUrls.length; i++) {
-                    const isLast = (i === showcase.imageUrls.length - 1);
-                    const isFirstOfTwo = (showcase.imageUrls.length === 2 && i === 0);
-                    const imgCaption = isLast ? captionText : (isFirstOfTwo ? '🖼️ _Imagen de Referencia (Input)_' : '');
+                if (showcase.imageUrls.length > 1) {
+                    // Enviar texto principal separado si hay múltiples imágenes
+                    await sock.sendMessage(groupJid, { text: captionText });
                     
+                    // Enviar imágenes en orden
+                    for (let i = 0; i < showcase.imageUrls.length; i++) {
+                        let imgCaption = '';
+                        if (i === 0) imgCaption = '🖼️ _Imagen de Referencia (Input)_';
+                        else if (i === showcase.imageUrls.length - 1) imgCaption = '✨ _Imagen Final (Output)_';
+                        
+                        try {
+                            await sock.sendMessage(groupJid, {
+                                image: { url: showcase.imageUrls[i] },
+                                caption: imgCaption
+                            });
+                        } catch (imgError) {
+                            console.error(`[SHOWCASE] Error enviando múltiple imagen ${i} a ${groupJid}:`, imgError?.message);
+                        }
+                    }
+                } else {
+                    // Si hay solo una imagen, enviamos todo junto como caption
                     try {
                         await sock.sendMessage(groupJid, {
-                            image: { url: showcase.imageUrls[i] },
-                            caption: imgCaption
+                            image: { url: showcase.imageUrls[0] },
+                            caption: captionText
                         });
                     } catch (imgError) {
-                        console.error(`[SHOWCASE] Error enviando imagen ${i} a ${groupJid}:`, imgError?.message);
-                        if (isLast) await sock.sendMessage(groupJid, { text: captionText });
+                        console.error(`[SHOWCASE] Error enviando imagen única a ${groupJid}:`, imgError?.message);
+                        await sock.sendMessage(groupJid, { text: captionText });
                     }
                 }
                 
