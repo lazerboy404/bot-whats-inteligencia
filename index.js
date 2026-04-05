@@ -2193,7 +2193,7 @@ function parsePromptShowcases(markdown, repoDef) {
                 return src.startsWith('http') ? src : (repoDef.imageBaseUrl + src);
             });
             
-            const promptMatch = section.match(/\*\*(?:Prompt|提示词):\*\*[\s\S]*?```\n?([\s\S]*?)```/i);
+            const promptMatch = section.match(/\*\*(?:Prompt|提示词):?\*\*[\s\S]*?```[^\n]*\n([\s\S]*?)```/i);
             if (!promptMatch) continue;
             const prompt = promptMatch[1].trim();
             if (prompt.length < 10) continue;
