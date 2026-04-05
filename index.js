@@ -3051,7 +3051,6 @@ async function startBot() {
         const sock = makeWASocket({
             version,
             logger: pino({ level: 'info' }),
-            printQRInTerminal: true,
             auth: {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
