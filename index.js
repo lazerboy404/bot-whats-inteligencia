@@ -2588,84 +2588,27 @@ function descriptionHasCue(text, cues) {
 }
 
 async function generateShowcaseDescription(title, prompt) {
-    const cues = extractPromptCues(prompt);
-    const debug = { reason: 'unknown', source: 'none', rawLen: 0 };
-    const analysisSystemPrompt = 'Analiza prompts visuales y responde SOLO JSON válido.';
-    const analysisUserPrompt = `Analiza este prompt y extrae su intención visual.
-
-Título: ${title}
-Prompt: ${prompt}
-
-Devuelve SOLO este JSON (sin markdown):
-{
-  "subject": "qué objeto o escena principal se genera",
-  "style": "estilo visual principal",
-  "framing": "encuadre o tipo de toma",
-  "finish": "acabado/resultado esperado"
-}
-
-Reglas:
-- Español neutro.
-- Campos cortos y concretos.
-- Si no hay dato claro, usa "no especificado".`;
+    const systemPrompt = "Eres un experto en Prompt Engineering y arte generativo. Tu objetivo es explicar de forma breve, natural y atractiva qué resultado visual produce el prompt.";
+    const userPrompt = `Analiza el siguiente prompt y redacta una descripción en español (entre 20 y 40 palabras) explicando exactamente qué tipo de imagen genera, su estilo visual, su iluminación y su atmósfera.
+    REGLAS:
+    - No uses saludos, introducciones ni frases genéricas como "Este prompt te ayuda a".
+    - Ve directo al grano.
+    - Haz que suene atractivo y experto.
+    
+    Título: ${title}
+    Prompt: ${prompt}`;
 
     try {
-        const analysisRaw = await generateAIContent(analysisSystemPrompt, analysisUserPrompt, 220);
-        const cleaned = cleanModelOutputText(analysisRaw);
-        debug.rawLen = cleaned.length;
-        if (!cleaned) {
-            debug.reason = 'analysis_empty_response';
+        const aiResponse = await generateAIContent(systemPrompt, userPrompt, 180);
+        const sentence = cleanModelOutputText(aiResponse);
+
+        if (sentence && sentence.length > 15 && sentence.length < 500) {
+            return { text: sentence, source: 'ia_natural', reason: 'ok', rawLen: sentence.length };
         }
-        if (cleaned) {
-            const parsed = tryExtractJsonObject(cleaned);
-            if (!parsed) {
-                debug.reason = 'json_parse_failed';
-            } else {
-            const subject = String(parsed?.subject || '').trim();
-            const style = String(parsed?.style || '').trim();
-            const framing = String(parsed?.framing || '').trim();
-            const finish = String(parsed?.finish || '').trim();
-            const parts = [];
-            if (subject && subject !== 'no especificado') parts.push(subject);
-            if (style && style !== 'no especificado') parts.push(`con ${style}`);
-            if (framing && framing !== 'no especificado') parts.push(`en ${framing}`);
-            if (finish && finish !== 'no especificado') parts.push(`y acabado ${finish}`);
-            const cueText = cues.length > 0 ? `, destacando ${cues.join(', ')}` : '';
-            const built = parts.length > 0
-                ? `Un prompt para crear ${parts.join(', ')}${cueText}.`
-                : '';
-            if (!isWeakShowcaseDescription(built) && descriptionHasCue(built, cues)) {
-                return { text: built, source: 'analysis_json', reason: 'ok', rawLen: cleaned.length };
-            }
-            debug.reason = !built ? 'json_empty_fields' : 'json_rejected_by_filters';
-            }
-        }
+        return { text: '', source: 'none', reason: 'respuesta_corta_o_invalida', rawLen: sentence ? sentence.length : 0 };
     } catch (error) {
-        debug.reason = 'analysis_exception';
+        return { text: '', source: 'none', reason: 'error_api', rawLen: 0 };
     }
-
-    const sentencePrompts = [
-        {
-            system: "Eres un redactor experto. Devuelve ÚNICAMENTE la descripción solicitada. NO agregues introducciones, saludos, ni explicaciones. Solo el texto final.",
-            user: `Describe qué hace este prompt en una sola frase en español (18-34 palabras). Formato obligatorio: 'Un prompt para ...'. \nTítulo: ${title}\nPrompt: ${prompt}`
-        }
-    ];
-
-    for (const variant of sentencePrompts) {
-        const sentenceRaw = await generateAIContent(variant.system, variant.user, 180);
-        const sentence = cleanModelOutputText(sentenceRaw);
-        if (!sentence) {
-            debug.reason = 'sentence_empty_response';
-            continue;
-        }
-        if (sentence.length > 10 && sentence.length < 500) {
-            return { text: sentence, source: 'sentence_direct', reason: 'ok', rawLen: sentence.length };
-        }
-        debug.reason = 'sentence_rejected_by_filters';
-        debug.rawLen = sentence.length;
-    }
-
-    return { text: '', source: 'none', reason: debug.reason, rawLen: debug.rawLen };
 }
 
 function buildShortPromptDescription(title, prompt) {
