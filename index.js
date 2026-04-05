@@ -84,7 +84,7 @@ const SHOWCASE_REPOS = [
     },
     {
         id: 'jimmylv',
-        url: 'https://raw.githubusercontent.com/JimmyLv/awesome-nano-banana/main/README_en.md',
+        url: 'https://raw.githubusercontent.com/JimmyLv/awesome-nano-banana/main/README.md',
         imageBaseUrl: ''
     }
 ];
