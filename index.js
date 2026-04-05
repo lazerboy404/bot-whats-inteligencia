@@ -1034,6 +1034,12 @@ function getMexicoDateKey(dateObj) {
     return `${y}-${m}-${d}`;
 }
 
+function hasReachedMexicoTime(dateObj, hour, minute) {
+    const currentMinutes = (dateObj.getHours() * 60) + dateObj.getMinutes();
+    const targetMinutes = (hour * 60) + minute;
+    return currentMinutes >= targetMinutes;
+}
+
 async function sendPrivateAdminMessage(sock, text) {
     const payload = typeof text === 'string'
         ? { text: sanitizeText(text, 9000) }
@@ -3052,7 +3058,7 @@ function startProactiveScheduler(sock) {
                     updateProactiveState({ lastGroupActivityAt: new Date(lastGroupActivityAt).toISOString() });
                 }
             }
-            if (mexicoHour === PROACTIVE_SHOWCASE_DAILY_HOUR && mexicoMinute === PROACTIVE_SHOWCASE_DAILY_MINUTE && currentState.lastShowcaseDailyDate !== todayKey) {
+            if (currentState.lastShowcaseDailyDate !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_SHOWCASE_DAILY_HOUR, PROACTIVE_SHOWCASE_DAILY_MINUTE)) {
                 const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
                 await new Promise((resolve) => setTimeout(resolve, jitter));
                 if (activeSock === sock && !isNightTime()) {
@@ -3061,7 +3067,7 @@ function startProactiveScheduler(sock) {
                 }
                 return;
             }
-            if (mexicoHour === PROACTIVE_RANDOM_DAILY_HOUR && mexicoMinute === PROACTIVE_RANDOM_DAILY_MINUTE && currentState.lastRandomDailyDate !== todayKey) {
+            if (currentState.lastRandomDailyDate !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_RANDOM_DAILY_HOUR, PROACTIVE_RANDOM_DAILY_MINUTE)) {
                 const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
                 await new Promise((resolve) => setTimeout(resolve, jitter));
                 if (activeSock === sock && !isNightTime()) {
