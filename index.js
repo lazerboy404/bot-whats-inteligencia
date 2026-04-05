@@ -2090,21 +2090,12 @@ async function handleDinamicaCommand(sock, msg, remoteJid) {
     await sock.sendMessage(remoteJid, { text: dinamicaText }, { quoted: msg });
 }
 
-const AI_PROVIDER = String(process.env.AI_PROVIDER || (process.env.GROQ_API_KEY ? 'groq' : 'gemini')).toLowerCase();
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
 const GROQ_MODEL_CANDIDATES = (process.env.GROQ_MODEL_CANDIDATES || 'llama-3.1-8b-instant,llama-3.3-70b-versatile,gemma2-9b-it')
     .split(',')
     .map((m) => m.trim())
     .filter(Boolean);
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-const GEMINI_MODEL_CANDIDATES = (process.env.GEMINI_MODEL_CANDIDATES || 'gemini-2.0-flash,gemini-2.0-flash-lite,gemini-1.5-flash,gemini-1.5-pro')
-    .split(',')
-    .map((m) => m.trim())
-    .filter(Boolean);
-let resolvedGeminiModel = '';
-let resolvedGeminiModelAt = 0;
 
 function uniqStrings(values) {
     return [...new Set(values.map((v) => String(v || '').trim()).filter(Boolean))];
@@ -2114,146 +2105,51 @@ function normalizeGroqModelName(modelName) {
     return String(modelName || '').trim();
 }
 
-function normalizeGeminiModelName(modelName) {
-    return String(modelName || '').replace(/^models\//i, '').trim();
-}
-
-async function resolveGeminiModel(forceRefresh = false) {
-    if (!GEMINI_API_KEY) return '';
-    const now = Date.now();
-    if (!forceRefresh && resolvedGeminiModel && (now - resolvedGeminiModelAt) < 10 * 60 * 1000) {
-        return resolvedGeminiModel;
-    }
-
-    const preferred = [GEMINI_MODEL, ...GEMINI_MODEL_CANDIDATES]
-        .map(normalizeGeminiModelName)
-        .filter(Boolean);
-    const preferredSet = new Set(preferred);
-
-    try {
-        const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}`;
-        const response = await fetch(listUrl);
-        if (response.ok) {
-            const data = await response.json();
-            const available = (data?.models || [])
-                .filter((m) => (m?.supportedGenerationMethods || []).includes('generateContent'))
-                .map((m) => normalizeGeminiModelName(m?.name))
-                .filter(Boolean);
-
-            const preferredAvailable = available.find((m) => preferredSet.has(m));
-            const selected = preferredAvailable || available.find((m) => m.includes('gemini')) || preferred[0];
-            if (selected) {
-                resolvedGeminiModel = selected;
-                resolvedGeminiModelAt = now;
-                if (forceRefresh || selected !== GEMINI_MODEL) {
-                    console.log(`[PROACTIVO-IA] Modelo resuelto automáticamente: ${selected}`);
-                }
-                return selected;
-            }
-        }
-    } catch (error) {
-    }
-
-    resolvedGeminiModel = preferred[0] || normalizeGeminiModelName(GEMINI_MODEL);
-    resolvedGeminiModelAt = now;
-    return resolvedGeminiModel;
-}
-
 async function generateAIContent(systemPrompt, userPrompt, maxTokens = 150) {
-    if (AI_PROVIDER === 'groq') {
-        if (!GROQ_API_KEY) return null;
-        try {
-            const models = uniqStrings([GROQ_MODEL, ...GROQ_MODEL_CANDIDATES]).map(normalizeGroqModelName);
-            for (const modelName of models) {
-                const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), 15000);
-                const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${GROQ_API_KEY}`
-                    },
-                    body: JSON.stringify({
-                        model: modelName,
-                        messages: [
-                            { role: 'system', content: systemPrompt },
-                            { role: 'user', content: userPrompt }
-                        ],
-                        temperature: 0.8,
-                        max_tokens: maxTokens
-                    }),
-                    signal: controller.signal
-                });
-                clearTimeout(timeout);
-
-                if (response.ok) {
-                    const data = await response.json();
-                    const text = data?.choices?.[0]?.message?.content;
-                    if (text && text.trim()) return text.trim();
-                    continue;
-                }
-
-                const status = response.status;
-                const bodyText = await response.text();
-                console.error(`[PROACTIVO-IA] Error HTTP ${status} con modelo ${modelName} (groq): ${bodyText.slice(0, 220)}`);
-
-                // Error de modelo: intenta con otro candidato.
-                if (status === 400 || status === 404) continue;
-                // Error de auth/permisos: no seguir intentando.
-                if (status === 401 || status === 403) return null;
-            }
-            return null;
-        } catch (error) {
-            console.error('[PROACTIVO-IA] Error generando contenido con Groq:', error?.message || error);
-            return null;
-        }
-    }
-
-    if (!GEMINI_API_KEY) return null;
+    if (!GROQ_API_KEY) return null;
     try {
-        const requestBody = JSON.stringify({
-            contents: [
-                { role: 'user', parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }
-            ],
-            generationConfig: {
-                maxOutputTokens: maxTokens,
-                temperature: 0.95,
-                topP: 0.95
-            }
-        });
-
-        let modelName = await resolveGeminiModel(false);
-        for (let attempt = 0; attempt < 2; attempt++) {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GEMINI_API_KEY}`;
+        const models = uniqStrings([GROQ_MODEL, ...GROQ_MODEL_CANDIDATES]).map(normalizeGroqModelName);
+        for (const modelName of models) {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 15000);
-            const response = await fetch(url, {
+            const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: requestBody,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${GROQ_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: modelName,
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: userPrompt }
+                    ],
+                    temperature: 0.8,
+                    max_tokens: maxTokens
+                }),
                 signal: controller.signal
             });
             clearTimeout(timeout);
 
             if (response.ok) {
                 const data = await response.json();
-                const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-                return text ? text.trim() : null;
+                const text = data?.choices?.[0]?.message?.content;
+                if (text && text.trim()) return text.trim();
+                continue;
             }
 
             const status = response.status;
             const bodyText = await response.text();
-            console.error(`[PROACTIVO-IA] Error HTTP ${status} con modelo ${modelName}: ${bodyText.slice(0, 220)}`);
+            console.error(`[PROACTIVO-IA] Error HTTP ${status} con modelo ${modelName} (groq): ${bodyText.slice(0, 220)}`);
 
-            if (attempt === 0 && (status === 400 || status === 404)) {
-                modelName = await resolveGeminiModel(true);
-                continue;
-            }
-            return null;
+            // Error de modelo: intenta con otro candidato.
+            if (status === 400 || status === 404) continue;
+            // Error de auth/permisos: no seguir intentando.
+            if (status === 401 || status === 403) return null;
         }
         return null;
     } catch (error) {
-        console.error('[PROACTIVO-IA] Error generando contenido:', error?.message || error);
+        console.error('[PROACTIVO-IA] Error generando contenido con Groq:', error?.message || error);
         return null;
     }
 }
