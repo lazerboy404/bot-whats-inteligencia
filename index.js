@@ -2588,14 +2588,15 @@ function descriptionHasCue(text, cues) {
 }
 
 async function generateShowcaseDescription(title, prompt) {
-    const systemPrompt = "Eres un experto en arte con IA. Describe el resultado del prompt de forma súper concisa, directa y con estilo.";
-    const userPrompt = `Redacta una descripción MUY CORTA en español de México (máximo 15 a 20 palabras) sobre la imagen que genera este prompt.
-    Solo capta la esencia y el estilo visual, sin enlistar cada detalle técnico.
+    const systemPrompt = "Eres un analista lógico de prompts. Tu trabajo es deducir la acción literal. ESTRICTAMENTE PROHIBIDO inventar detalles, estilos (ej. futurista, cyberpunk) o atmósferas que no estén explícitas en el texto.";
+    const userPrompt = `Redacta una descripción MUY CORTA en español de México (máximo 15 a 20 palabras) sobre lo que hace este prompt.
     
-    REGLAS:
-    - MÁXIMO 20 palabras. Sé directo, punchy y al grano.
-    - Usa español de México fluido y natural.
-    - NADA de "Este prompt genera..." o "Una imagen de...". Empieza directo con el concepto (ej. "Selfie fotorrealista de un grupo de amigos con luz natural...").
+    REGLAS CRÍTICAS:
+    - NO ALUCINES NI INVENTES. Limítate a lo que dice el título y el prompt.
+    - Si el prompt hace referencia a una imagen o marca (ej. "dibuja lo que ve la flecha" o "usa la foto 1"), deduce la función lógica basándote en el título (ej. "Generación de la vista real a nivel de calle a partir de un mapa").
+    - MÁXIMO 20 palabras.
+    - Usa español de México.
+    - No uses frases de relleno como "Este prompt genera...".
     
     Título: ${title}
     Prompt: ${prompt}`;
@@ -2605,7 +2606,7 @@ async function generateShowcaseDescription(title, prompt) {
         const sentence = cleanModelOutputText(aiResponse);
 
         if (sentence && sentence.length > 10 && sentence.length < 300) {
-            return { text: sentence, source: 'ia_corta_mx', reason: 'ok', rawLen: sentence.length };
+            return { text: sentence, source: 'ia_logica_mx', reason: 'ok', rawLen: sentence.length };
         }
         return { text: '', source: 'none', reason: 'respuesta_invalida', rawLen: sentence ? sentence.length : 0 };
     } catch (error) {
