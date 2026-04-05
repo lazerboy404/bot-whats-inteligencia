@@ -2185,65 +2185,139 @@ Genera la pregunta:`;
     return clean;
 }
 
-function parsePromptShowcases(markdown, repoDef) {
+function normalizeShowcaseImageUrl(src, repoDef) {
+    const cleanSrc = String(src || '').trim();
+    if (!cleanSrc) return '';
+    if (cleanSrc.startsWith('http://') || cleanSrc.startsWith('https://')) return cleanSrc;
+    if (cleanSrc.startsWith('//')) return `https:${cleanSrc}`;
+    const normalizedPath = cleanSrc.replace(/^\.\//, '');
+    return `${repoDef.imageBaseUrl}${normalizedPath}`;
+}
+
+function extractImagesFromSection(section, repoDef) {
+    const htmlImages = [...section.matchAll(/<img[^>]+src=["']([^"']+)["']/gi)].map((m) => m[1]);
+    const markdownImages = [...section.matchAll(/!\[[^\]]*\]\(([^)\n]+)\)/g)]
+        .map((m) => m[1].replace(/\s+"[^"]*"$/, '').trim());
+    const rawImages = [...new Set([...htmlImages, ...markdownImages])];
+    return rawImages
+        .map((src) => normalizeShowcaseImageUrl(src, repoDef))
+        .filter(Boolean);
+}
+
+function extractPromptFromSection(section) {
+    const promptPatterns = [
+        /\*\*(?:Prompt|提示词):?\*\*[\s\S]*?```[^\n]*\n([\s\S]*?)```/i,
+        /(?:\*\*(?:Prompt|提示词):?\*\*|(?:^|\n)(?:Prompt|提示词)\s*[:：])[\s\S]*?```[^\n]*\n([\s\S]*?)```/i,
+        /\*\*(?:Prompt|提示词):?\*\*\s*\n+([\s\S]*?)(?:\n{2,}---|\n{2,}<a id=|\n{2,}\[⬆️|\n{2,}###|\n{2,}\*\*|$)/i,
+        /(?:^|\n)(?:Prompt|提示词)\s*[:：]\s*\n?([\s\S]*?)(?:\n{2,}---|\n{2,}<a id=|\n{2,}\[⬆️|\n{2,}###|\n{2,}\*\*|$)/i
+    ];
+    for (const pattern of promptPatterns) {
+        const match = section.match(pattern);
+        if (match?.[1]) {
+            const prompt = match[1].trim();
+            if (prompt.length >= 10) return prompt;
+        }
+    }
+    return '';
+}
+
+function parseCaseStyleShowcases(markdown, repoDef) {
     const showcases = [];
-    const sectionRegex = /(?:^|\n)\s*(?:###\s+)?(?:Example|Case|案例)\s+\d+\s*[:：][\s\S]*?(?=(?:\n\s*(?:###\s+)?(?:Example|Case|案例)\s+\d+\s*[:：])|$)/gi;
+    const sectionRegex = /(?:^|\n)\s*###\s*(?:Example|Case|案例)\s+\d+\s*[:：][\s\S]*?(?=(?:\n\s*###\s*(?:Example|Case|案例)\s+\d+\s*[:：])|$)/gi;
     const sections = markdown.match(sectionRegex) || [];
     let imgMissCount = 0;
     let promptMissCount = 0;
+
     for (const section of sections) {
         try {
             const titleMatch = section.match(/(?:Example|Case|案例)\s+\d+\s*[:：]\s*(?:\[([^\]]+)\]\([^)]*\)|([^\n(]+?))\s*\(by\s*\[?@?([^\]\)\n]+)/i);
-            if (!titleMatch) {
-                continue;
-            }
-            
-            const title = (titleMatch[1] || titleMatch[2]).trim();
-            const author = titleMatch[3].replace(/[\])].*$/, '').trim();
-            
-            const htmlImages = [...section.matchAll(/<img[^>]+src=["']([^"']+)["']/gi)].map((m) => m[1]);
-            const markdownImages = [...section.matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)].map((m) => m[1]);
-            const imgMatches = [...new Set([...htmlImages, ...markdownImages])];
-            if (imgMatches.length === 0) {
+            if (!titleMatch) continue;
+            const title = (titleMatch[1] || titleMatch[2] || '').trim();
+            const author = (titleMatch[3] || '').replace(/[\])].*$/, '').trim();
+            if (!title || !author) continue;
+
+            const imageUrls = extractImagesFromSection(section, repoDef);
+            if (imageUrls.length === 0) {
                 imgMissCount++;
                 continue;
             }
-            
-            const imageUrls = imgMatches.map(m => {
-                const src = m;
-                return src.startsWith('http') ? src : (repoDef.imageBaseUrl + src);
-            });
-            
-            const promptPatterns = [
-                /\*\*(?:Prompt|提示词):?\*\*[\s\S]*?```[^\n]*\n([\s\S]*?)```/i,
-                /\*\*(?:Prompt|提示词):?\*\*\s*\n+([\s\S]*?)(?:\n{2,}---|\n{2,}<a id=|\n{2,}\[⬆️|\n{2,}###|\n{2,}\*\*|$)/i,
-                /(?:^|\n)(?:Prompt|提示词)\s*[:：]\s*\n?([\s\S]*?)(?:\n{2,}---|\n{2,}<a id=|\n{2,}\[⬆️|\n{2,}###|$)/i
-            ];
-            let prompt = '';
-            for (const pattern of promptPatterns) {
-                const match = section.match(pattern);
-                if (match?.[1]) {
-                    prompt = match[1].trim();
-                    break;
-                }
-            }
+
+            const prompt = extractPromptFromSection(section);
             if (!prompt) {
                 promptMissCount++;
                 continue;
             }
-            if (prompt.length < 10) {
-                continue;
-            }
-            
+
             showcases.push({ title, author, imageUrls, prompt });
         } catch (e) {
             continue;
         }
     }
+
+    return { showcases, imgMissCount, promptMissCount };
+}
+
+function parseNumberedPromptShowcases(markdown, repoDef) {
+    const showcases = [];
+    const sectionRegex = /(?:^|\n)\s*###\s+\d+\.\d+\.\s+[^\n]+[\s\S]*?(?=(?:\n\s*###\s+\d+\.\d+\.\s+)|$)/g;
+    const sections = markdown.match(sectionRegex) || [];
+    let imgMissCount = 0;
+    let promptMissCount = 0;
+
+    for (const section of sections) {
+        try {
+            const titleMatch = section.match(/###\s+\d+\.\d+\.\s+([^\n]+)/);
+            if (!titleMatch) continue;
+            const title = titleMatch[1].trim();
+            if (!title) continue;
+
+            const sourceMatch = section.match(/\*Source:\s*([^\n*]+)\*/i) || section.match(/Source:\s*([^\n]+)/i);
+            const authorHandle = sourceMatch?.[1]?.match(/@([a-zA-Z0-9_]+)/)?.[1];
+            const author = authorHandle ? `@${authorHandle}` : (sourceMatch?.[1]?.trim() || 'fuente');
+
+            const imageUrls = extractImagesFromSection(section, repoDef);
+            if (imageUrls.length === 0) {
+                imgMissCount++;
+                continue;
+            }
+
+            const prompt = extractPromptFromSection(section);
+            if (!prompt) {
+                promptMissCount++;
+                continue;
+            }
+
+            showcases.push({ title, author, imageUrls, prompt });
+        } catch (e) {
+            continue;
+        }
+    }
+
+    return { showcases, imgMissCount, promptMissCount };
+}
+
+function parsePromptShowcases(markdown, repoDef) {
+    const finalShowcases = [];
+    const seen = new Set();
+
+    const caseStyle = parseCaseStyleShowcases(markdown, repoDef);
+    const numbered = parseNumberedPromptShowcases(markdown, repoDef);
+    const merged = [...caseStyle.showcases, ...numbered.showcases];
+
+    for (const item of merged) {
+        const key = `${item.title.toLowerCase()}|${item.prompt.slice(0, 120).toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        finalShowcases.push(item);
+    }
+
+    const imgMissCount = caseStyle.imgMissCount + numbered.imgMissCount;
+    const promptMissCount = caseStyle.promptMissCount + numbered.promptMissCount;
     if (imgMissCount > 0 || promptMissCount > 0) {
         console.log(`[SHOWCASE-PARSE] ${repoDef.id}: omitidos sin imagen=${imgMissCount}, sin prompt=${promptMissCount}`);
     }
-    return showcases;
+
+    return finalShowcases;
 }
 
 function detectModelNameFromImageUrl(url) {
