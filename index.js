@@ -2697,9 +2697,13 @@ async function sendPromptShowcase(sock) {
 
         
         const descriptionAI = await generateShowcaseDescription(finalTitle, finalPrompt);
-        const finalDescription = descriptionAI || buildShortPromptDescription(finalTitle, finalPrompt);
+        const finalDescription = descriptionAI;
         const debugCues = extractPromptCues(finalPrompt);
-        console.log(`[SHOWCASE-DESC] ${repoDef.id}: fuente=${descriptionAI ? 'ia' : 'fallback'} cues=${debugCues.length || 0}`);
+        console.log(`[SHOWCASE-DESC] ${repoDef.id}: fuente=${descriptionAI ? 'ia' : 'sin_descripcion'} cues=${debugCues.length || 0}`);
+        if (!finalDescription) {
+            console.log(`[SHOWCASE] Omitido: sin descripcion IA valida para "${showcase.title}" (repo: ${repoDef.id})`);
+            return;
+        }
 
         const isLongPrompt = finalPrompt.length > SHOWCASE_PROMPT_INLINE_MAX_LENGTH;
         const captionLines = [
