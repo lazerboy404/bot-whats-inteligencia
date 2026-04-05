@@ -37,6 +37,7 @@ const closeTimersByGroup = new Map();
 const scheduledGroupActionsByGroup = new Map();
 const pendingWelcomesByGroup = new Map();
 let reconnectTimer = null;
+let reconnectInProgress = false;
 let reconnectDelayMs = 4000;
 let processErrorGuardReady = false;
 let activeSock = null;
@@ -2199,12 +2200,23 @@ function parsePromptShowcases(markdown, repoDef) {
                 return src.startsWith('http') ? src : (repoDef.imageBaseUrl + src);
             });
             
-            const promptMatch = section.match(/\*\*(?:Prompt|提示词):?\*\*[\s\S]*?```[^\n]*\n([\s\S]*?)```/i);
-            if (!promptMatch) {
+            const promptPatterns = [
+                /\*\*(?:Prompt|提示词):?\*\*[\s\S]*?```[^\n]*\n([\s\S]*?)```/i,
+                /\*\*(?:Prompt|提示词):?\*\*\s*\n+([\s\S]*?)(?:\n{2,}---|\n{2,}<a id=|\n{2,}\[⬆️|\n{2,}###|\n{2,}\*\*|$)/i,
+                /(?:^|\n)(?:Prompt|提示词)\s*[:：]\s*\n?([\s\S]*?)(?:\n{2,}---|\n{2,}<a id=|\n{2,}\[⬆️|\n{2,}###|$)/i
+            ];
+            let prompt = '';
+            for (const pattern of promptPatterns) {
+                const match = section.match(pattern);
+                if (match?.[1]) {
+                    prompt = match[1].trim();
+                    break;
+                }
+            }
+            if (!prompt) {
                 console.log(`[DEBUG-PARSE] ${repoDef.id}: promptMatch failed for title: ${title}`);
                 continue;
             }
-            const prompt = promptMatch[1].trim();
             if (prompt.length < 10) {
                 console.log(`[DEBUG-PARSE] ${repoDef.id}: prompt too short for title: ${title}`);
                 continue;
@@ -2271,15 +2283,28 @@ function buildModelComparisonLabels(imageUrls) {
 function translateTitleFallbackEs(title) {
     const raw = String(title || '').trim();
     if (!raw) return '';
+    const phraseRules = [
+        { regex: /\bcreate an?\b/gi, replace: 'Crea un' },
+        { regex: /\badd\b/gi, replace: 'Agrega' },
+        { regex: /\bto\b/gi, replace: 'a' }
+    ];
+    let normalized = raw;
+    for (const rule of phraseRules) {
+        normalized = normalized.replace(rule.regex, rule.replace);
+    }
     const dictionary = new Map([
         ['add', 'agregar'],
         ['giant', 'gigante'],
         ['creature', 'criatura'],
         ['city', 'ciudad'],
         ['image', 'imagen'],
+        ['create', 'crear'],
+        ['an', 'un'],
+        ['a', 'un'],
         ['steampunk', 'steampunk'],
         ['mechanical', 'mecanico'],
         ['fish', 'pez'],
+        ['car', 'coche'],
         ['voxel', 'voxel'],
         ['style', 'estilo'],
         ['icon', 'icono'],
@@ -2294,13 +2319,15 @@ function translateTitleFallbackEs(title) {
         ['cinematic', 'cinematografico'],
         ['photo', 'foto']
     ]);
-    const translated = raw
+    const translated = normalized
         .split(/(\s+|[-_/])/)
         .map((chunk) => {
             const lower = chunk.toLowerCase();
             return dictionary.get(lower) || chunk;
         })
-        .join('');
+        .join('')
+        .replace(/\s+/g, ' ')
+        .trim();
     return translated.charAt(0).toUpperCase() + translated.slice(1);
 }
 
@@ -3042,9 +3069,10 @@ async function processIncomingQueue(sock, runId) {
 }
 
 function scheduleReconnect(reason) {
-    if (reconnectTimer) {
+    if (reconnectInProgress || reconnectTimer) {
         return;
     }
+    reconnectInProgress = true;
     stopConnectionIntervals();
     if (activeSock) {
         try {
@@ -3058,8 +3086,13 @@ function scheduleReconnect(reason) {
     console.log(`Reintentando conexión en ${wait}ms. Motivo: ${reason}`);
     reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
+        if (activeSock && isSocketOpen(activeSock)) {
+            reconnectInProgress = false;
+            return;
+        }
         startBot().catch((error) => {
             console.error('Error al reintentar inicio del bot:', error?.message || error);
+            reconnectInProgress = false;
             scheduleReconnect('fallo_reintento');
         });
     }, wait);
@@ -3208,6 +3241,11 @@ async function startBot() {
             if (connection === 'open') {
                 qrCodeData = null;
                 reconnectDelayMs = BOT_RECONNECT_BASE_MS;
+                reconnectInProgress = false;
+                if (reconnectTimer) {
+                    clearTimeout(reconnectTimer);
+                    reconnectTimer = null;
+                }
                 startConnectionIntervals(sock);
                 startProactiveScheduler(sock);
                 if (PROACTIVE_SEND_SHOWCASE_ON_START && startupShowcaseSentRunId !== runId) {
@@ -3234,6 +3272,7 @@ async function startBot() {
                 if (shouldReconnect) {
                     scheduleReconnect(reason);
                 } else {
+                    reconnectInProgress = false;
                     console.log('Sesión cerrada. Elimina auth_info_baileys y vuelve a iniciar para escanear de nuevo.');
                 }
             }
