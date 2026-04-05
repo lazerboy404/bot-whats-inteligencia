@@ -2268,6 +2268,50 @@ function buildModelComparisonLabels(imageUrls) {
     return models.map((model) => `🤖 _${model}_`);
 }
 
+function translateTitleFallbackEs(title) {
+    const raw = String(title || '').trim();
+    if (!raw) return '';
+    const dictionary = new Map([
+        ['add', 'agregar'],
+        ['giant', 'gigante'],
+        ['creature', 'criatura'],
+        ['city', 'ciudad'],
+        ['image', 'imagen'],
+        ['steampunk', 'steampunk'],
+        ['mechanical', 'mecanico'],
+        ['fish', 'pez'],
+        ['voxel', 'voxel'],
+        ['style', 'estilo'],
+        ['icon', 'icono'],
+        ['conversion', 'conversion'],
+        ['miniature', 'miniatura'],
+        ['diorama', 'diorama'],
+        ['keyboard', 'teclado'],
+        ['keycap', 'tecla'],
+        ['esc', 'esc'],
+        ['portrait', 'retrato'],
+        ['realistic', 'realista'],
+        ['cinematic', 'cinematografico'],
+        ['photo', 'foto']
+    ]);
+    const translated = raw
+        .split(/(\s+|[-_/])/)
+        .map((chunk) => {
+            const lower = chunk.toLowerCase();
+            return dictionary.get(lower) || chunk;
+        })
+        .join('');
+    return translated.charAt(0).toUpperCase() + translated.slice(1);
+}
+
+function looksSpanishText(text) {
+    const value = String(text || '').toLowerCase();
+    if (!value.trim()) return false;
+    if (/[áéíóúñ]/.test(value)) return true;
+    const markers = [' de ', ' y ', ' con ', ' para ', ' en ', ' del ', ' la ', ' el '];
+    return markers.some((marker) => value.includes(marker));
+}
+
 function buildShortPromptDescription(title, prompt) {
     const cleanTitle = String(title || '').replace(/[*_`#>\[\]]/g, '').trim();
     const cleanPrompt = String(prompt || '')
@@ -2276,7 +2320,19 @@ function buildShortPromptDescription(title, prompt) {
         .trim();
 
     if (cleanTitle) {
-        return `Prompt para crear "${cleanTitle}" con estilo visual detallado y resultado realista.`;
+        const starters = [
+            `Este prompt te ayuda a crear "${cleanTitle}"`,
+            `Con este prompt puedes generar "${cleanTitle}"`,
+            `Este prompt está pensado para producir "${cleanTitle}"`
+        ];
+        const endings = [
+            'con una estética cuidada y muchos detalles visuales.',
+            'con acabado realista y buena composición de escena.',
+            'enfocando iluminación, textura y profundidad para que se vea profesional.'
+        ];
+        const starter = starters[Math.floor(Math.random() * starters.length)];
+        const ending = endings[Math.floor(Math.random() * endings.length)];
+        return `${starter} ${ending}`;
     }
 
     if (cleanPrompt) {
@@ -2344,6 +2400,10 @@ async function sendPromptShowcase(sock) {
             100
         );
         if (translatedTitle) finalTitle = translatedTitle.replace(/^["'`]|["'`]$/g, '').trim();
+        if (!looksSpanishText(finalTitle)) {
+            const fallbackTitle = translateTitleFallbackEs(showcase.title);
+            if (fallbackTitle) finalTitle = fallbackTitle;
+        }
         
         const engPrompt = await generateAIContent(
             "Translate this prompt accurately to English. If it is already in English, output it exactly as is. Don't add quotes or any markdown. Output ONLY the prompt.",
