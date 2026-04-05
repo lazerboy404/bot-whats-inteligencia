@@ -3070,34 +3070,9 @@ function startProactiveScheduler(sock) {
                 }
                 return;
             }
-            const lastShowcase = currentState.lastShowcaseSentAt ? new Date(currentState.lastShowcaseSentAt).getTime() : 0;
-            if (now - lastShowcase >= PROACTIVE_SHOWCASE_INTERVAL_MS) {
-                const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
-                await new Promise((resolve) => setTimeout(resolve, jitter));
-                if (activeSock === sock && !isNightTime()) {
-                    await sendPromptShowcase(sock);
-                }
-                return;
-            }
-            const lastPrompt = currentState.lastPromptSentAt ? new Date(currentState.lastPromptSentAt).getTime() : 0;
-            const timeSinceShowcase = now - lastShowcase;
-            if (now - lastPrompt >= PROACTIVE_PROMPT_INTERVAL_MS && timeSinceShowcase >= PROACTIVE_SHOWCASE_PROMPT_GAP_MS) {
-                const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
-                await new Promise((resolve) => setTimeout(resolve, jitter));
-                if (activeSock === sock && !isNightTime()) {
-                    await sendPromptOfTheDay(sock);
-                }
-                return;
-            }
-            const lastRandom = currentState.lastRandomUserAt ? new Date(currentState.lastRandomUserAt).getTime() : 0;
-            if (now - lastRandom >= PROACTIVE_RANDOM_USER_INTERVAL_MS) {
-                const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
-                await new Promise((resolve) => setTimeout(resolve, jitter));
-                if (activeSock === sock && !isNightTime()) {
-                    await sendRandomUserSelection(sock);
-                }
-                return;
-            }
+            // En modo horario fijo, no dispares envíos por intervalo.
+            // Showcase se envía solo en PROACTIVE_SHOWCASE_DAILY_HOUR:PROACTIVE_SHOWCASE_DAILY_MINUTE
+            // Random se envía solo en PROACTIVE_RANDOM_DAILY_HOUR:PROACTIVE_RANDOM_DAILY_MINUTE
             const lastReactivation = currentState.lastReactivationAt ? new Date(currentState.lastReactivationAt).getTime() : 0;
             const timeSinceActivity = now - lastGroupActivityAt;
             const timeSinceReactivation = now - lastReactivation;
