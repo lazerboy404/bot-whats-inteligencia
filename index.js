@@ -2217,6 +2217,55 @@ function parsePromptShowcases(markdown, repoDef) {
     return showcases;
 }
 
+function detectModelNameFromImageUrl(url) {
+    if (!url || typeof url !== 'string') return null;
+    const normalized = url.toLowerCase();
+    const modelPatterns = [
+        { regex: /\bgpt[-_ ]?4\.?1?\b/, label: 'GPT-4.1' },
+        { regex: /\bgpt[-_ ]?4o\b/, label: 'GPT-4o' },
+        { regex: /\bgpt[-_ ]?4\b/, label: 'GPT-4' },
+        { regex: /\bgemini\b/, label: 'Gemini' },
+        { regex: /\bclaude\b/, label: 'Claude' },
+        { regex: /\bflux\b/, label: 'FLUX' },
+        { regex: /\bgrok\b/, label: 'Grok' },
+        { regex: /\bmistral\b/, label: 'Mistral' },
+        { regex: /\bmidjourney\b|\bmj\b/, label: 'Midjourney' },
+        { regex: /\bdall[-_ ]?e\b|\bdalle\b/, label: 'DALL-E' }
+    ];
+
+    for (const pattern of modelPatterns) {
+        if (pattern.regex.test(normalized)) return pattern.label;
+    }
+    return null;
+}
+
+function normalizeImageLabels(labels, count) {
+    if (!Array.isArray(labels) || labels.length !== count) return [];
+    return labels.map((label) => {
+        const clean = String(label || '').replace(/^["'`]|["'`]$/g, '').trim();
+        return clean || '✨ _Resultado_';
+    });
+}
+
+function buildDefaultImageLabels(imageUrls) {
+    const labels = [];
+    for (let i = 0; i < imageUrls.length; i++) {
+        if (i === 0) labels.push('🖼️ _Imagen de Referencia (Input)_');
+        else if (i === imageUrls.length - 1) labels.push('✨ _Imagen Final (Output)_');
+        else labels.push(`✨ _Resultado ${i}_`);
+    }
+    return labels;
+}
+
+function buildModelComparisonLabels(imageUrls) {
+    if (!Array.isArray(imageUrls) || imageUrls.length < 2) return [];
+    const models = imageUrls.map((url) => detectModelNameFromImageUrl(url));
+    if (models.some((model) => !model)) return [];
+    const distinct = new Set(models);
+    if (distinct.size < 2) return [];
+    return models.map((model) => `🤖 _${model}_`);
+}
+
 async function fetchShowcaseData(repoDef) {
     try {
         const controller = new AbortController();
@@ -2282,6 +2331,14 @@ async function sendPromptShowcase(sock) {
         );
         if (engPrompt) finalPrompt = engPrompt;
 
+        
+        const descriptionAI = await generateAIContent(
+            "Eres un experto en IA. Basado en el título y el prompt, escribe UNA MUY BREVE descripción (máximo 2 líneas) en español sobre lo que hace este prompt. Ve directo al grano sin saludos.",
+            `Título: ${finalTitle}\nPrompt: ${finalPrompt}`,
+            150
+        );
+        const finalDescription = descriptionAI ? descriptionAI.replace(/^["'`]|["'`]$/g, '').trim() : '';
+
         const isLongPrompt = finalPrompt.length > SHOWCASE_PROMPT_INLINE_MAX_LENGTH;
         const captionLines = [
             `${CASTOR_EMOJI} *✨ Showcase del Día*`,
@@ -2289,6 +2346,11 @@ async function sendPromptShowcase(sock) {
             `📌 *${finalTitle}*`,
             `👤 por ${showcase.author}`,
         ];
+
+        if (finalDescription) {
+            captionLines.push(`ℹ️ ${finalDescription}`);
+        }
+
         if (!isLongPrompt) {
             captionLines.push('', '📝 *Prompt:*', finalPrompt);
         } else {
@@ -2296,6 +2358,42 @@ async function sendPromptShowcase(sock) {
         }
         captionLines.push('', '💡 ¡Prueba este prompt en tu IA favorita y comparte el resultado! 👇');
         const captionText = captionLines.join('\n');
+        
+        let imageLabels = [];
+        if (showcase.imageUrls.length > 1) {
+            try {
+                const fileNames = showcase.imageUrls.map(u => u.substring(u.lastIndexOf('/') + 1));
+                const labelingPrompt = `Analiza el caso y genera etiquetas para sus imágenes.
+Título: ${finalTitle}
+Prompt: ${finalPrompt}
+Nombres de archivo: ${fileNames.join(', ')}
+
+Si es una transformación de una imagen a otra, responde con cosas parecidas a "🖼️ Imagen de Referencia (Input)" y "✨ Imagen Final (Output)".
+Si es una comparación entre modelos de IA (ej. Gemini vs GPT-4o, donde cada imagen es de un modelo distinto), usa el nombre de los modelos (ej. "🤖 Gemini" y "🤖 GPT-4o") inferidos de los nombres de archivo.
+
+REGLA ESTRICTA: Devuelve ÚNICAMENTE un arreglo en formato JSON válido con exactamente ${showcase.imageUrls.length} strings. Ejemplo de salida: ["etiqueta 1", "etiqueta 2"]`;
+                
+                const labelsResult = await generateAIContent("Eres un experto clasificador de datos que devuelve puramente JSON.", labelingPrompt, 200);
+                if (labelsResult) {
+                    const parsed = JSON.parse(labelsResult.replace(/```json|```/g, '').trim());
+                    imageLabels = normalizeImageLabels(parsed, showcase.imageUrls.length);
+                }
+            } catch (e) {
+                console.error('[SHOWCASE-LABELS] Parsing falló:', e?.message);
+            }
+        }
+
+        // Prioriza detección determinística para comparaciones entre IAs.
+        if (showcase.imageUrls.length > 1) {
+            const modelComparisonLabels = buildModelComparisonLabels(showcase.imageUrls);
+            if (modelComparisonLabels.length === showcase.imageUrls.length) {
+                imageLabels = modelComparisonLabels;
+            }
+        }
+
+        if (showcase.imageUrls.length > 1 && imageLabels.length === 0) {
+            imageLabels = buildDefaultImageLabels(showcase.imageUrls);
+        }
         
         for (const groupJid of PROACTIVE_GROUP_JIDS) {
             try {
@@ -2305,9 +2403,7 @@ async function sendPromptShowcase(sock) {
                     
                     // Enviar imágenes en orden
                     for (let i = 0; i < showcase.imageUrls.length; i++) {
-                        let imgCaption = '';
-                        if (i === 0) imgCaption = '🖼️ _Imagen de Referencia (Input)_';
-                        else if (i === showcase.imageUrls.length - 1) imgCaption = '✨ _Imagen Final (Output)_';
+                        let imgCaption = imageLabels[i];
                         
                         try {
                             await sock.sendMessage(groupJid, {
