@@ -2484,12 +2484,7 @@ function isWeakShowcaseDescription(text) {
         /esta pensado para/i,
         /con buena profundidad y detalles de iluminacion/i
     ];
-    if (weakPatterns.some((pattern) => pattern.test(value))) return true;
-    const visualSignals = [
-        'estilo', 'ilumin', 'textur', 'encuadre', 'vista', 'realista', 'cinematic', '3d', 'detalle',
-        'dinast', 'óleo', 'oleo', 'neón', 'neon', 'bokeh', 'tren', 'ventana', 'urbana', 'histórica', 'historica'
-    ];
-    return !visualSignals.some((signal) => value.includes(signal));
+    return weakPatterns.some((pattern) => pattern.test(value));
 }
 
 function cleanModelOutputText(text) {
@@ -2521,7 +2516,7 @@ function extractPromptCues(prompt) {
 
 function descriptionHasCue(text, cues) {
     const value = String(text || '').toLowerCase();
-    if (!Array.isArray(cues) || cues.length === 0) return true;
+    if (!Array.isArray(cues) || cues.length < 2) return true;
     return cues.some((cue) => {
         const parts = cue.toLowerCase().split(/\s+/).filter((p) => p.length > 3);
         return parts.some((part) => value.includes(part));
