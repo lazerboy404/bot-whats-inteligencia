@@ -76,8 +76,18 @@ const PROACTIVE_NIGHT_END_HOUR = Number(process.env.PROACTIVE_NIGHT_END_HOUR || 
 const PROACTIVE_JITTER_MS = Number(process.env.PROACTIVE_JITTER_MS || (30 * 60 * 1000));
 const PROACTIVE_SHOWCASE_INTERVAL_MS = Number(process.env.PROACTIVE_SHOWCASE_INTERVAL_MS || (24 * 60 * 60 * 1000));
 const PROACTIVE_SHOWCASE_PROMPT_GAP_MS = Number(process.env.PROACTIVE_SHOWCASE_PROMPT_GAP_MS || (90 * 60 * 1000));
-const SHOWCASE_REPO_README_URL = 'https://raw.githubusercontent.com/PicoTrex/Awesome-Nano-Banana-images/main/README_en.md';
-const SHOWCASE_IMAGE_BASE_URL = 'https://raw.githubusercontent.com/PicoTrex/Awesome-Nano-Banana-images/main/';
+const SHOWCASE_REPOS = [
+    {
+        id: 'picotrex',
+        url: 'https://raw.githubusercontent.com/PicoTrex/Awesome-Nano-Banana-images/main/README_en.md',
+        imageBaseUrl: 'https://raw.githubusercontent.com/PicoTrex/Awesome-Nano-Banana-images/main/'
+    },
+    {
+        id: 'jimmylv',
+        url: 'https://raw.githubusercontent.com/JimmyLv/awesome-nano-banana/main/README_en.md',
+        imageBaseUrl: ''
+    }
+];
 const SHOWCASE_PROMPT_INLINE_MAX_LENGTH = 500;
 const FLAG_BY_DIAL_CODE = {
     '1': '🇺🇸',
@@ -2161,25 +2171,34 @@ Genera la pregunta:`;
     return clean;
 }
 
-function parsePromptShowcases(markdown) {
+function parsePromptShowcases(markdown, repoDef) {
     const showcases = [];
-    const sections = markdown.split(/###\s+(?:Example|Case)\s+\d+/i);
+    const sections = markdown.split(/###\s+(?:Example|Case|案例)\s+\d+/i);
     for (const section of sections) {
         try {
-            const titleMatch = section.match(/:\s*\[([^\]]+)\]\(([^)]*)\)\s*\(by\s*\[?@?([^\]\)]+)/);
+            // Soporta formatos múltiples: 
+            // - [Título](Url) (by @Author)
+            // - 标题中文 (by @Author)
+            const titleMatch = section.match(/[:：]\s*(?:\[([^\]]+)\]\([^)]*\)|([^()]+?))\s*\(by\s*\[?@?([^\]\)]+)/i);
             if (!titleMatch) continue;
-            const title = titleMatch[1].trim();
-            const sourceUrl = titleMatch[2].trim();
+            
+            const title = (titleMatch[1] || titleMatch[2]).trim();
             const author = titleMatch[3].replace(/[\])].*$/, '').trim();
-            const imgMatches = [...section.matchAll(/<img\s+src="(images\/[^"]+)"/g)];
+            
+            const imgMatches = [...section.matchAll(/<img\s+src="([^"]+)"/g)];
             if (imgMatches.length === 0) continue;
-            const imageRelPath = imgMatches[imgMatches.length - 1][1];
-            const imageUrl = SHOWCASE_IMAGE_BASE_URL + imageRelPath;
-            const promptMatch = section.match(/\*\*Prompt:\*\*[\s\S]*?```\n?([\s\S]*?)```/);
+            
+            const imageUrls = imgMatches.map(m => {
+                const src = m[1];
+                return src.startsWith('http') ? src : (repoDef.imageBaseUrl + src);
+            });
+            
+            const promptMatch = section.match(/\*\*(?:Prompt|提示词):\*\*[\s\S]*?```\n?([\s\S]*?)```/i);
             if (!promptMatch) continue;
             const prompt = promptMatch[1].trim();
             if (prompt.length < 10) continue;
-            showcases.push({ title, author, sourceUrl, imageUrl, prompt });
+            
+            showcases.push({ title, author, imageUrls, prompt });
         } catch (e) {
             continue;
         }
@@ -2187,84 +2206,115 @@ function parsePromptShowcases(markdown) {
     return showcases;
 }
 
-async function fetchShowcaseData() {
-    const now = Date.now();
-    if (showcaseCacheData && (now - showcaseCacheTimestamp) < 24 * 60 * 60 * 1000) {
-        return showcaseCacheData;
-    }
+async function fetchShowcaseData(repoDef) {
     try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 20000);
-        const response = await fetch(SHOWCASE_REPO_README_URL, { signal: controller.signal });
+        const response = await fetch(repoDef.url, { signal: controller.signal });
         clearTimeout(timeout);
-        if (!response.ok) return showcaseCacheData || null;
+        if (!response.ok) return [];
         const markdown = await response.text();
-        const parsed = parsePromptShowcases(markdown);
-        if (parsed.length > 0) {
-            showcaseCacheData = parsed;
-            showcaseCacheTimestamp = now;
-            console.log(`[SHOWCASE] Parseados ${parsed.length} ejemplos del repo`);
-        }
-        return showcaseCacheData;
+        const parsed = parsePromptShowcases(markdown, repoDef);
+        console.log(`[SHOWCASE] Parseados ${parsed.length} ejemplos del repo ${repoDef.id}`);
+        return parsed;
     } catch (error) {
-        console.error('[SHOWCASE] Error descargando repo:', error?.message || error);
-        return showcaseCacheData || null;
+        console.error(`[SHOWCASE] Error descargando repo ${repoDef.id}:`, error?.message || error);
+        return [];
     }
 }
 
 async function sendPromptShowcase(sock) {
     if (PROACTIVE_GROUP_JIDS.length === 0) return;
     try {
-        const showcases = await fetchShowcaseData();
+        const state = getProactiveState();
+        let tracking = state.showcaseTracking || { picotrex: [], jimmylv: [] };
+        
+        // Alternar repositorios
+        const totalSent = (tracking.picotrex?.length || 0) + (tracking.jimmylv?.length || 0);
+        const repoIndex = totalSent % SHOWCASE_REPOS.length;
+        const repoDef = SHOWCASE_REPOS[repoIndex];
+        
+        if (!tracking[repoDef.id]) tracking[repoDef.id] = [];
+        const sentIndices = tracking[repoDef.id];
+        
+        const showcases = await fetchShowcaseData(repoDef);
         if (!showcases || showcases.length === 0) {
-            console.log('[SHOWCASE] No hay showcases disponibles');
+            console.log(`[SHOWCASE] No hay showcases disponibles en ${repoDef.id}`);
             return;
         }
-        const state = getProactiveState();
-        const sentIndices = state.showcaseSentIndices || [];
+        
         let available = showcases.map((s, i) => i).filter((i) => !sentIndices.includes(i));
         if (available.length === 0) {
             available = showcases.map((s, i) => i);
-            updateProactiveState({ showcaseSentIndices: [] });
-            console.log('[SHOWCASE] Todos los showcases enviados, reiniciando rotación');
+            tracking[repoDef.id] = [];
+            console.log(`[SHOWCASE] Todos los showcases enviados para ${repoDef.id}, reiniciando rotación`);
         }
+        
         const selectedIndex = available[Math.floor(Math.random() * available.length)];
         const showcase = showcases[selectedIndex];
-        const isLongPrompt = showcase.prompt.length > SHOWCASE_PROMPT_INLINE_MAX_LENGTH;
+        
+        // Traducción usando IA antes de enviar
+        let finalTitle = showcase.title;
+        let finalPrompt = showcase.prompt;
+        
+        const translatedTitle = await generateAIContent(
+            "Como traductor, traduce el siguiente título a español. Importante: Devuelve SOLO el título traducido, sin comillas, ni asteriscos ni texto adicional.",
+            showcase.title,
+            100
+        );
+        if (translatedTitle) finalTitle = translatedTitle.replace(/^["'`]|["'`]$/g, '').trim();
+        
+        const engPrompt = await generateAIContent(
+            "Translate this prompt accurately to English. If it is already in English, output it exactly as is. Don't add quotes or any markdown. Output ONLY the prompt.",
+            showcase.prompt,
+            1500
+        );
+        if (engPrompt) finalPrompt = engPrompt;
+
+        const isLongPrompt = finalPrompt.length > SHOWCASE_PROMPT_INLINE_MAX_LENGTH;
         const captionLines = [
-            `${CASTOR_EMOJI} *✨ Prompt Showcase del Día*`,
+            `${CASTOR_EMOJI} *✨ Showcase del Día*`,
             '',
-            `📌 *${showcase.title}*`,
-            `👤 by ${showcase.author}`,
+            `📌 *${finalTitle}*`,
+            `👤 por ${showcase.author}`,
         ];
         if (!isLongPrompt) {
-            captionLines.push('', '📝 *Prompt:*', showcase.prompt);
+            captionLines.push('', '📝 *Prompt:*', finalPrompt);
         } else {
             captionLines.push('', '📝 El prompt completo se envía como archivo adjunto ⬇️');
         }
         captionLines.push('', '💡 ¡Prueba este prompt en tu IA favorita y comparte el resultado! 👇');
         const captionText = captionLines.join('\n');
+        
         for (const groupJid of PROACTIVE_GROUP_JIDS) {
             try {
-                try {
-                    await sock.sendMessage(groupJid, {
-                        image: { url: showcase.imageUrl },
-                        caption: captionText
-                    });
-                } catch (imgError) {
-                    console.error(`[SHOWCASE] Error enviando imagen a ${groupJid}, enviando solo texto:`, imgError?.message);
-                    await sock.sendMessage(groupJid, { text: captionText });
+                // Enviar imágenes (soporte para multiples input/output)
+                for (let i = 0; i < showcase.imageUrls.length; i++) {
+                    const isLast = (i === showcase.imageUrls.length - 1);
+                    const isFirstOfTwo = (showcase.imageUrls.length === 2 && i === 0);
+                    const imgCaption = isLast ? captionText : (isFirstOfTwo ? '🖼️ _Imagen de Referencia (Input)_' : '');
+                    
+                    try {
+                        await sock.sendMessage(groupJid, {
+                            image: { url: showcase.imageUrls[i] },
+                            caption: imgCaption
+                        });
+                    } catch (imgError) {
+                        console.error(`[SHOWCASE] Error enviando imagen ${i} a ${groupJid}:`, imgError?.message);
+                        if (isLast) await sock.sendMessage(groupJid, { text: captionText });
+                    }
                 }
+                
                 if (isLongPrompt) {
-                    const fileName = `prompt_${showcase.title.replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 40)}.txt`;
+                    const fileName = `prompt_${finalTitle.replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 40)}.txt`;
                     const fileContent = [
-                        `=== PROMPT SHOWCASE: ${showcase.title} ===`,
+                        `=== PROMPT SHOWCASE: ${finalTitle} ===`,
                         `Autor: ${showcase.author}`,
-                        `Fuente: ${showcase.sourceUrl}`,
+                        `Repo: ${repoDef.id}`,
                         '',
                         '=== PROMPT ===',
                         '',
-                        showcase.prompt
+                        finalPrompt
                     ].join('\n');
                     await sock.sendMessage(groupJid, {
                         document: Buffer.from(fileContent, 'utf-8'),
@@ -2277,12 +2327,13 @@ async function sendPromptShowcase(sock) {
             }
             if (PROACTIVE_GROUP_JIDS.length > 1) await new Promise((r) => setTimeout(r, 3000));
         }
-        const newSentIndices = [...sentIndices, selectedIndex];
+        
+        tracking[repoDef.id].push(selectedIndex);
         updateProactiveState({
             lastShowcaseSentAt: new Date().toISOString(),
-            showcaseSentIndices: newSentIndices
+            showcaseTracking: tracking
         });
-        console.log(`[SHOWCASE] Enviado: "${showcase.title}" (index: ${selectedIndex}, quedan ${available.length - 1} sin enviar)`);
+        console.log(`[SHOWCASE] Enviado: "${finalTitle}" (repo: ${repoDef.id}, quedan ${available.length - 1} sin enviar)`);
     } catch (error) {
         console.error('[SHOWCASE] Error enviando showcase:', error?.message || error);
     }
@@ -2311,7 +2362,7 @@ async function sendPromptOfTheDay(sock) {
             console.log(`[PROACTIVO] Usando reto local (fallback index: ${index})`);
         }
         const text = [
-            `${CASTOR_EMOJI} *Prompt del Día* ${emoji}`,
+            `${CASTOR_EMOJI} *Reto del Día* ${emoji}`,
             '',
             'Crea un prompt para:',
             `👉 ${challenge}`,
