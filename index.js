@@ -2545,7 +2545,7 @@ function startProactiveScheduler(sock) {
         } finally {
             proactiveCheckRunning = false;
         }
-    }, 30 * 60 * 1000);
+    }, 5000);
 }
 
 function stopProactiveScheduler() {
