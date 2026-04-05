@@ -995,7 +995,8 @@ function updateProactiveState(updates) {
     saveLocalStore();
 }
 
-function isNightTime() {
+function isNightTime() { return false; // DISABLED FOR TESTING 
+
     const mexicoNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Mexico_City' }));
     const hour = mexicoNow.getHours();
     if (PROACTIVE_NIGHT_START_HOUR > PROACTIVE_NIGHT_END_HOUR) {
