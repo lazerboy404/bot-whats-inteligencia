@@ -2388,9 +2388,16 @@ function translateTitleFallbackEs(title) {
         ['city', 'ciudad'],
         ['image', 'imagen'],
         ['create', 'crear'],
+        ['thoughts', 'pensamientos'],
+        ['moving', 'movimiento'],
+        ['train', 'tren'],
+        ['on', 'sobre'],
         ['an', 'un'],
         ['a', 'un'],
         ['steampunk', 'steampunk'],
+        ['tang', 'tang'],
+        ['dynasty', 'dinastía'],
+        ['song', 'song'],
         ['mechanical', 'mecanico'],
         ['fish', 'pez'],
         ['car', 'coche'],
@@ -2431,7 +2438,7 @@ function looksSpanishText(text) {
 function hasEnglishTitleMarkers(text) {
     const value = String(text || '').toLowerCase();
     const englishMarkers = [
-        ' thoughts ', ' moving ', ' train ', ' style ', ' portrait ', ' shot ', ' image ',
+        ' thoughts ', ' moving ', ' train ', ' style ', ' portrait ', ' shot ', ' image ', ' dynasty ',
         ' with ', ' on ', ' by ', ' the ', ' create ', ' add '
     ];
     return englishMarkers.some((marker) => value.includes(marker));
@@ -2474,6 +2481,11 @@ function extractPromptCues(prompt) {
     if (source.includes('hoodie')) cues.push('persona con sudadera oscura');
     if (source.includes('shallow depth of field')) cues.push('fondo desenfocado');
     if (source.includes('cinematic')) cues.push('estética cinematográfica');
+    if (source.includes('tang dynasty')) cues.push('vestimenta de la dinastía Tang');
+    if (source.includes('northern song')) cues.push('estilo pictórico de la dinastía Song');
+    if (source.includes('oil painting')) cues.push('acabado de pintura al óleo');
+    if (source.includes('patrick star')) cues.push('Patrick Star como personaje');
+    if (source.includes('hat')) cues.push('sombrero tradicional');
     return [...new Set(cues)].slice(0, 3);
 }
 
@@ -2549,6 +2561,7 @@ function buildShortPromptDescription(title, prompt) {
 
     let subject = cleanTitle || 'una escena visual';
     const subjectRules = [
+        { key: 'patrick star', label: 'Patrick Star con vestimenta histórica' },
         { key: 'emoji', label: 'un emoji' },
         { key: 'rug', label: 'una alfombra artesanal' },
         { key: 'fish', label: 'un pez mecánico' },
@@ -2568,6 +2581,8 @@ function buildShortPromptDescription(title, prompt) {
     if (source.includes('steampunk')) styleParts.push('con estética steampunk');
     if (source.includes('voxel')) styleParts.push('en estilo voxel 3D');
     if (source.includes('cinematic')) styleParts.push('con look cinematográfico');
+    if (source.includes('oil painting')) styleParts.push('en estilo de pintura al óleo');
+    if (source.includes('tang dynasty') || source.includes('northern song')) styleParts.push('con inspiración histórica de dinastías chinas');
     if (source.includes('realistic') || source.includes('realista')) styleParts.push('con acabado realista');
     if (source.includes('tuft') || source.includes('fluffy') || source.includes('rug')) styleParts.push('con textura esponjosa y artesanal');
     if (styleParts.length === 0) styleParts.push('con estilo visual detallado');
@@ -2658,7 +2673,8 @@ async function sendPromptShowcase(sock) {
         
         const descriptionAI = await generateShowcaseDescription(finalTitle, finalPrompt);
         const finalDescription = descriptionAI || buildShortPromptDescription(finalTitle, finalPrompt);
-        console.log(`[SHOWCASE-DESC] ${repoDef.id}: fuente=${descriptionAI ? 'ia' : 'fallback'}`);
+        const debugCues = extractPromptCues(finalPrompt);
+        console.log(`[SHOWCASE-DESC] ${repoDef.id}: fuente=${descriptionAI ? 'ia' : 'fallback'} cues=${debugCues.length || 0}`);
 
         const isLongPrompt = finalPrompt.length > SHOWCASE_PROMPT_INLINE_MAX_LENGTH;
         const captionLines = [
