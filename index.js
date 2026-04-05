@@ -2591,6 +2591,7 @@ async function generateShowcaseDescription(title, prompt) {
     const systemPrompt = "Eres un experto en Prompt Engineering y arte generativo. Tu objetivo es explicar de forma breve, natural y atractiva qué resultado visual produce el prompt.";
     const userPrompt = `Analiza el siguiente prompt y redacta una descripción en español (entre 20 y 40 palabras) explicando exactamente qué tipo de imagen genera, su estilo visual, su iluminación y su atmósfera.
     REGLAS:
+    - Obligatorio usar Español de México (ej. usa "gis" o "tiza", no "cal"; usa "chamarra", no "cazadora", etc).
     - No uses saludos, introducciones ni frases genéricas como "Este prompt te ayuda a".
     - Ve directo al grano.
     - Haz que suene atractivo y experto.
