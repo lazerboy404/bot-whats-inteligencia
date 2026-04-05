@@ -2516,18 +2516,19 @@ function hasEnglishTitleMarkers(text) {
 function isWeakShowcaseDescription(text) {
     const value = String(text || '').toLowerCase().trim();
     if (!value) return true;
-    if (value.length < 40) return true;
+    if (value.length < 28) return true;
     if (value.length > 240) return true;
     const weakPatterns = [
         /este prompt te ayuda/i,
         /con este prompt puedes/i,
         /esta pensado para/i,
-        /prompt para crear/i,
-        /prompt para generar una imagen/i,
         /con buena profundidad y detalles de iluminacion/i
     ];
     if (weakPatterns.some((pattern) => pattern.test(value))) return true;
-    const visualSignals = ['estilo', 'ilumin', 'textur', 'encuadre', 'vista', 'realista', 'cinematic', '3d', 'detalle'];
+    const visualSignals = [
+        'estilo', 'ilumin', 'textur', 'encuadre', 'vista', 'realista', 'cinematic', '3d', 'detalle',
+        'dinast', 'óleo', 'oleo', 'neón', 'neon', 'bokeh', 'tren', 'ventana', 'urbana', 'histórica', 'historica'
+    ];
     return !visualSignals.some((signal) => value.includes(signal));
 }
 
