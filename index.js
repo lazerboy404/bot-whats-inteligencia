@@ -2563,6 +2563,9 @@ Reglas:
         const analysisRaw = await generateAIContent(analysisSystemPrompt, analysisUserPrompt, 220);
         const cleaned = cleanModelOutputText(analysisRaw);
         debug.rawLen = cleaned.length;
+        if (!cleaned) {
+            debug.reason = 'analysis_empty_response';
+        }
         if (cleaned) {
             const parsed = tryExtractJsonObject(cleaned);
             if (!parsed) {
@@ -2605,7 +2608,10 @@ Reglas:
     for (const variant of sentencePrompts) {
         const sentenceRaw = await generateAIContent(variant.system, variant.user, 180);
         const sentence = cleanModelOutputText(sentenceRaw);
-        if (!sentence) continue;
+        if (!sentence) {
+            debug.reason = 'sentence_empty_response';
+            continue;
+        }
         if (!isWeakShowcaseDescription(sentence) && descriptionHasCue(sentence, cues)) {
             return { text: sentence, source: 'sentence_direct', reason: 'ok', rawLen: sentence.length };
         }
@@ -2710,39 +2716,50 @@ async function sendPromptShowcase(sock) {
             console.log(`[SHOWCASE] Todos los showcases enviados para ${repoDef.id}, reiniciando rotación`);
         }
         
-        const selectedIndex = available[Math.floor(Math.random() * available.length)];
-        const showcase = showcases[selectedIndex];
-        
-        // Traducción usando IA antes de enviar
-        let finalTitle = showcase.title;
-        let finalPrompt = showcase.prompt;
-        
-        const translatedTitle = await generateAIContent(
-            "Como traductor, traduce el siguiente título a español. Importante: Devuelve SOLO el título traducido, sin comillas, ni asteriscos ni texto adicional.",
-            showcase.title,
-            100
-        );
-        if (translatedTitle) finalTitle = translatedTitle.replace(/^["'`]|["'`]$/g, '').trim();
-        if (!looksSpanishText(finalTitle) || hasEnglishTitleMarkers(` ${finalTitle} `)) {
-            const fallbackTitle = translateTitleFallbackEs(showcase.title);
-            if (fallbackTitle) finalTitle = fallbackTitle;
-        }
-        
-        const engPrompt = await generateAIContent(
-            "Translate this prompt accurately to English. If it is already in English, output it exactly as is. Don't add quotes or any markdown. Output ONLY the prompt.",
-            showcase.prompt,
-            1500
-        );
-        if (engPrompt) finalPrompt = engPrompt;
+        // Si un caso no consigue descripción IA, intenta otros casos del mismo repo.
+        const candidateIndices = [...available].sort(() => Math.random() - 0.5);
+        const maxAttempts = Math.min(candidateIndices.length, 6);
+        let selectedIndex = -1;
+        let showcase = null;
+        let finalTitle = '';
+        let finalPrompt = '';
+        let finalDescription = '';
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            selectedIndex = candidateIndices[attempt];
+            showcase = showcases[selectedIndex];
+            finalTitle = showcase.title;
+            finalPrompt = showcase.prompt;
 
-        
-        const descriptionResult = await generateShowcaseDescription(finalTitle, finalPrompt);
-        const descriptionAI = descriptionResult?.text || '';
-        const finalDescription = descriptionAI;
-        const debugCues = extractPromptCues(finalPrompt);
-        console.log(`[SHOWCASE-DESC] ${repoDef.id}: fuente=${descriptionAI ? 'ia' : 'sin_descripcion'} origen=${descriptionResult?.source || 'none'} motivo=${descriptionResult?.reason || 'unknown'} cues=${debugCues.length || 0} prompt_chars=${finalPrompt.length} desc_chars=${finalDescription.length}`);
-        if (!finalDescription) {
+            const translatedTitle = await generateAIContent(
+                "Como traductor, traduce el siguiente título a español. Importante: Devuelve SOLO el título traducido, sin comillas, ni asteriscos ni texto adicional.",
+                showcase.title,
+                100
+            );
+            if (translatedTitle) finalTitle = translatedTitle.replace(/^["'`]|["'`]$/g, '').trim();
+            if (!looksSpanishText(finalTitle) || hasEnglishTitleMarkers(` ${finalTitle} `)) {
+                const fallbackTitle = translateTitleFallbackEs(showcase.title);
+                if (fallbackTitle) finalTitle = fallbackTitle;
+            }
+
+            const engPrompt = await generateAIContent(
+                "Translate this prompt accurately to English. If it is already in English, output it exactly as is. Don't add quotes or any markdown. Output ONLY the prompt.",
+                showcase.prompt,
+                1500
+            );
+            if (engPrompt) finalPrompt = engPrompt;
+
+            const descriptionResult = await generateShowcaseDescription(finalTitle, finalPrompt);
+            const descriptionAI = descriptionResult?.text || '';
+            finalDescription = descriptionAI;
+            const debugCues = extractPromptCues(finalPrompt);
+            console.log(`[SHOWCASE-DESC] ${repoDef.id}: fuente=${descriptionAI ? 'ia' : 'sin_descripcion'} origen=${descriptionResult?.source || 'none'} motivo=${descriptionResult?.reason || 'unknown'} cues=${debugCues.length || 0} prompt_chars=${finalPrompt.length} desc_chars=${finalDescription.length} intento=${attempt + 1}/${maxAttempts}`);
+            if (finalDescription) {
+                break;
+            }
             console.log(`[SHOWCASE] Omitido: sin descripcion IA valida para "${showcase.title}" (repo: ${repoDef.id})`);
+        }
+        if (!finalDescription || !showcase || selectedIndex < 0) {
+            console.log(`[SHOWCASE] No se pudo generar descripción IA válida en ${maxAttempts} intento(s) para repo ${repoDef.id}.`);
             return;
         }
 
