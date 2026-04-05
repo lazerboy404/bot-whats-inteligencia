@@ -43,6 +43,7 @@ let activeSock = null;
 let isStartingBot = false;
 let botRunId = 0;
 let sessionResetDoneThisBoot = false;
+let startupShowcaseSentRunId = 0;
 let lastSocketActivityAt = Date.now();
 let lastCommandHandledAt = 0;
 const processedMessageIds = new Set();
@@ -76,6 +77,7 @@ const PROACTIVE_NIGHT_END_HOUR = Number(process.env.PROACTIVE_NIGHT_END_HOUR || 
 const PROACTIVE_JITTER_MS = Number(process.env.PROACTIVE_JITTER_MS || (5 * 1000));
 const PROACTIVE_SHOWCASE_INTERVAL_MS = Number(process.env.PROACTIVE_SHOWCASE_INTERVAL_MS || (60 * 1000));
 const PROACTIVE_SHOWCASE_PROMPT_GAP_MS = Number(process.env.PROACTIVE_SHOWCASE_PROMPT_GAP_MS || (2 * 60 * 1000));
+const PROACTIVE_SEND_SHOWCASE_ON_START = !['0', 'false', 'no', 'off'].includes(String(process.env.PROACTIVE_SEND_SHOWCASE_ON_START || 'true').toLowerCase());
 const SHOWCASE_REPOS = [
     {
         id: 'picotrex',
@@ -3130,6 +3132,18 @@ async function startBot() {
                 reconnectDelayMs = BOT_RECONNECT_BASE_MS;
                 startConnectionIntervals(sock);
                 startProactiveScheduler(sock);
+                if (PROACTIVE_SEND_SHOWCASE_ON_START && startupShowcaseSentRunId !== runId) {
+                    startupShowcaseSentRunId = runId;
+                    setTimeout(async () => {
+                        if (runId !== botRunId || activeSock !== sock) return;
+                        try {
+                            console.log('[PROACTIVO] Envío inmediato de showcase por reinicio.');
+                            await sendPromptShowcase(sock);
+                        } catch (error) {
+                            console.error('[PROACTIVO] Error en showcase inmediato por reinicio:', error?.message || error);
+                        }
+                    }, 3000);
+                }
                 console.log('✅ BOT CONECTADO A WHATSAPP');
                 processIncomingQueue(sock, runId).catch(() => {});
             }
