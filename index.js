@@ -73,9 +73,6 @@ const PROACTIVE_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.e
 const PROACTIVE_GROUP_JIDS = (process.env.PROACTIVE_GROUP_JID || '').split(',').map(s => s.trim()).filter(Boolean);
 const PROACTIVE_PROMPT_INTERVAL_MS = Number(process.env.PROACTIVE_PROMPT_INTERVAL_MS || (60 * 1000));
 const PROACTIVE_RANDOM_USER_INTERVAL_MS = Number(process.env.PROACTIVE_RANDOM_USER_INTERVAL_MS || (24 * 60 * 60 * 1000));
-const PROACTIVE_INACTIVITY_THRESHOLD_MS = Number(process.env.PROACTIVE_INACTIVITY_THRESHOLD_MS || (12 * 60 * 60 * 1000));
-const PROACTIVE_NIGHT_START_HOUR = Number(process.env.PROACTIVE_NIGHT_START_HOUR || 23);
-const PROACTIVE_NIGHT_END_HOUR = Number(process.env.PROACTIVE_NIGHT_END_HOUR || 7);
 const PROACTIVE_SHOWCASE_DAILY_HOUR = Number(process.env.PROACTIVE_SHOWCASE_DAILY_HOUR || 9);
 const PROACTIVE_SHOWCASE_DAILY_MINUTE = Number(process.env.PROACTIVE_SHOWCASE_DAILY_MINUTE || 0);
 const PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR = Number(process.env.PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR || 15);
@@ -1015,16 +1012,6 @@ function updateProactiveState(updates) {
     saveLocalStore();
 }
 
-function isNightTime() {
-
-    const mexicoNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Mexico_City' }));
-    const hour = mexicoNow.getHours();
-    if (PROACTIVE_NIGHT_START_HOUR > PROACTIVE_NIGHT_END_HOUR) {
-        return hour >= PROACTIVE_NIGHT_START_HOUR || hour < PROACTIVE_NIGHT_END_HOUR;
-    }
-    return hour >= PROACTIVE_NIGHT_START_HOUR && hour < PROACTIVE_NIGHT_END_HOUR;
-}
-
 function getMexicoNow() {
     return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Mexico_City' }));
 }
@@ -1439,7 +1426,7 @@ async function resolveTargetForModeration(msg, text) {
     }
 
     const messageText = extractTextFromMessage(msg.message);
-    if (messageText.toLowerCase().startsWith('.advertir') || messageText.toLowerCase().startsWith('.unban')) {
+    if (messageText.toLowerCase().startsWith('.advertir') || messageText.toLowerCase().startsWith('.unban') || messageText.toLowerCase().startsWith('.ban')) {
         if (quoted.quotedStanzaId && reportReferenceMap.has(quoted.quotedStanzaId)) {
             const data = reportReferenceMap.get(quoted.quotedStanzaId);
             return { targetJid: data.offenderJid, source: 'reporte', groupFromReport: data.groupJid };
@@ -3004,27 +2991,6 @@ async function sendRandomUserSelection(sock) {
     updateProactiveState({ lastRandomUserAt: new Date().toISOString() });
 }
 
-async function sendInactivityReactivation(sock) {
-    if (PROACTIVE_GROUP_JIDS.length === 0) return;
-    try {
-        const message = PROACTIVE_REACTIVATION_MESSAGES[Math.floor(Math.random() * PROACTIVE_REACTIVATION_MESSAGES.length)];
-        const text = `${CASTOR_EMOJI} ${message}`;
-        for (const groupJid of PROACTIVE_GROUP_JIDS) {
-            try {
-                await sock.sendMessage(groupJid, { text });
-            } catch (groupError) {
-                console.error(`[PROACTIVO] Error enviando reactivación a ${groupJid}:`, groupError?.message);
-            }
-            if (PROACTIVE_GROUP_JIDS.length > 1) await new Promise((r) => setTimeout(r, 3000));
-        }
-        updateProactiveState({ lastReactivationAt: new Date().toISOString() });
-        lastGroupActivityAt = Date.now();
-        console.log('[PROACTIVO] Mensaje de reactivación enviado');
-    } catch (error) {
-        console.error('[PROACTIVO] Error en mensaje de reactivación:', error?.message || error);
-    }
-}
-
 function startProactiveScheduler(sock) {
     if (!PROACTIVE_ENABLED || PROACTIVE_GROUP_JIDS.length === 0) {
         console.log('[PROACTIVO] Sistema deshabilitado o sin grupo configurado.');
@@ -3039,12 +3005,10 @@ function startProactiveScheduler(sock) {
         lastGroupActivityAt = Date.now();
     }
     console.log(`[PROACTIVO] Scheduler iniciado. Grupos: ${PROACTIVE_GROUP_JIDS.join(', ')}`);
-    console.log(`[PROACTIVO] Prompt: cada ${PROACTIVE_PROMPT_INTERVAL_MS / 3600000}h | Random: cada ${PROACTIVE_RANDOM_USER_INTERVAL_MS / 3600000}h | Inactividad: ${PROACTIVE_INACTIVITY_THRESHOLD_MS / 3600000}h`);
-    console.log(`[PROACTIVO] Ventana nocturna: ${PROACTIVE_NIGHT_START_HOUR}:00 - ${PROACTIVE_NIGHT_END_HOUR}:00 (CDMX)`);
+    console.log(`[PROACTIVO] Prompt: cada ${PROACTIVE_PROMPT_INTERVAL_MS / 3600000}h | Random: cada ${PROACTIVE_RANDOM_USER_INTERVAL_MS / 3600000}h`);
     console.log(`[PROACTIVO] Horarios fijos CDMX -> Showcase #1: ${String(PROACTIVE_SHOWCASE_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_DAILY_MINUTE).padStart(2, '0')} | Showcase #2: ${String(PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE).padStart(2, '0')} | Random: ${String(PROACTIVE_RANDOM_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_RANDOM_DAILY_MINUTE).padStart(2, '0')}`);
     proactiveCheckInterval = setInterval(async () => {
         if (activeSock !== sock) return;
-        if (isNightTime()) return;
         if (proactiveCheckRunning) return;
         proactiveCheckRunning = true;
         try {
@@ -3063,7 +3027,7 @@ function startProactiveScheduler(sock) {
             if (currentState.lastShowcaseDailyDateMorning !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_SHOWCASE_DAILY_HOUR, PROACTIVE_SHOWCASE_DAILY_MINUTE)) {
                 const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
                 await new Promise((resolve) => setTimeout(resolve, jitter));
-                if (activeSock === sock && !isNightTime()) {
+                if (activeSock === sock) {
                     await sendPromptShowcase(sock);
                     updateProactiveState({ lastShowcaseDailyDateMorning: todayKey });
                 }
@@ -3072,7 +3036,7 @@ function startProactiveScheduler(sock) {
             if (currentState.lastShowcaseDailyDateAfternoon !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR, PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE)) {
                 const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
                 await new Promise((resolve) => setTimeout(resolve, jitter));
-                if (activeSock === sock && !isNightTime()) {
+                if (activeSock === sock) {
                     await sendPromptShowcase(sock);
                     updateProactiveState({ lastShowcaseDailyDateAfternoon: todayKey });
                 }
@@ -3081,7 +3045,7 @@ function startProactiveScheduler(sock) {
             if (currentState.lastRandomDailyDate !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_RANDOM_DAILY_HOUR, PROACTIVE_RANDOM_DAILY_MINUTE)) {
                 const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
                 await new Promise((resolve) => setTimeout(resolve, jitter));
-                if (activeSock === sock && !isNightTime()) {
+                if (activeSock === sock) {
                     await sendRandomUserSelection(sock);
                     updateProactiveState({ lastRandomDailyDate: todayKey });
                 }
@@ -3090,12 +3054,6 @@ function startProactiveScheduler(sock) {
             // En modo horario fijo, no dispares envíos por intervalo.
             // Showcase se envía solo en PROACTIVE_SHOWCASE_DAILY_HOUR:PROACTIVE_SHOWCASE_DAILY_MINUTE
             // Random se envía solo en PROACTIVE_RANDOM_DAILY_HOUR:PROACTIVE_RANDOM_DAILY_MINUTE
-            const lastReactivation = currentState.lastReactivationAt ? new Date(currentState.lastReactivationAt).getTime() : 0;
-            const timeSinceActivity = now - lastGroupActivityAt;
-            const timeSinceReactivation = now - lastReactivation;
-            if (timeSinceActivity >= PROACTIVE_INACTIVITY_THRESHOLD_MS && timeSinceReactivation >= PROACTIVE_INACTIVITY_THRESHOLD_MS) {
-                await sendInactivityReactivation(sock);
-            }
         } catch (error) {
             console.error('[PROACTIVO] Error en ciclo de verificación:', error?.message || error);
         } finally {
