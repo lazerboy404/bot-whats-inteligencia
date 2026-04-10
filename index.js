@@ -680,14 +680,31 @@ async function convertImageToStickerBuffer(imageBuffer) {
     if (!imageBuffer || !Buffer.isBuffer(imageBuffer) || imageBuffer.length === 0) return null;
     if (!sharp) return imageBuffer;
     try {
-        return await sharp(imageBuffer)
+        const base = sharp(imageBuffer)
             .rotate()
             .resize(512, 512, {
                 fit: 'contain',
                 background: { r: 0, g: 0, b: 0, alpha: 0 }
-            })
-            .webp({ quality: 90, effort: 4 })
-            .toBuffer();
+            });
+
+        // WhatsApp mobile suele ser más estricto con peso/encoding que WhatsApp Web.
+        const maxStickerBytes = 256 * 1024;
+        const qualitySteps = [80, 70, 60, 50, 40];
+        for (const quality of qualitySteps) {
+            const candidate = await base.clone().webp({
+                quality,
+                effort: 6,
+                smartSubsample: true
+            }).toBuffer();
+            if (candidate.length <= maxStickerBytes) return candidate;
+        }
+
+        // Último fallback: calidad baja para asegurar compatibilidad en móvil.
+        return await base.clone().webp({
+            quality: 35,
+            effort: 6,
+            smartSubsample: true
+        }).toBuffer();
     } catch (error) {
         return imageBuffer;
     }
