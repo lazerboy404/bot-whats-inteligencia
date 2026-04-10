@@ -678,18 +678,20 @@ async function streamToBuffer(stream) {
 
 async function convertImageToStickerBuffer(imageBuffer) {
     if (!imageBuffer || !Buffer.isBuffer(imageBuffer) || imageBuffer.length === 0) return null;
-    if (!sharp) return imageBuffer;
+    if (!sharp) return null;
     try {
-        const base = sharp(imageBuffer)
+        // WhatsApp móvil es estricto: normalizamos color y removemos transparencia.
+        const base = sharp(imageBuffer, { failOn: 'none' })
             .rotate()
+            .toColorspace('srgb')
             .resize(512, 512, {
-                fit: 'contain',
-                background: { r: 0, g: 0, b: 0, alpha: 0 }
-            });
+                fit: 'cover',
+                position: 'centre'
+            })
+            .flatten({ background: { r: 18, g: 18, b: 18 } });
 
-        // WhatsApp mobile suele ser más estricto con peso/encoding que WhatsApp Web.
         const maxStickerBytes = 256 * 1024;
-        const qualitySteps = [80, 70, 60, 50, 40];
+        const qualitySteps = [78, 68, 58, 48, 38];
         for (const quality of qualitySteps) {
             const candidate = await base.clone().webp({
                 quality,
@@ -701,12 +703,12 @@ async function convertImageToStickerBuffer(imageBuffer) {
 
         // Último fallback: calidad baja para asegurar compatibilidad en móvil.
         return await base.clone().webp({
-            quality: 35,
+            quality: 32,
             effort: 6,
             smartSubsample: true
         }).toBuffer();
     } catch (error) {
-        return imageBuffer;
+        return null;
     }
 }
 
