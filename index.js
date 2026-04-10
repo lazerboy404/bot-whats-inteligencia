@@ -4,6 +4,11 @@ const pino = require('pino');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+let sharp = null;
+try {
+    sharp = require('sharp');
+} catch (error) {
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -669,6 +674,23 @@ async function streamToBuffer(stream) {
         chunks.push(chunk);
     }
     return Buffer.concat(chunks);
+}
+
+async function convertImageToStickerBuffer(imageBuffer) {
+    if (!imageBuffer || !Buffer.isBuffer(imageBuffer) || imageBuffer.length === 0) return null;
+    if (!sharp) return imageBuffer;
+    try {
+        return await sharp(imageBuffer)
+            .rotate()
+            .resize(512, 512, {
+                fit: 'contain',
+                background: { r: 0, g: 0, b: 0, alpha: 0 }
+            })
+            .webp({ quality: 90, effort: 4 })
+            .toBuffer();
+    } catch (error) {
+        return imageBuffer;
+    }
 }
 
 function getRandomDelay(minMs, maxMs) {
@@ -1587,8 +1609,13 @@ async function handleStickerCommand(sock, msg, remoteJid) {
     try {
         const stream = await downloadContentFromMessage(imageMessage, 'image');
         const imageBuffer = await streamToBuffer(stream);
+        const stickerBuffer = await convertImageToStickerBuffer(imageBuffer);
+        if (!stickerBuffer || stickerBuffer.length === 0) {
+            await sock.sendMessage(remoteJid, { text: 'No pude procesar la imagen para sticker.' }, { quoted: msg });
+            return;
+        }
         await sendCastorSealSticker(sock, remoteJid, msg);
-        await sock.sendMessage(remoteJid, { sticker: imageBuffer }, { quoted: msg });
+        await sock.sendMessage(remoteJid, { sticker: stickerBuffer }, { quoted: msg });
         await sock.sendMessage(remoteJid, { text: '¡Misión Dique Cumplida! Tu imagen ya es sticker.' }, { quoted: msg });
     } catch (error) {
         await sock.sendMessage(remoteJid, { text: 'No pude convertir esa imagen a sticker.' }, { quoted: msg });
