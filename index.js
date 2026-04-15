@@ -2107,7 +2107,7 @@ async function handleTestArticleCommand(sock, msg, remoteJid) {
     try {
         await sock.sendMessage(senderPrivateJid, dropContent.payload);
     } catch (error) {
-        if (dropContent.source === 'dev' && dropContent.textFallback) {
+        if (dropContent.textFallback) {
             try {
                 await sock.sendMessage(senderPrivateJid, { text: dropContent.textFallback });
             } catch (fallbackError) {
@@ -3122,6 +3122,7 @@ async function fetchTopGithubRepos() {
                 description: repo?.description == null ? 'Sin descripción' : String(repo.description).trim() || 'Sin descripción',
                 html_url: String(repo?.html_url || '').trim(),
                 stargazers_count: Number(repo?.stargazers_count || 0),
+                default_branch: String(repo?.default_branch || 'main').trim() || 'main',
                 updated_at: String(repo?.updated_at || '').trim()
             }))
             .filter((repo) => Number.isInteger(repo.id) && repo.full_name && repo.html_url);
@@ -3184,6 +3185,90 @@ async function fetchTopGithubRepos() {
     }
 }
 
+function extractGithubReadmeImageCandidates(readmeText) {
+    const source = String(readmeText || '');
+    const matches = [];
+    const markdownImageRegex = /!\[[^\]]*?\]\(([^)\s]+(?:\s+\"[^\"]*\")?)\)/g;
+    const htmlImageRegex = /<img[^>]+src=["']([^"']+)["']/gi;
+
+    let match = null;
+    while ((match = markdownImageRegex.exec(source)) !== null) {
+        const candidate = String(match[1] || '').trim().split(/\s+"/)[0].trim();
+        if (candidate) matches.push(candidate);
+    }
+
+    while ((match = htmlImageRegex.exec(source)) !== null) {
+        const candidate = String(match[1] || '').trim();
+        if (candidate) matches.push(candidate);
+    }
+
+    return [...new Set(matches)];
+}
+
+function resolveGithubAssetUrl(repo, assetPath) {
+    const rawValue = String(assetPath || '').trim();
+    if (!rawValue || rawValue.startsWith('data:')) return '';
+
+    if (/^https?:\/\//i.test(rawValue)) {
+        const githubBlobMatch = rawValue.match(/^https?:\/\/github\.com\/([^/]+\/[^/]+)\/blob\/([^/]+)\/(.+)$/i);
+        if (githubBlobMatch) {
+            return `https://raw.githubusercontent.com/${githubBlobMatch[1]}/${githubBlobMatch[2]}/${githubBlobMatch[3]}`;
+        }
+        return rawValue;
+    }
+
+    if (rawValue.startsWith('//')) {
+        return `https:${rawValue}`;
+    }
+
+    const cleanPath = rawValue
+        .replace(/^\.\/+/, '')
+        .replace(/^\/+/, '');
+
+    if (!cleanPath) return '';
+    return `https://raw.githubusercontent.com/${repo.full_name}/${repo.default_branch || 'main'}/${cleanPath}`;
+}
+
+function isLikelyGithubPreviewImage(imageUrl) {
+    const value = String(imageUrl || '').toLowerCase();
+    if (!value) return false;
+    if (value.startsWith('data:')) return false;
+    if (value.includes('shields.io') || value.includes('badge') || value.includes('badgen.net')) return false;
+    if (/\.(png|jpe?g|webp|gif)(?:[?#].*)?$/.test(value)) return true;
+    return value.includes('raw.githubusercontent.com') || value.includes('githubusercontent.com');
+}
+
+async function fetchGithubRepoImageUrl(repo) {
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        const response = await fetch(`https://api.github.com/repos/${repo.full_name}/readme`, {
+            headers: {
+                'User-Agent': 'NodeJS:CastorBot:v1.0',
+                'Accept': 'application/vnd.github.raw+json'
+            },
+            signal: controller.signal
+        });
+        clearTimeout(timeout);
+
+        if (response.ok) {
+            const readmeText = await response.text();
+            const candidates = extractGithubReadmeImageCandidates(readmeText)
+                .map((candidate) => resolveGithubAssetUrl(repo, candidate))
+                .filter(Boolean);
+
+            const preferredImage = candidates.find(isLikelyGithubPreviewImage) || candidates[0] || '';
+            if (preferredImage) {
+                return preferredImage;
+            }
+        }
+    } catch (error) {
+        console.error(`[GITHUB-DROP] Error resolviendo imagen para ${repo.full_name}:`, error?.message || error);
+    }
+
+    return `https://opengraph.githubassets.com/1/${repo.full_name}`;
+}
+
 async function buildGithubDropContent(state) {
     const repos = await fetchTopGithubRepos();
     if (repos.length === 0) return null;
@@ -3199,6 +3284,7 @@ async function buildGithubDropContent(state) {
 
     if (!summary) return null;
 
+    const imageUrl = await fetchGithubRepoImageUrl(repo);
     const text = [
         `${CASTOR_EMOJI} *Código Abierto 💻*`,
         '',
@@ -3214,7 +3300,13 @@ async function buildGithubDropContent(state) {
         itemTitle: repo.full_name,
         bannerTitle: 'Código Abierto 💻',
         summaryResult,
-        payload: { text },
+        payload: imageUrl
+            ? {
+                image: { url: imageUrl },
+                caption: text
+            }
+            : { text },
+        textFallback: text,
         trackingUpdate: {
             githubTracking: [...githubTracking, repo.id].slice(-50),
             lastGithubSentAt: new Date().toISOString()
@@ -3233,6 +3325,13 @@ async function sendGithubDrop(sock) {
             await sock.sendMessage(groupJid, dropContent.payload);
         } catch (groupError) {
             console.error(`[GITHUB-DROP] Error enviando a ${groupJid}:`, groupError?.message || groupError);
+            if (dropContent.textFallback) {
+                try {
+                    await sock.sendMessage(groupJid, { text: dropContent.textFallback });
+                } catch (fallbackError) {
+                    console.error(`[GITHUB-DROP] Error enviando fallback de texto a ${groupJid}:`, fallbackError?.message || fallbackError);
+                }
+            }
         }
 
         if (PROACTIVE_GROUP_JIDS.length > 1) {
