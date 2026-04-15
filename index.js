@@ -3058,6 +3058,27 @@ function cleanGithubSummaryText(text) {
         .trim();
 }
 
+function normalizeGithubSummaryLine(value) {
+    return String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[•*]/g, ' ')
+        .replace(/[^\w\s:|?/-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+}
+
+function cleanGithubSummaryItem(value) {
+    return String(value || '')
+        .replace(/\*/g, '')
+        .replace(/^[-•*]\s+/, '')
+        .replace(/^[^\wáéíóúüñÁÉÍÓÚÜÑ¿¡(/]+/, '')
+        .replace(/\s+:\s+/g, ': ')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+}
+
 function formatGithubSummaryText(text) {
     const clean = cleanGithubSummaryText(text)
         .replace(/^[ \t]+/gm, '')
@@ -3073,11 +3094,7 @@ function formatGithubSummaryText(text) {
     let currentSection = 'about';
 
     const pushSectionLine = (section, value) => {
-        const cleanValue = String(value || '')
-            .replace(/^\*+\s*/, '')
-            .replace(/\s*\*+$/g, '')
-            .replace(/^[-•*]\s+/, '')
-            .trim();
+        const cleanValue = cleanGithubSummaryItem(value);
         if (!cleanValue) return;
 
         if (section === 'specs') {
@@ -3094,35 +3111,33 @@ function formatGithubSummaryText(text) {
     };
 
     for (const line of lines) {
-        const cleanLine = line
-            .replace(/^\*+\s*/, '')
-            .replace(/\s*\*+$/g, '')
-            .trim();
+        const cleanLine = cleanGithubSummaryItem(line);
+        const normalizedLine = normalizeGithubSummaryLine(cleanLine);
 
         if (!title && /\|/.test(cleanLine) && !/^https?:\/\//i.test(cleanLine)) {
             title = cleanLine.replace(/^[^\wáéíóúüñÁÉÍÓÚÜÑ]+/, '').trim();
             continue;
         }
 
-        if (/^(?:🧠\s*)?¿?qué es\?:/i.test(cleanLine)) {
+        if (normalizedLine.startsWith('que es:') || normalizedLine.startsWith('que es?:')) {
             currentSection = 'about';
             pushSectionLine('about', cleanLine.replace(/^(?:🧠\s*)?¿?qué es\?:\s*/i, ''));
             continue;
         }
 
-        if (/^(?:⚙️\s*)?Specs:/i.test(cleanLine)) {
+        if (normalizedLine.startsWith('specs:')) {
             currentSection = 'specs';
             pushSectionLine('specs', cleanLine.replace(/^(?:⚙️\s*)?Specs:\s*/i, ''));
             continue;
         }
 
-        if (/^(?:🎯\s*)?Ideal para:/i.test(cleanLine)) {
+        if (normalizedLine.startsWith('ideal para:')) {
             currentSection = 'usecases';
             pushSectionLine('usecases', cleanLine.replace(/^(?:🎯\s*)?Ideal para:\s*/i, ''));
             continue;
         }
 
-        if (/^[-•*]\s+/.test(cleanLine)) {
+        if (/^[-•*]\s+/.test(line)) {
             pushSectionLine(currentSection === 'usecases' ? 'usecases' : 'specs', cleanLine);
             continue;
         }
@@ -3147,27 +3162,24 @@ function formatGithubSummaryText(text) {
     const blocks = [];
 
     if (title) {
-        blocks.push(`🚀 ${title}`);
+        blocks.push(title);
     }
 
     if (aboutLines.length > 0) {
-        blocks.push([
-            '🧠 ¿Qué es?:',
-            ...aboutLines
-        ].join('\n'));
+        blocks.push(`¿Qué es?: ${aboutLines.join(' ')}`.trim());
     }
 
     if (specsLines.length > 0) {
         blocks.push([
-            '⚙️ Specs:',
-            ...specsLines.map((item) => `• ${item}`)
+            'Specs:',
+            ...specsLines.map((item) => `- ${item}`)
         ].join('\n'));
     }
 
     if (useCaseLines.length > 0) {
         blocks.push([
-            '🎯 Ideal para:',
-            ...useCaseLines.map((item) => `• ${item}`)
+            'Ideal para:',
+            ...useCaseLines.map((item) => `- ${item}`)
         ].join('\n'));
     }
 
@@ -3197,18 +3209,21 @@ function isWeakGithubSummary(text) {
 
 function buildGithubSummaryFallback(repo) {
     return [
-        `*${repo.full_name} | stack open source para iterar más rápido*`,
+        `${repo.full_name} | stack open source para iterar más rápido`,
         `¿Qué es?: Repo activo enfocado en IA open source para acelerar prototipos, pruebas y flujos de producto con una base más reutilizable.`,
         `Tiene pinta de ser valioso porque junta piezas técnicas que suelen ahorrar tiempo al montar agentes, RAG o integraciones con LLM.`,
-        `• 🧠 Entra en el radar de repos de *LLM, RAG o AI agents* con actividad reciente.`,
-        `• ⚙️ Ya trae una base útil para experimentar, adaptar pipelines y validar arquitectura.`,
-        `• 🚀 Puede servir como referencia para integrar componentes open source sin arrancar desde cero.`,
-        `Ideal para: armar un MVP con IA y acelerar pruebas internas de automatización.`
+        `Specs:`,
+        `- Trazado técnico útil para entender mejor cómo embonar LLM, RAG o agentes en un flujo real.`,
+        `- Base práctica para experimentar, adaptar pipelines y validar arquitectura sin arrancar desde cero.`,
+        `- Referencia open source valiosa para acelerar pruebas y aterrizar integraciones.`,
+        `Ideal para:`,
+        `- Armar un MVP con IA.`,
+        `- Acelerar pruebas internas de automatización.`
     ].join('\n');
 }
 
 async function generateGithubRepoSummary(repo) {
-    const systemPrompt = "Eres un Arquitecto de Software y experto en IA Open Source para un grupo de WhatsApp. REGLA ABSOLUTA: Tu respuesta DEBE estar en español de México. FORMATO ESTRICTO: 1. Primera línea: 🚀 [Nombre Repo] | [Frase corta de su superpoder]. 2. Luego: 🧠 ¿Qué es?: 2 líneas explicando su función técnica y por qué es genial. 3. Luego: ⚙️ Specs: y 3 viñetas técnicas con emojis. 4. Luego: 🎯 Ideal para: y 2 casos prácticos en viñetas. 5. PROHIBIDO usar asteriscos para títulos o encabezados. 6. Cero comillas.";
+    const systemPrompt = "Eres un Arquitecto de Software y experto en IA Open Source para un grupo de WhatsApp. REGLA ABSOLUTA: Tu respuesta DEBE estar en español de México. FORMATO ESTRICTO: 1. Primera línea: [Nombre Repo] | [Frase corta de su superpoder]. 2. Luego una línea en blanco. 3. Después: ¿Qué es?: un párrafo corto de 2 líneas explicando su función técnica y por qué es genial. 4. Luego una línea en blanco. 5. Después: Specs: y 3 viñetas técnicas usando prefijo -. 6. Luego una línea en blanco. 7. Después: Ideal para: y 2 casos prácticos usando prefijo -. 8. PROHIBIDO usar asteriscos, emojis en encabezados o comillas.";
     const userPrompt = "Analiza este repositorio y devuelve la reseña técnica en el formato estricto:\n\nRepo: " + repo.full_name + "\nInfo: " + repo.description;
 
     for (let attempt = 0; attempt < 3; attempt++) {
