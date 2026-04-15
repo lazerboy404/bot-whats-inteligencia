@@ -2088,9 +2088,8 @@ async function handleTestArticleCommand(sock, msg, remoteJid) {
         return;
     }
 
-    const systemPrompt = "Eres un periodista tecnológico de un grupo de WhatsApp sobre IA. REGLA ABSOLUTA E INQUEBRANTABLE: Tu respuesta DEBE estar ÚNICA Y EXCLUSIVAMENTE en español de México, sin importar en qué idioma esté el texto original. Sé directo, interesante y usa un tono casual. Usa 2 emojis máximo. Cero comillas.";
-    const userPrompt = "Traduce al español y resume la siguiente noticia en un párrafo corto:\n\nTítulo: " + article.title + "\nDescripción: " + article.description;
-    const summary = sanitizeText(cleanModelOutputText(await generateAIContent(systemPrompt, userPrompt, 250)), 1200);
+    const summaryResult = await generateArticleSummary(article);
+    const summary = summaryResult?.text || '';
 
     if (!summary) {
         await sock.sendMessage(remoteJid, { text: 'No pude generar el resumen de prueba en este momento.' }, { quoted: msg });
@@ -2119,6 +2118,7 @@ async function handleTestArticleCommand(sock, msg, remoteJid) {
         }
     }
 
+    console.log(`[ARTICULO-TEST] Vista previa generada con fuente=${summaryResult?.source || 'unknown'} intentos=${summaryResult?.attempts || 0} artículo=${article.id}`);
     if (remoteJid !== senderPrivateJid) {
         await sock.sendMessage(remoteJid, { text: '🧪 Vista previa de Radar Castor enviada por privado.' }, { quoted: msg });
     }
@@ -2744,6 +2744,90 @@ function cleanModelOutputText(text) {
         .trim();
 }
 
+function cleanArticleSummaryText(text) {
+    return cleanModelOutputText(text)
+        .replace(/\s+/g, ' ')
+        .replace(/^(claro[,.:]?\s*|por supuesto[,.:]?\s*|aquí tienes[,.:]?\s*)/i, '')
+        .trim();
+}
+
+function isWeakArticleSummary(text) {
+    const value = String(text || '').trim();
+    const normalized = value.toLowerCase();
+    if (!value) return true;
+    if (value.length < 45) return true;
+    if (value.length > 420) return true;
+    const weakPatterns = [
+        /^la verdad es que/i,
+        /^no hay mucha información/i,
+        /^puedo intentar/i,
+        /^puedo ayudarte/i,
+        /^la noticia parece/i,
+        /^el artículo parece/i,
+        /basándome en/i,
+        /visión general/i,
+        /parece tratar sobre/i,
+        /parece que/i,
+        /puede que/i,
+        /no estoy seguro/i,
+        /no tengo suficiente contexto/i,
+        /a falta de/i
+    ];
+    if (weakPatterns.some((pattern) => pattern.test(value))) return true;
+    if (normalized.includes('there is not much information')) return true;
+    return false;
+}
+
+function buildArticleSummaryFallback(article) {
+    const source = `${String(article?.title || '')} ${String(article?.description || '')}`.toLowerCase();
+    const topics = [];
+
+    if (/\b(job|jobs|work|worker|workers|employment|career|hiring|layoff|layoffs|automation)\b/.test(source)) {
+        topics.push('empleo y automatización');
+    }
+    if (/\b(fund|funding|fundraise|investor|investors|startup|startups|vc|venture|capital)\b/.test(source)) {
+        topics.push('inversión y narrativa de mercado');
+    }
+    if (/\b(agent|agents|assistant|assistants)\b/.test(source)) {
+        topics.push('agentes de IA');
+    }
+    if (/\b(model|models|llm|openai|claude|gemini|grok|mistral)\b/.test(source)) {
+        topics.push('modelos y herramientas de IA');
+    }
+    if (/\b(code|coding|developer|developers|programming|software|app|apps)\b/.test(source)) {
+        topics.push('desarrollo y productividad');
+    }
+    if (/\b(image|images|video|design|photo|photos|visual)\b/.test(source)) {
+        topics.push('generación visual');
+    }
+
+    const uniqueTopics = [...new Set(topics)].slice(0, 2);
+    const topicText = uniqueTopics.length > 1
+        ? `${uniqueTopics[0]} e ${uniqueTopics[1]}`
+        : (uniqueTopics[0] || 'el impacto real de la IA');
+
+    return `Nueva nota sobre IA enfocada en ${topicText}. La idea central es bajar el hype y poner atención en lo que realmente está cambiando alrededor de esta tecnología.`;
+}
+
+async function generateArticleSummary(article) {
+    const systemPrompt = "Eres un periodista tecnológico de un grupo de WhatsApp sobre IA. REGLA ABSOLUTA E INQUEBRANTABLE: Tu respuesta DEBE estar ÚNICA Y EXCLUSIVAMENTE en español de México, sin importar en qué idioma esté el texto original. Sé directo, interesante y usa un tono casual. Usa 2 emojis máximo. Cero comillas.";
+    const userPrompt = "Traduce al español y resume la siguiente noticia en un párrafo corto:\n\nTítulo: " + article.title + "\nDescripción: " + article.description;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const rawSummary = await generateAIContent(systemPrompt, userPrompt, 250);
+        const summary = sanitizeText(cleanArticleSummaryText(rawSummary), 1200);
+        if (!isWeakArticleSummary(summary)) {
+            return { text: summary, source: 'groq', attempts: attempt + 1 };
+        }
+    }
+
+    return {
+        text: buildArticleSummaryFallback(article),
+        source: 'fallback',
+        attempts: 3
+    };
+}
+
 function tryExtractJsonObject(text) {
     const raw = String(text || '').trim();
     if (!raw) return null;
@@ -2918,9 +3002,8 @@ async function sendArticle(sock) {
 
     if (!article) return;
 
-    const systemPrompt = "Eres un periodista tecnológico de un grupo de WhatsApp sobre IA. REGLA ABSOLUTA E INQUEBRANTABLE: Tu respuesta DEBE estar ÚNICA Y EXCLUSIVAMENTE en español de México, sin importar en qué idioma esté el texto original. Sé directo, interesante y usa un tono casual. Usa 2 emojis máximo. Cero comillas.";
-    const userPrompt = "Traduce al español y resume la siguiente noticia en un párrafo corto:\n\nTítulo: " + article.title + "\nDescripción: " + article.description;
-    const summary = sanitizeText(cleanModelOutputText(await generateAIContent(systemPrompt, userPrompt, 250)), 1200);
+    const summaryResult = await generateArticleSummary(article);
+    const summary = summaryResult?.text || '';
 
     if (!summary) {
         console.log(`[ARTICULO] Sin resumen válido para "${article.title}" (${article.id}).`);
@@ -2959,7 +3042,7 @@ async function sendArticle(sock) {
         articleTracking: [...articleTracking, article.id].slice(-50),
         lastArticleSentAt: new Date().toISOString()
     });
-    console.log(`[ARTICULO] Enviado: "${article.title}" (${article.id})`);
+    console.log(`[ARTICULO] Enviado: "${article.title}" (${article.id}) fuente=${summaryResult?.source || 'unknown'} intentos=${summaryResult?.attempts || 0}`);
 }
 
 async function sendPromptShowcase(sock) {
