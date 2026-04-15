@@ -91,6 +91,8 @@ const PROACTIVE_ARTICLE_MORNING_MINUTE = Number(process.env.PROACTIVE_ARTICLE_MO
 const PROACTIVE_ARTICLE_EVENING_HOUR = Number(process.env.PROACTIVE_ARTICLE_EVENING_HOUR || 18);
 const PROACTIVE_ARTICLE_EVENING_MINUTE = Number(process.env.PROACTIVE_ARTICLE_EVENING_MINUTE || 0);
 const GITHUB_SEEN_TRACKING_LIMIT = Number(process.env.GITHUB_SEEN_TRACKING_LIMIT || 500);
+const RANDOM_TOPIC_TRACKING_LIMIT = Number(process.env.RANDOM_TOPIC_TRACKING_LIMIT || 500);
+const RANDOM_TOPIC_PROMPT_HISTORY_LIMIT = Number(process.env.RANDOM_TOPIC_PROMPT_HISTORY_LIMIT || 30);
 const PROACTIVE_JITTER_MS = Number(process.env.PROACTIVE_JITTER_MS || (5 * 1000));
 const PROACTIVE_SHOWCASE_INTERVAL_MS = Number(process.env.PROACTIVE_SHOWCASE_INTERVAL_MS || (60 * 1000));
 const PROACTIVE_SHOWCASE_PROMPT_GAP_MS = Number(process.env.PROACTIVE_SHOWCASE_PROMPT_GAP_MS || (2 * 60 * 1000));
@@ -377,6 +379,41 @@ const PROACTIVE_USER_TOPICS = [
     '¿Has automatizado algo con IA? Cuéntanos cómo 🤖'
 ];
 
+const PROACTIVE_RANDOM_TOPIC_SEEDS = [
+    'Prompt útil: ¿Cuál fue el último prompt que de verdad te ahorró tiempo?',
+    'Prompt útil: Comparte un prompt corto que hoy sí te sacó del apuro.',
+    'Herramienta de la semana: ¿Qué herramienta de IA descubriste estos días y para qué te sirvió?',
+    'Herramienta sorpresa: Cuéntanos qué app de IA vale la pena probar y por qué.',
+    'Caso real: ¿En qué tarea concreta te ayudó la IA hoy?',
+    'Caso real: Comparte una tarea que resolviste más rápido gracias a IA.',
+    'Tip rápido: Compártenos un truco de prompting que casi nadie use.',
+    'Tip rápido: ¿Qué ajuste pequeño en tus prompts te ha dado mejores resultados?',
+    'Comparativa express: ¿Qué prefieres hoy para trabajar: ChatGPT, Claude o Gemini, y por qué?',
+    'Comparativa express: Si solo pudieras quedarte con un modelo esta semana, ¿cuál sería y para qué?',
+    'Automatización: ¿Qué proceso de tu trabajo automatizarías con IA?',
+    'Automatización: Cuéntanos una automatización sencilla que sí valga la pena montar este mes.',
+    'Error y aprendizaje: ¿Qué fallo te ha dado la IA y cómo lo resolviste?',
+    'Error y aprendizaje: Comparte un tropiezo con IA que te dejó una buena lección.',
+    'Recomendación: Si alguien va empezando en IA, ¿qué herramienta le recomendarías primero?',
+    'Recomendación: ¿Qué recurso usarías para enseñarle IA a alguien desde cero?',
+    'Workflow: Enséñanos tu mini flujo ideal: idea, prompt, herramienta y resultado.',
+    'Workflow: ¿Cómo se ve tu flujo corto para pasar de idea a entrega con IA?',
+    'Recurso útil: Comparte un repo, canal, newsletter o cuenta que sí valga la pena seguir.',
+    'Recurso útil: ¿Qué fuente te mantiene al día sin puro humo sobre IA?',
+    'Reto del día: Comparte un prompt que uses mucho y deja que el grupo lo mejore.',
+    'Reto del día: Sube un prompt base y que la banda proponga una versión más fina.',
+    'Mini encuesta: Si hoy tuvieras que elegir una sola herramienta para productividad, ¿cuál sería?',
+    'Mini encuesta: ¿Equipo agentes, RAG o automatizaciones simples? Explica tu pick en una línea.',
+    'Caso express: En 3 líneas, dinos cómo usarías IA para resolver una tarea repetitiva.',
+    'Caso express: En 3 líneas, ¿cómo aplicarías IA para investigar más rápido un tema?',
+    'Prompt roast: Comparte un prompt viejo y entre todos lo pulimos.',
+    'Prompt roast: Trae un prompt que ya no te convenza y lo optimizamos contigo.',
+    'Tool battle: Defiende una herramienta de IA en una sola frase.',
+    'Tool battle: Vende tu herramienta favorita como si tuvieras 10 segundos para convencer al grupo.',
+    'Antes y después: Cuéntanos cómo hacías una tarea antes de IA y cómo la haces hoy.',
+    'Antes y después: ¿Qué cambió en tu forma de trabajar desde que metiste IA en tu rutina?'
+];
+
 const PROACTIVE_REACTIVATION_MESSAGES = [
     '¿Siguen vivos o ya se secó el dique? 😴\n\nCompartan algo de IA para revivir el estanque 👇',
     'Detecto poca actividad...\n\nCompartan un prompt que hayan usado hoy 👇',
@@ -450,6 +487,7 @@ function getDefaultProactiveState() {
         articleTracking: [],
         githubTracking: [],
         githubSeenTracking: [],
+        randomTopicTracking: [],
         netsecTracking: [],
         showcaseTracking: getDefaultShowcaseTracking()
     };
@@ -467,6 +505,7 @@ function normalizeProactiveState(state) {
         articleTracking: normalizeNumericTrackingList(state.articleTracking, 50),
         githubTracking: normalizeNumericTrackingList(state.githubTracking, 50),
         githubSeenTracking: normalizeNumericTrackingList(state.githubSeenTracking, GITHUB_SEEN_TRACKING_LIMIT),
+        randomTopicTracking: normalizeStringTrackingList(state.randomTopicTracking, RANDOM_TOPIC_TRACKING_LIMIT),
         netsecTracking: normalizeStringTrackingList(state.netsecTracking, 50),
         showcaseTracking: normalizeShowcaseTracking(state.showcaseTracking)
     };
@@ -2512,6 +2551,90 @@ Genera la pregunta:`;
     return clean;
 }
 
+function normalizeRandomTopicKey(value) {
+    return String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[`"'*_]/g, ' ')
+        .replace(/[^\w\s:¿?/-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+}
+
+function cleanRandomUserTopic(value) {
+    let clean = String(value || '')
+        .replace(/\r/g, '\n')
+        .split('\n')
+        .map((line) => line.trim().replace(/^[-*•]\s+/, ''))
+        .filter(Boolean)
+        .join(' ')
+        .replace(/^["'`\s]+|["'`\s]+$/g, '')
+        .replace(/^(?:dinamica|dinámica|tema|pregunta|reto|idea)\s*:\s*/i, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (clean.length > 220) clean = `${clean.slice(0, 217).trim()}...`;
+    return clean;
+}
+
+function isReusableRandomTopic(candidate, usedTopicKeys = new Set()) {
+    const clean = cleanRandomUserTopic(candidate);
+    const key = normalizeRandomTopicKey(clean);
+    if (!clean || clean.length < 24 || !key) return '';
+    if (usedTopicKeys.has(key)) return '';
+    if (/^(aqui va|aquí va|te comparto|claro|por supuesto|ejemplo|opcion|opción)\b/i.test(clean)) return '';
+    return clean;
+}
+
+function getUnusedRandomTopicSeed(usedTopicKeys = new Set()) {
+    const availableTopics = PROACTIVE_RANDOM_TOPIC_SEEDS.filter((topic) => !usedTopicKeys.has(normalizeRandomTopicKey(topic)));
+    if (availableTopics.length === 0) {
+        return '';
+    }
+    return availableTopics[Math.floor(Math.random() * availableTopics.length)];
+}
+
+async function generateFreshRandomUserTopic(usedTopicKeys = new Set(), recentTopics = []) {
+    const localTopic = getUnusedRandomTopicSeed(usedTopicKeys);
+    if (localTopic) {
+        return localTopic;
+    }
+
+    const recentContext = normalizeStringTrackingList(recentTopics, RANDOM_TOPIC_PROMPT_HISTORY_LIMIT).slice(-RANDOM_TOPIC_PROMPT_HISTORY_LIMIT);
+    const recentTopicsText = recentContext.length > 0
+        ? recentContext.map((topic, index) => `${index + 1}. ${topic}`).join('\n')
+        : 'Ninguna todavía.';
+    const systemPrompt = 'Eres un community manager creativo para un grupo de WhatsApp sobre IA. REGLA ABSOLUTA: responde únicamente en español de México.';
+    const userPrompt = `Genera UNA sola dinámica nueva para mencionar a una persona del grupo.
+
+Debe:
+- Pedir una aportación útil sobre IA, prompts, automatización, agentes, LLM o herramientas.
+- Sonar fresca, concreta y accionable.
+- Poder ser pregunta útil, reto del día, mini encuesta, caso express, prompt roast, tool battle, workflow, recomendación, error/aprendizaje o recurso.
+
+Formato:
+- Solo devuelve la dinámica final.
+- Máximo 180 caracteres.
+- Sin emojis.
+- Sin comillas.
+- Sin mencionar nombres ni usar @.
+
+No repitas ni reformules demasiado estas dinámicas ya usadas recientemente:
+${recentTopicsText}
+
+Genera una dinámica verdaderamente nueva:`;
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+        const result = await generateAIContent(systemPrompt, userPrompt, 120);
+        const clean = isReusableRandomTopic(result, usedTopicKeys);
+        if (clean) {
+            return clean;
+        }
+    }
+
+    return null;
+}
+
 function normalizeShowcaseImageUrl(src, repoDef) {
     const cleanSrc = String(src || '').trim();
     if (!cleanSrc) return '';
@@ -4011,6 +4134,10 @@ async function sendPromptOfTheDay(sock) {
 
 async function sendRandomUserSelection(sock) {
     if (PROACTIVE_GROUP_JIDS.length === 0) return;
+    const state = getProactiveState();
+    const randomTopicTracking = normalizeStringTrackingList(state.randomTopicTracking, RANDOM_TOPIC_TRACKING_LIMIT);
+    const usedTopicKeys = new Set(randomTopicTracking.map((topic) => normalizeRandomTopicKey(topic)));
+    const topicsUsedThisRun = [];
     for (const groupJid of PROACTIVE_GROUP_JIDS) {
         try {
             const metadata = await sock.groupMetadata(groupJid);
@@ -4026,14 +4153,10 @@ async function sendRandomUserSelection(sock) {
             const selected = candidates[Math.floor(Math.random() * candidates.length)];
             const displayName = getParticipantDisplayName(selected, selected.id);
             const mentionLabel = getParticipantMentionLabel(selected, selected.id);
-            let topic = '';
-            const aiTopic = await generateRandomUserTopic();
-            if (aiTopic) {
-                topic = aiTopic;
-                console.log('[PROACTIVO] Tema random generado por IA');
-            } else {
-                topic = PROACTIVE_USER_TOPICS[Math.floor(Math.random() * PROACTIVE_USER_TOPICS.length)];
-                console.log('[PROACTIVO] Usando tema random local (fallback)');
+            const topic = await generateFreshRandomUserTopic(usedTopicKeys, [...randomTopicTracking, ...topicsUsedThisRun]);
+            if (!topic) {
+                console.log(`[PROACTIVO] No encontré un tema nuevo para ${groupJid}.`);
+                continue;
             }
             const text = [
                 `${CASTOR_EMOJI} *Castor seleccionó a alguien...*`,
@@ -4042,13 +4165,20 @@ async function sendRandomUserSelection(sock) {
                 `👉 ${topic}`
             ].join('\n');
             await sock.sendMessage(groupJid, { text, mentions: [selected.id] });
+            const topicKey = normalizeRandomTopicKey(topic);
+            usedTopicKeys.add(topicKey);
+            topicsUsedThisRun.push(topic);
             console.log(`[PROACTIVO] Selección aleatoria enviada en ${groupJid}: ${mentionLabel}`);
         } catch (groupError) {
             console.error(`[PROACTIVO] Error en selección aleatoria para ${groupJid}:`, groupError?.message);
         }
         if (PROACTIVE_GROUP_JIDS.length > 1) await new Promise((r) => setTimeout(r, 3000));
     }
-    updateProactiveState({ lastRandomUserAt: new Date().toISOString() });
+    const proactiveUpdates = { lastRandomUserAt: new Date().toISOString() };
+    if (topicsUsedThisRun.length > 0) {
+        proactiveUpdates.randomTopicTracking = [...randomTopicTracking, ...topicsUsedThisRun].slice(-RANDOM_TOPIC_TRACKING_LIMIT);
+    }
+    updateProactiveState(proactiveUpdates);
 }
 
 function startProactiveScheduler(sock) {
