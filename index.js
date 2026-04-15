@@ -421,6 +421,15 @@ function normalizeNumericTrackingList(value, maxItems = Number.POSITIVE_INFINITY
     return Number.isFinite(maxItems) ? normalized.slice(-maxItems) : normalized;
 }
 
+function normalizeStringTrackingList(value, maxItems = Number.POSITIVE_INFINITY) {
+    const normalized = Array.isArray(value)
+        ? value
+            .map((item) => String(item || '').trim())
+            .filter(Boolean)
+        : [];
+    return Number.isFinite(maxItems) ? normalized.slice(-maxItems) : normalized;
+}
+
 function normalizeShowcaseTracking(value) {
     const tracking = getDefaultShowcaseTracking();
     if (!value || typeof value !== 'object') {
@@ -434,7 +443,9 @@ function normalizeShowcaseTracking(value) {
 
 function getDefaultProactiveState() {
     return {
+        currentSource: 'dev',
         articleTracking: [],
+        netsecTracking: [],
         showcaseTracking: getDefaultShowcaseTracking()
     };
 }
@@ -447,7 +458,9 @@ function normalizeProactiveState(state) {
     return {
         ...base,
         ...state,
+        currentSource: state.currentSource === 'netsec' ? 'netsec' : 'dev',
         articleTracking: normalizeNumericTrackingList(state.articleTracking, 50),
+        netsecTracking: normalizeStringTrackingList(state.netsecTracking, 50),
         showcaseTracking: normalizeShowcaseTracking(state.showcaseTracking)
     };
 }
@@ -1135,8 +1148,8 @@ function getStartupDailyScheduleUpdates(state, mexicoNow) {
         ['lastShowcaseDailyDateMorning', PROACTIVE_SHOWCASE_DAILY_HOUR, PROACTIVE_SHOWCASE_DAILY_MINUTE],
         ['lastShowcaseDailyDateAfternoon', PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR, PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE],
         ['lastRandomDailyDate', PROACTIVE_RANDOM_DAILY_HOUR, PROACTIVE_RANDOM_DAILY_MINUTE],
-        ['lastArticleDailyDateMorning', PROACTIVE_ARTICLE_MORNING_HOUR, PROACTIVE_ARTICLE_MORNING_MINUTE],
-        ['lastArticleDailyDateEvening', PROACTIVE_ARTICLE_EVENING_HOUR, PROACTIVE_ARTICLE_EVENING_MINUTE]
+        ['lastDropDailyDateMorning', PROACTIVE_ARTICLE_MORNING_HOUR, PROACTIVE_ARTICLE_MORNING_MINUTE],
+        ['lastDropDailyDateEvening', PROACTIVE_ARTICLE_EVENING_HOUR, PROACTIVE_ARTICLE_EVENING_MINUTE]
     ];
 
     for (const [stateKey, hour, minute] of scheduleKeys) {
@@ -2078,49 +2091,36 @@ async function handleTestArticleCommand(sock, msg, remoteJid) {
         return;
     }
 
-    const articles = await fetchTopTechArticle();
     const state = getProactiveState();
-    const articleTracking = normalizeNumericTrackingList(state.articleTracking, 50);
-    const article = articles.find((item) => !articleTracking.includes(item.id));
+    const mexicoNow = getMexicoNow();
+    const todayKey = getMexicoDateKey(mexicoNow);
+    const currentSource = getAlternatingSourceForToday(state, todayKey);
+    const dropContent = await buildAlternatingDropContent(currentSource, state);
 
-    if (!article) {
-        await sock.sendMessage(remoteJid, { text: 'No encontré un artículo nuevo disponible para la prueba.' }, { quoted: msg });
+    if (!dropContent) {
+        await sock.sendMessage(remoteJid, { text: 'No encontré un drop nuevo disponible para la prueba.' }, { quoted: msg });
         return;
     }
-
-    const summaryResult = await generateArticleSummary(article);
-    const summary = summaryResult?.text || '';
-
-    if (!summary) {
-        await sock.sendMessage(remoteJid, { text: 'No pude generar el resumen de prueba en este momento.' }, { quoted: msg });
-        return;
-    }
-
-    const captionText = [
-        `${CASTOR_EMOJI} *Radar Castor 📡*`,
-        '',
-        summary,
-        '',
-        article.url
-    ].join('\n');
 
     try {
-        await sock.sendMessage(senderPrivateJid, {
-            image: { url: article.cover_image },
-            caption: captionText
-        });
+        await sock.sendMessage(senderPrivateJid, dropContent.payload);
     } catch (error) {
-        try {
-            await sock.sendMessage(senderPrivateJid, { text: captionText });
-        } catch (fallbackError) {
-            await sock.sendMessage(remoteJid, { text: 'No pude enviarte la prueba del artículo.' }, { quoted: msg });
+        if (dropContent.source === 'dev' && dropContent.textFallback) {
+            try {
+                await sock.sendMessage(senderPrivateJid, { text: dropContent.textFallback });
+            } catch (fallbackError) {
+                await sock.sendMessage(remoteJid, { text: 'No pude enviarte la prueba del drop.' }, { quoted: msg });
+                return;
+            }
+        } else {
+            await sock.sendMessage(remoteJid, { text: 'No pude enviarte la prueba del drop.' }, { quoted: msg });
             return;
         }
     }
 
-    console.log(`[ARTICULO-TEST] Vista previa generada con fuente=${summaryResult?.source || 'unknown'} intentos=${summaryResult?.attempts || 0} artículo=${article.id}`);
+    console.log(`[DROP-TEST] Vista previa generada source=${dropContent.source} fuente=${dropContent.summaryResult?.source || 'unknown'} intentos=${dropContent.summaryResult?.attempts || 0} item=${dropContent.itemId}`);
     if (remoteJid !== senderPrivateJid) {
-        await sock.sendMessage(remoteJid, { text: '🧪 Vista previa de Radar Castor enviada por privado.' }, { quoted: msg });
+        await sock.sendMessage(remoteJid, { text: `🧪 Vista previa de ${dropContent.bannerTitle} enviada por privado.` }, { quoted: msg });
     }
 }
 
@@ -2809,9 +2809,9 @@ function buildArticleSummaryFallback(article) {
     return `Nueva nota sobre IA enfocada en ${topicText}. La idea central es bajar el hype y poner atención en lo que realmente está cambiando alrededor de esta tecnología.`;
 }
 
-async function generateArticleSummary(article) {
-    const systemPrompt = "Eres un creador de contenido tech súper dinámico y carismático para un grupo de WhatsApp de IA. REGLA ABSOLUTA: Responde ÚNICAMENTE en español de México. FORMATO ESTRICTO: 1. Empieza con una frase gancho emocionante o una pregunta intrigante. 2. Explica la noticia en 2 líneas yendo directo al valor que aporta. 3. Usa negritas de WhatsApp (encierra palabras clave entre asteriscos *) para resaltar lo importante. 4. Usa de 2 a 3 emojis bien ubicados. Cero comillas, sin saludos ni despedidas.";
-    const userPrompt = "Transforma esta aburrida descripción en un micro-artículo emocionante y fácil de leer para WhatsApp:\n\nTítulo: " + article.title + "\nDescripción: " + article.description;
+async function generateDevToSummary(article) {
+    const systemPrompt = "Eres un periodista tecnológico. REGLA ABSOLUTA: Responde ÚNICAMENTE en español de México. Resume la noticia. Sé casual. 2 emojis máximo. Sin comillas.";
+    const userPrompt = "Resume esta noticia para compartirla en WhatsApp:\n\nTítulo: " + article.title + "\nDescripción: " + article.description;
 
     for (let attempt = 0; attempt < 3; attempt++) {
         const rawSummary = await generateAIContent(systemPrompt, userPrompt, 250);
@@ -2823,6 +2823,82 @@ async function generateArticleSummary(article) {
 
     return {
         text: buildArticleSummaryFallback(article),
+        source: 'fallback',
+        attempts: 3
+    };
+}
+
+function cleanNetsecSummaryText(text) {
+    return cleanModelOutputText(text)
+        .replace(/\r/g, '')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+function hasNetsecEthicalDisclaimer(text) {
+    const value = String(text || '').toLowerCase();
+    return /ético|etico|uso ético|uso etico|ilegal|ilegales|acceso no autorizado|fraude/.test(value);
+}
+
+function ensureNetsecEthicalDisclaimer(text) {
+    const clean = cleanNetsecSummaryText(text);
+    if (!clean) return '';
+    if (hasNetsecEthicalDisclaimer(clean)) return clean;
+    return `${clean}\n\n⚠️ Uso ético únicamente: no lo uses para acceso no autorizado, fraude o actividades ilegales.`;
+}
+
+function isWeakNetsecSummary(text) {
+    const value = String(text || '').trim();
+    if (!value) return true;
+    if (value.length < 120) return true;
+    const weakPatterns = [
+        /^la publicación parece/i,
+        /^parece tratar sobre/i,
+        /^no hay suficiente/i,
+        /^no tengo suficiente/i,
+        /^podría tratarse/i,
+        /^aquí tienes/i,
+        /^claro/i
+    ];
+    if (weakPatterns.some((pattern) => pattern.test(value))) return true;
+    if (!/(?:^|\n)(?:•|-)\s+/m.test(value)) return true;
+    return false;
+}
+
+function buildNetsecSummaryFallback(item) {
+    const source = `${String(item?.title || '')} ${String(item?.description || '')}`.toLowerCase();
+    let focus = 'ciberseguridad y OSINT';
+    if (source.includes('osint')) focus = 'OSINT y análisis técnico';
+    else if (source.includes('agent') || source.includes('agente')) focus = 'agentes para automatización defensiva';
+    else if (source.includes('repo') || source.includes('github') || source.includes('framework')) focus = 'herramientas open source para seguridad';
+    else if (source.includes('malware')) focus = 'análisis y respuesta ante malware';
+
+    return [
+        `*Ojo con este hallazgo de r/netsec* 🛡️`,
+        `Recurso que puede aportar valor en *${focus}* si lo revisas con calma y lo pruebas primero en laboratorio.`,
+        `• Ayuda a detectar ideas, scripts o flujos útiles para *investigación técnica*.`,
+        `• Puede servir para *automatización defensiva*, documentación y análisis de señales.`,
+        `• Conviene validar dependencias, telemetría y alcance antes de moverlo a producción.`,
+        `• Útil para equipos de *seguridad*, labs internos y procesos de *OSINT*.`,
+        `⚠️ Uso ético únicamente: no lo uses para acceso no autorizado, fraude o actividades ilegales.`
+    ].join('\n');
+}
+
+async function generateNetsecSummary(item) {
+    const systemPrompt = "Eres analista experto en ciberseguridad y OSINT. REGLA ABSOLUTA: Responde en español de México. FORMATO ESTRICTO: 1. Título con frase de impacto. 2. Descripción breve. 3. Viñetas de características. 4. Casos de uso prácticos. 5. Disclaimer ÉTICO OBLIGATORIO sobre uso ilegal. Sin comillas.";
+    const userPrompt = "Analiza este recurso compartido en r/netsec para un grupo de WhatsApp:\n\nTítulo: " + item.title + "\nDescripción: " + item.description + "\nURL: " + item.url;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const rawSummary = await generateAIContent(systemPrompt, userPrompt, 420);
+        const summary = ensureNetsecEthicalDisclaimer(rawSummary);
+        if (!isWeakNetsecSummary(summary)) {
+            return { text: summary, source: 'groq', attempts: attempt + 1 };
+        }
+    }
+
+    return {
+        text: buildNetsecSummaryFallback(item),
         source: 'fallback',
         attempts: 3
     };
@@ -2968,7 +3044,15 @@ async function fetchShowcaseData(repoDef) {
     }
 }
 
-async function fetchTopTechArticle() {
+function getAlternatingSourceForToday(state, todayKey) {
+    let currentSource = state.currentSource || 'dev';
+    if (state.lastSourceToggleDate !== todayKey) {
+        currentSource = currentSource === 'dev' ? 'netsec' : 'dev';
+    }
+    return currentSource === 'netsec' ? 'netsec' : 'dev';
+}
+
+async function fetchDevTo() {
     try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 20000);
@@ -2985,54 +3069,160 @@ async function fetchTopTechArticle() {
                 url: String(article?.url || '').trim(),
                 cover_image: String(article?.cover_image || '').trim()
             }))
-            .filter((article) => {
-                const isToolOrRepo = /github|repository|repo|agent|agente|open source|llm|tool|framework/i.test(article.title + ' ' + article.description);
-                return Number.isInteger(article.id) && article.title && article.url && article.cover_image && isToolOrRepo;
-            });
+            .filter((article) => Number.isInteger(article.id) && article.title && article.url && article.cover_image);
     } catch (error) {
-        console.error('[ARTICULO] Error obteniendo artículos de DEV.to:', error?.message || error);
+        console.error('[DROP-DEV] Error obteniendo artículos de DEV.to:', error?.message || error);
         return [];
     }
 }
 
-async function sendArticle(sock) {
-    if (PROACTIVE_GROUP_JIDS.length === 0) return;
+async function fetchNetsec() {
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        const response = await fetch('https://www.reddit.com/r/netsec/top.json?t=day&limit=15', {
+            headers: {
+                'User-Agent': 'NodeJS:CastorBot:v1.0'
+            },
+            signal: controller.signal
+        });
+        clearTimeout(timeout);
+        if (!response.ok) return [];
+        const payload = await response.json();
+        const children = Array.isArray(payload?.data?.children) ? payload.data.children : [];
+        return children
+            .map((entry) => entry?.data || {})
+            .filter((post) => !post?.stickied && !post?.is_video)
+            .map((post) => {
+                const permalink = String(post?.permalink || '').trim();
+                const externalUrl = String(post?.url_overridden_by_dest || post?.url || '').trim();
+                const url = externalUrl || (permalink ? `https://www.reddit.com${permalink}` : '');
+                const domain = String(post?.domain || 'reddit.com').trim();
+                const description = String(post?.selftext || '').trim() || `Compartido por la comunidad de r/netsec desde ${domain}.`;
+                return {
+                    id: String(post?.id || permalink || url).trim(),
+                    title: String(post?.title || '').trim(),
+                    description,
+                    url
+                };
+            })
+            .filter((post) => post.id && post.title && post.url);
+    } catch (error) {
+        console.error('[DROP-NETSEC] Error obteniendo posts de r/netsec:', error?.message || error);
+        return [];
+    }
+}
 
-    const articles = await fetchTopTechArticle();
-    const state = getProactiveState();
-    const articleTracking = normalizeNumericTrackingList(state.articleTracking, 50);
-    const article = articles.find((item) => !articleTracking.includes(item.id));
+async function buildAlternatingDropContent(currentSource, state) {
+    if (currentSource === 'dev') {
+        const articles = await fetchDevTo();
+        const articleTracking = normalizeNumericTrackingList(state.articleTracking, 50);
+        const article = articles.find((item) => !articleTracking.includes(item.id));
 
-    if (!article) return;
+        if (!article) return null;
 
-    const summaryResult = await generateArticleSummary(article);
-    const summary = summaryResult?.text || '';
+        const summaryResult = await generateDevToSummary(article);
+        const summary = summaryResult?.text || '';
+        if (!summary) return null;
 
-    if (!summary) {
-        console.log(`[ARTICULO] Sin resumen válido para "${article.title}" (${article.id}).`);
-        return;
+        return {
+            source: 'dev',
+            itemId: article.id,
+            itemTitle: article.title,
+            summaryResult,
+            bannerTitle: 'Radar Castor 📡',
+            payload: {
+                image: { url: article.cover_image },
+                caption: [
+                    `${CASTOR_EMOJI} *Radar Castor 📡*`,
+                    '',
+                    summary,
+                    '',
+                    article.url
+                ].join('\n')
+            },
+            textFallback: [
+                `${CASTOR_EMOJI} *Radar Castor 📡*`,
+                '',
+                summary,
+                '',
+                article.url
+            ].join('\n'),
+            trackingUpdate: {
+                articleTracking: [...articleTracking, article.id].slice(-50),
+                lastArticleSentAt: new Date().toISOString()
+            }
+        };
     }
 
-    const captionText = [
-        `${CASTOR_EMOJI} *Radar Castor 📡*`,
-        '',
-        summary,
-        '',
-        article.url
-    ].join('\n');
+    const posts = await fetchNetsec();
+    const netsecTracking = normalizeStringTrackingList(state.netsecTracking, 50);
+    const post = posts.find((item) => !netsecTracking.includes(String(item.id)));
+
+    if (!post) return null;
+
+    const summaryResult = await generateNetsecSummary(post);
+    const summary = summaryResult?.text || '';
+
+    if (!summary) return null;
+
+    return {
+        source: 'netsec',
+        itemId: String(post.id),
+        itemTitle: post.title,
+        summaryResult,
+        bannerTitle: 'Arsenal Castor 🛡️',
+        payload: {
+            text: [
+                `${CASTOR_EMOJI} *Arsenal Castor 🛡️*`,
+                '',
+                summary,
+                '',
+                post.url
+            ].join('\n')
+        },
+        trackingUpdate: {
+            netsecTracking: [...netsecTracking, String(post.id)].slice(-50),
+            lastNetsecSentAt: new Date().toISOString()
+        }
+    };
+}
+
+async function sendAlternatingDrop(sock) {
+    if (PROACTIVE_GROUP_JIDS.length === 0) return;
+
+    const state = getProactiveState();
+    const mexicoNow = getMexicoNow();
+    const todayKey = getMexicoDateKey(mexicoNow);
+
+    let currentSource = state.currentSource || 'dev';
+    if (state.lastSourceToggleDate !== todayKey) {
+        currentSource = currentSource === 'dev' ? 'netsec' : 'dev';
+        updateProactiveState({ currentSource, lastSourceToggleDate: todayKey });
+    }
+
+    const dropContent = await buildAlternatingDropContent(currentSource, {
+        ...state,
+        currentSource,
+        lastSourceToggleDate: todayKey
+    });
+    if (!dropContent) return;
 
     for (const groupJid of PROACTIVE_GROUP_JIDS) {
         try {
-            await sock.sendMessage(groupJid, {
-                image: { url: article.cover_image },
-                caption: captionText
-            });
+            if (dropContent.source === 'dev') {
+                await sock.sendMessage(groupJid, dropContent.payload);
+            } else {
+                await sock.sendMessage(groupJid, dropContent.payload);
+            }
         } catch (groupError) {
-            console.error(`[ARTICULO] Error enviando artículo a ${groupJid}:`, groupError?.message || groupError);
-            try {
-                await sock.sendMessage(groupJid, { text: captionText });
-            } catch (fallbackError) {
-                console.error(`[ARTICULO] Error enviando fallback de texto a ${groupJid}:`, fallbackError?.message || fallbackError);
+            console.error(`[DROP] Error enviando ${dropContent.source} a ${groupJid}:`, groupError?.message || groupError);
+            if (dropContent.source === 'dev') {
+                try {
+                    await sock.sendMessage(groupJid, { text: dropContent.textFallback });
+                } catch (fallbackError) {
+                    console.error(`[DROP] Error enviando fallback de texto a ${groupJid}:`, fallbackError?.message || fallbackError);
+                }
             }
         }
 
@@ -3042,10 +3232,11 @@ async function sendArticle(sock) {
     }
 
     updateProactiveState({
-        articleTracking: [...articleTracking, article.id].slice(-50),
-        lastArticleSentAt: new Date().toISOString()
+        ...dropContent.trackingUpdate,
+        lastDropSentAt: new Date().toISOString(),
+        lastDropSource: dropContent.source
     });
-    console.log(`[ARTICULO] Enviado: "${article.title}" (${article.id}) fuente=${summaryResult?.source || 'unknown'} intentos=${summaryResult?.attempts || 0}`);
+    console.log(`[DROP] Enviado (${dropContent.source}): "${dropContent.itemTitle}" (${dropContent.itemId}) fuente=${dropContent.summaryResult?.source || 'unknown'} intentos=${dropContent.summaryResult?.attempts || 0}`);
 }
 
 async function sendPromptShowcase(sock) {
@@ -3360,7 +3551,7 @@ function startProactiveScheduler(sock) {
     console.log(`[PROACTIVO] Scheduler iniciado. Grupos: ${PROACTIVE_GROUP_JIDS.join(', ')}`);
     console.log(`[PROACTIVO] Prompt: cada ${PROACTIVE_PROMPT_INTERVAL_MS / 3600000}h | Random: cada ${PROACTIVE_RANDOM_USER_INTERVAL_MS / 3600000}h`);
     console.log(`[PROACTIVO] Horarios fijos CDMX -> Showcase #1: ${String(PROACTIVE_SHOWCASE_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_DAILY_MINUTE).padStart(2, '0')} | Showcase #2: ${String(PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE).padStart(2, '0')} | Random: ${String(PROACTIVE_RANDOM_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_RANDOM_DAILY_MINUTE).padStart(2, '0')}`);
-    console.log(`[PROACTIVO] Artículos CDMX -> Mañana: ${String(PROACTIVE_ARTICLE_MORNING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_MORNING_MINUTE).padStart(2, '0')} | Tarde: ${String(PROACTIVE_ARTICLE_EVENING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_EVENING_MINUTE).padStart(2, '0')}`);
+    console.log(`[PROACTIVO] Drops CDMX -> Mañana: ${String(PROACTIVE_ARTICLE_MORNING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_MORNING_MINUTE).padStart(2, '0')} | Tarde: ${String(PROACTIVE_ARTICLE_EVENING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_EVENING_MINUTE).padStart(2, '0')}`);
     proactiveCheckInterval = setInterval(async () => {
         if (activeSock !== sock) return;
         if (proactiveCheckRunning) return;
@@ -3405,21 +3596,21 @@ function startProactiveScheduler(sock) {
                 }
                 return;
             }
-            if (currentState.lastArticleDailyDateMorning !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_ARTICLE_MORNING_HOUR, PROACTIVE_ARTICLE_MORNING_MINUTE)) {
+            if (currentState.lastDropDailyDateMorning !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_ARTICLE_MORNING_HOUR, PROACTIVE_ARTICLE_MORNING_MINUTE)) {
                 const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
                 await new Promise((resolve) => setTimeout(resolve, jitter));
                 if (activeSock === sock) {
-                    await sendArticle(sock);
-                    updateProactiveState({ lastArticleDailyDateMorning: todayKey });
+                    await sendAlternatingDrop(sock);
+                    updateProactiveState({ lastDropDailyDateMorning: todayKey });
                 }
                 return;
             }
-            if (currentState.lastArticleDailyDateEvening !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_ARTICLE_EVENING_HOUR, PROACTIVE_ARTICLE_EVENING_MINUTE)) {
+            if (currentState.lastDropDailyDateEvening !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_ARTICLE_EVENING_HOUR, PROACTIVE_ARTICLE_EVENING_MINUTE)) {
                 const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
                 await new Promise((resolve) => setTimeout(resolve, jitter));
                 if (activeSock === sock) {
-                    await sendArticle(sock);
-                    updateProactiveState({ lastArticleDailyDateEvening: todayKey });
+                    await sendAlternatingDrop(sock);
+                    updateProactiveState({ lastDropDailyDateEvening: todayKey });
                 }
                 return;
             }
