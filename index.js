@@ -3052,6 +3052,57 @@ function getAlternatingSourceForToday(state, todayKey) {
     return currentSource === 'netsec' ? 'netsec' : 'dev';
 }
 
+function decodeHtmlEntities(value) {
+    return String(value || '')
+        .replace(/&#(\d+);/g, (_, code) => {
+            const parsed = Number(code);
+            return Number.isFinite(parsed) ? String.fromCharCode(parsed) : '';
+        })
+        .replace(/&#x([0-9a-f]+);/gi, (_, code) => {
+            const parsed = Number.parseInt(code, 16);
+            return Number.isFinite(parsed) ? String.fromCharCode(parsed) : '';
+        })
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&apos;/g, "'")
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&');
+}
+
+function stripHtmlTags(value) {
+    return String(value || '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function parseNetsecRssFeed(xml) {
+    const entries = String(xml || '').match(/<entry>[\s\S]*?<\/entry>/gi) || [];
+    return entries.map((entry) => {
+        const id = (entry.match(/<id>([\s\S]*?)<\/id>/i)?.[1] || '').trim();
+        const title = decodeHtmlEntities((entry.match(/<title>([\s\S]*?)<\/title>/i)?.[1] || '').trim());
+        const commentsUrl = decodeHtmlEntities((entry.match(/<link[^>]+href="([^"]+)"/i)?.[1] || '').trim());
+        const rawContent = decodeHtmlEntities((entry.match(/<content[^>]*>([\s\S]*?)<\/content>/i)?.[1] || '').trim());
+        const externalUrl = rawContent.match(/<a href="([^"]+)">\[link\]<\/a>/i)?.[1] || commentsUrl;
+        const description = stripHtmlTags(
+            rawContent
+                .replace(/submitted by[\s\S]*?<br\/?>/i, ' ')
+                .replace(/<span><a href="[^"]+">\[link\]<\/a><\/span>/gi, ' ')
+                .replace(/<span><a href="[^"]+">\[comments\]<\/a><\/span>/gi, ' ')
+                .replace(/<!--\s*SC_OFF\s*-->/gi, ' ')
+                .replace(/<!--\s*SC_ON\s*-->/gi, ' ')
+        ) || 'Compartido por la comunidad de r/netsec.';
+
+        return {
+            id: String(id || externalUrl || commentsUrl).trim(),
+            title: String(title || '').trim(),
+            description: String(description || '').trim(),
+            url: String(externalUrl || commentsUrl || '').trim()
+        };
+    }).filter((entry) => entry.id && entry.title && entry.url);
+}
+
 async function fetchDevTo() {
     try {
         const controller = new AbortController();
@@ -3087,26 +3138,49 @@ async function fetchNetsec() {
             signal: controller.signal
         });
         clearTimeout(timeout);
-        if (!response.ok) return [];
-        const payload = await response.json();
-        const children = Array.isArray(payload?.data?.children) ? payload.data.children : [];
-        return children
-            .map((entry) => entry?.data || {})
-            .filter((post) => !post?.stickied && !post?.is_video)
-            .map((post) => {
-                const permalink = String(post?.permalink || '').trim();
-                const externalUrl = String(post?.url_overridden_by_dest || post?.url || '').trim();
-                const url = externalUrl || (permalink ? `https://www.reddit.com${permalink}` : '');
-                const domain = String(post?.domain || 'reddit.com').trim();
-                const description = String(post?.selftext || '').trim() || `Compartido por la comunidad de r/netsec desde ${domain}.`;
-                return {
-                    id: String(post?.id || permalink || url).trim(),
-                    title: String(post?.title || '').trim(),
-                    description,
-                    url
-                };
-            })
-            .filter((post) => post.id && post.title && post.url);
+        if (response.ok) {
+            const payload = await response.json();
+            const children = Array.isArray(payload?.data?.children) ? payload.data.children : [];
+            const posts = children
+                .map((entry) => entry?.data || {})
+                .filter((post) => !post?.stickied && !post?.is_video)
+                .map((post) => {
+                    const permalink = String(post?.permalink || '').trim();
+                    const externalUrl = String(post?.url_overridden_by_dest || post?.url || '').trim();
+                    const url = externalUrl || (permalink ? `https://www.reddit.com${permalink}` : '');
+                    const domain = String(post?.domain || 'reddit.com').trim();
+                    const description = String(post?.selftext || '').trim() || `Compartido por la comunidad de r/netsec desde ${domain}.`;
+                    return {
+                        id: String(post?.id || permalink || url).trim(),
+                        title: String(post?.title || '').trim(),
+                        description,
+                        url
+                    };
+                })
+                .filter((post) => post.id && post.title && post.url);
+            if (posts.length > 0) {
+                return posts;
+            }
+        } else {
+            console.log(`[DROP-NETSEC] Reddit JSON respondió ${response.status}, intentando RSS fallback.`);
+        }
+
+        const rssController = new AbortController();
+        const rssTimeout = setTimeout(() => rssController.abort(), 20000);
+        const rssResponse = await fetch('https://www.reddit.com/r/netsec/top.rss?t=day', {
+            headers: {
+                'User-Agent': 'NodeJS:CastorBot:v1.0'
+            },
+            signal: rssController.signal
+        });
+        clearTimeout(rssTimeout);
+        if (!rssResponse.ok) return [];
+        const rssXml = await rssResponse.text();
+        const rssPosts = parseNetsecRssFeed(rssXml);
+        if (rssPosts.length > 0) {
+            console.log(`[DROP-NETSEC] RSS fallback activo, entradas parseadas: ${rssPosts.length}`);
+        }
+        return rssPosts;
     } catch (error) {
         console.error('[DROP-NETSEC] Error obteniendo posts de r/netsec:', error?.message || error);
         return [];
