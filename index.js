@@ -2124,13 +2124,6 @@ async function handleTestArticleCommand(sock, msg, remoteJid) {
         }
     }
 
-    updateProactiveState({
-        githubTracking: dropContent.trackingUpdate.githubTracking,
-        githubSeenTracking: dropContent.trackingUpdate.githubSeenTracking,
-        currentSource: 'github',
-        lastGithubPreviewAt: new Date().toISOString()
-    });
-
     console.log(`[DROP-TEST] Vista previa generada source=${dropContent.source} fuente=${dropContent.summaryResult?.source || 'unknown'} intentos=${dropContent.summaryResult?.attempts || 0} item=${dropContent.itemId}`);
     if (remoteJid !== senderPrivateJid) {
         await sock.sendMessage(remoteJid, { text: `🧪 Vista previa de ${dropContent.bannerTitle} enviada por privado.` }, { quoted: msg });
