@@ -3079,6 +3079,18 @@ function cleanGithubSummaryItem(value) {
         .trim();
 }
 
+function formatGithubRepoTitle(value) {
+    const cleanValue = cleanGithubSummaryItem(value);
+    if (!cleanValue) return '';
+
+    const [repoName, ...rest] = cleanValue.split('|');
+    const upperRepoName = String(repoName || '').trim().toUpperCase();
+    if (rest.length === 0) {
+        return upperRepoName;
+    }
+    return `${upperRepoName} | ${rest.join('|').trim()}`;
+}
+
 function formatGithubSummaryText(text) {
     const clean = cleanGithubSummaryText(text)
         .replace(/^[ \t]+/gm, '')
@@ -3115,7 +3127,7 @@ function formatGithubSummaryText(text) {
         const normalizedLine = normalizeGithubSummaryLine(cleanLine);
 
         if (!title && /\|/.test(cleanLine) && !/^https?:\/\//i.test(cleanLine)) {
-            title = cleanLine.replace(/^[^\wáéíóúüñÁÉÍÓÚÜÑ]+/, '').trim();
+            title = formatGithubRepoTitle(cleanLine.replace(/^[^\wáéíóúüñÁÉÍÓÚÜÑ]+/, '').trim());
             continue;
         }
 
@@ -3156,7 +3168,7 @@ function formatGithubSummaryText(text) {
     }
 
     if (!title && aboutLines.length > 0 && /\|/.test(aboutLines[0])) {
-        title = aboutLines.shift();
+        title = formatGithubRepoTitle(aboutLines.shift());
     }
 
     const blocks = [];
