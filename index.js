@@ -91,6 +91,7 @@ const PROACTIVE_ARTICLE_EVENING_HOUR = Number(process.env.PROACTIVE_ARTICLE_EVEN
 const PROACTIVE_ARTICLE_EVENING_MINUTE = Number(process.env.PROACTIVE_ARTICLE_EVENING_MINUTE || 0);
 const PROACTIVE_GITHUB_HOUR = Number(process.env.PROACTIVE_GITHUB_HOUR || 25);
 const PROACTIVE_GITHUB_MINUTE = Number(process.env.PROACTIVE_GITHUB_MINUTE || 0);
+const GITHUB_SEEN_TRACKING_LIMIT = Number(process.env.GITHUB_SEEN_TRACKING_LIMIT || 500);
 const PROACTIVE_JITTER_MS = Number(process.env.PROACTIVE_JITTER_MS || (5 * 1000));
 const PROACTIVE_SHOWCASE_INTERVAL_MS = Number(process.env.PROACTIVE_SHOWCASE_INTERVAL_MS || (60 * 1000));
 const PROACTIVE_SHOWCASE_PROMPT_GAP_MS = Number(process.env.PROACTIVE_SHOWCASE_PROMPT_GAP_MS || (2 * 60 * 1000));
@@ -449,6 +450,7 @@ function getDefaultProactiveState() {
         currentSource: 'github',
         articleTracking: [],
         githubTracking: [],
+        githubSeenTracking: [],
         netsecTracking: [],
         showcaseTracking: getDefaultShowcaseTracking()
     };
@@ -465,6 +467,7 @@ function normalizeProactiveState(state) {
         currentSource: ['dev', 'netsec', 'github'].includes(state.currentSource) ? state.currentSource : 'github',
         articleTracking: normalizeNumericTrackingList(state.articleTracking, 50),
         githubTracking: normalizeNumericTrackingList(state.githubTracking, 50),
+        githubSeenTracking: normalizeNumericTrackingList(state.githubSeenTracking, GITHUB_SEEN_TRACKING_LIMIT),
         netsecTracking: normalizeStringTrackingList(state.netsecTracking, 50),
         showcaseTracking: normalizeShowcaseTracking(state.showcaseTracking)
     };
@@ -2121,6 +2124,13 @@ async function handleTestArticleCommand(sock, msg, remoteJid) {
         }
     }
 
+    updateProactiveState({
+        githubTracking: dropContent.trackingUpdate.githubTracking,
+        githubSeenTracking: dropContent.trackingUpdate.githubSeenTracking,
+        currentSource: 'github',
+        lastGithubPreviewAt: new Date().toISOString()
+    });
+
     console.log(`[DROP-TEST] Vista previa generada source=${dropContent.source} fuente=${dropContent.summaryResult?.source || 'unknown'} intentos=${dropContent.summaryResult?.attempts || 0} item=${dropContent.itemId}`);
     if (remoteJid !== senderPrivateJid) {
         await sock.sendMessage(remoteJid, { text: `🧪 Vista previa de ${dropContent.bannerTitle} enviada por privado.` }, { quoted: msg });
@@ -3421,7 +3431,9 @@ async function buildGithubDropContent(state) {
 
     const currentState = normalizeProactiveState(state);
     const githubTracking = normalizeNumericTrackingList(currentState.githubTracking, 50);
-    const repo = repos.find((item) => !githubTracking.includes(item.id));
+    const githubSeenTracking = normalizeNumericTrackingList(currentState.githubSeenTracking, GITHUB_SEEN_TRACKING_LIMIT);
+    const seenRepoIds = new Set([...githubTracking, ...githubSeenTracking]);
+    const repo = repos.find((item) => !seenRepoIds.has(item.id));
 
     if (!repo) return null;
 
@@ -3455,6 +3467,7 @@ async function buildGithubDropContent(state) {
         textFallback: text,
         trackingUpdate: {
             githubTracking: [...githubTracking, repo.id].slice(-50),
+            githubSeenTracking: [...githubSeenTracking, repo.id].slice(-GITHUB_SEEN_TRACKING_LIMIT),
             lastGithubSentAt: new Date().toISOString()
         }
     };
