@@ -3060,55 +3060,118 @@ function cleanGithubSummaryText(text) {
 
 function formatGithubSummaryText(text) {
     const clean = cleanGithubSummaryText(text)
-        .replace(/\*/g, '')
         .replace(/^[ \t]+/gm, '')
         .trim();
 
     if (!clean) return '';
 
-    const lines = clean.split('\n');
-    const formattedLines = [];
-    let titleApplied = false;
+    const lines = clean.split('\n').map((line) => line.trim()).filter(Boolean);
+    const aboutLines = [];
+    const specsLines = [];
+    const useCaseLines = [];
+    let title = '';
+    let currentSection = 'about';
 
-    for (const rawLine of lines) {
-        const line = rawLine.trim();
-        if (!line) {
-            if (formattedLines[formattedLines.length - 1] !== '') {
-                formattedLines.push('');
-            }
+    const pushSectionLine = (section, value) => {
+        const cleanValue = String(value || '')
+            .replace(/^\*+\s*/, '')
+            .replace(/\s*\*+$/g, '')
+            .replace(/^[-•*]\s+/, '')
+            .trim();
+        if (!cleanValue) return;
+
+        if (section === 'specs') {
+            specsLines.push(cleanValue);
+            return;
+        }
+
+        if (section === 'usecases') {
+            useCaseLines.push(cleanValue);
+            return;
+        }
+
+        aboutLines.push(cleanValue);
+    };
+
+    for (const line of lines) {
+        const cleanLine = line
+            .replace(/^\*+\s*/, '')
+            .replace(/\s*\*+$/g, '')
+            .trim();
+
+        if (!title && /\|/.test(cleanLine) && !/^https?:\/\//i.test(cleanLine)) {
+            title = cleanLine.replace(/^[^\wáéíóúüñÁÉÍÓÚÜÑ]+/, '').trim();
             continue;
         }
 
-        if (!titleApplied && /\|/.test(line) && !/:/.test(line)) {
-            formattedLines.push(`🚀 ${line.replace(/^[^\wáéíóúüñÁÉÍÓÚÜÑ]+/, '').trim()}`);
-            titleApplied = true;
+        if (/^(?:🧠\s*)?¿?qué es\?:/i.test(cleanLine)) {
+            currentSection = 'about';
+            pushSectionLine('about', cleanLine.replace(/^(?:🧠\s*)?¿?qué es\?:\s*/i, ''));
             continue;
         }
 
-        if (/^¿Qué es\?:/i.test(line)) {
-            formattedLines.push(`🧠 ${line.replace(/^¿Qué es\?:\s*/i, '¿Qué es?: ')}`);
+        if (/^(?:⚙️\s*)?Specs:/i.test(cleanLine)) {
+            currentSection = 'specs';
+            pushSectionLine('specs', cleanLine.replace(/^(?:⚙️\s*)?Specs:\s*/i, ''));
             continue;
         }
 
-        if (/^Specs:/i.test(line)) {
-            formattedLines.push('⚙️ Specs:');
+        if (/^(?:🎯\s*)?Ideal para:/i.test(cleanLine)) {
+            currentSection = 'usecases';
+            pushSectionLine('usecases', cleanLine.replace(/^(?:🎯\s*)?Ideal para:\s*/i, ''));
             continue;
         }
 
-        if (/^Ideal para:/i.test(line)) {
-            formattedLines.push(`🎯 ${line.replace(/^Ideal para:\s*/i, 'Ideal para: ')}`);
+        if (/^[-•*]\s+/.test(cleanLine)) {
+            pushSectionLine(currentSection === 'usecases' ? 'usecases' : 'specs', cleanLine);
             continue;
         }
 
-        if (/^[-•]\s+/.test(line)) {
-            formattedLines.push(`• ${line.replace(/^[-•]\s+/, '')}`);
+        if (currentSection === 'usecases') {
+            pushSectionLine('usecases', cleanLine);
             continue;
         }
 
-        formattedLines.push(line);
+        if (currentSection === 'specs') {
+            pushSectionLine('specs', cleanLine);
+            continue;
+        }
+
+        aboutLines.push(cleanLine);
     }
 
-    return formattedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    if (!title && aboutLines.length > 0 && /\|/.test(aboutLines[0])) {
+        title = aboutLines.shift();
+    }
+
+    const blocks = [];
+
+    if (title) {
+        blocks.push(`🚀 ${title}`);
+    }
+
+    if (aboutLines.length > 0) {
+        blocks.push([
+            '🧠 ¿Qué es?:',
+            ...aboutLines
+        ].join('\n'));
+    }
+
+    if (specsLines.length > 0) {
+        blocks.push([
+            '⚙️ Specs:',
+            ...specsLines.map((item) => `• ${item}`)
+        ].join('\n'));
+    }
+
+    if (useCaseLines.length > 0) {
+        blocks.push([
+            '🎯 Ideal para:',
+            ...useCaseLines.map((item) => `• ${item}`)
+        ].join('\n'));
+    }
+
+    return blocks.join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function isWeakGithubSummary(text) {
