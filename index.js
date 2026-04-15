@@ -3058,6 +3058,59 @@ function cleanGithubSummaryText(text) {
         .trim();
 }
 
+function formatGithubSummaryText(text) {
+    const clean = cleanGithubSummaryText(text)
+        .replace(/\*/g, '')
+        .replace(/^[ \t]+/gm, '')
+        .trim();
+
+    if (!clean) return '';
+
+    const lines = clean.split('\n');
+    const formattedLines = [];
+    let titleApplied = false;
+
+    for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) {
+            if (formattedLines[formattedLines.length - 1] !== '') {
+                formattedLines.push('');
+            }
+            continue;
+        }
+
+        if (!titleApplied && /\|/.test(line) && !/:/.test(line)) {
+            formattedLines.push(`🚀 ${line.replace(/^[^\wáéíóúüñÁÉÍÓÚÜÑ]+/, '').trim()}`);
+            titleApplied = true;
+            continue;
+        }
+
+        if (/^¿Qué es\?:/i.test(line)) {
+            formattedLines.push(`🧠 ${line.replace(/^¿Qué es\?:\s*/i, '¿Qué es?: ')}`);
+            continue;
+        }
+
+        if (/^Specs:/i.test(line)) {
+            formattedLines.push('⚙️ Specs:');
+            continue;
+        }
+
+        if (/^Ideal para:/i.test(line)) {
+            formattedLines.push(`🎯 ${line.replace(/^Ideal para:\s*/i, 'Ideal para: ')}`);
+            continue;
+        }
+
+        if (/^[-•]\s+/.test(line)) {
+            formattedLines.push(`• ${line.replace(/^[-•]\s+/, '')}`);
+            continue;
+        }
+
+        formattedLines.push(line);
+    }
+
+    return formattedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function isWeakGithubSummary(text) {
     const value = String(text || '').trim();
     if (!value) return true;
@@ -3092,19 +3145,19 @@ function buildGithubSummaryFallback(repo) {
 }
 
 async function generateGithubRepoSummary(repo) {
-    const systemPrompt = "Eres un Arquitecto de Software y experto en IA Open Source para un grupo de WhatsApp. REGLA ABSOLUTA: Tu respuesta DEBE estar en español de México. FORMATO ESTRICTO: 1. Título: '[Nombre Repo] | [Frase corta de su superpoder]'. 2. ¿Qué es?: 2 líneas explicando su función técnica y por qué es genial. 3. Specs: 3 viñetas técnicas (usa emojis). 4. Casos de uso: 'Ideal para: [2 casos prácticos]'. 5. Cero comillas.";
+    const systemPrompt = "Eres un Arquitecto de Software y experto en IA Open Source para un grupo de WhatsApp. REGLA ABSOLUTA: Tu respuesta DEBE estar en español de México. FORMATO ESTRICTO: 1. Primera línea: 🚀 [Nombre Repo] | [Frase corta de su superpoder]. 2. Luego: 🧠 ¿Qué es?: 2 líneas explicando su función técnica y por qué es genial. 3. Luego: ⚙️ Specs: y 3 viñetas técnicas con emojis. 4. Luego: 🎯 Ideal para: y 2 casos prácticos en viñetas. 5. PROHIBIDO usar asteriscos para títulos o encabezados. 6. Cero comillas.";
     const userPrompt = "Analiza este repositorio y devuelve la reseña técnica en el formato estricto:\n\nRepo: " + repo.full_name + "\nInfo: " + repo.description;
 
     for (let attempt = 0; attempt < 3; attempt++) {
         const rawSummary = await generateAIContent(systemPrompt, userPrompt, 350);
-        const summary = sanitizeText(cleanGithubSummaryText(rawSummary), 1500);
+        const summary = sanitizeText(formatGithubSummaryText(rawSummary), 1500);
         if (!isWeakGithubSummary(summary)) {
             return { text: summary, source: 'groq', attempts: attempt + 1 };
         }
     }
 
     return {
-        text: buildGithubSummaryFallback(repo),
+        text: formatGithubSummaryText(buildGithubSummaryFallback(repo)),
         source: 'fallback',
         attempts: 3
     };
