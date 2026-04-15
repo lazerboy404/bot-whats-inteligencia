@@ -2972,7 +2972,7 @@ async function fetchTopTechArticle() {
     try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 20000);
-        const response = await fetch('https://dev.to/api/articles?tag=ai&top=1&per_page=15', { signal: controller.signal });
+        const response = await fetch('https://dev.to/api/articles?tag=ai&top=1&per_page=30', { signal: controller.signal });
         clearTimeout(timeout);
         if (!response.ok) return [];
         const payload = await response.json();
@@ -2985,7 +2985,10 @@ async function fetchTopTechArticle() {
                 url: String(article?.url || '').trim(),
                 cover_image: String(article?.cover_image || '').trim()
             }))
-            .filter((article) => Number.isInteger(article.id) && article.title && article.url && article.cover_image);
+            .filter((article) => {
+                const isToolOrRepo = /github|repository|repo|agent|agente|open source|llm|tool|framework/i.test(article.title + ' ' + article.description);
+                return Number.isInteger(article.id) && article.title && article.url && article.cover_image && isToolOrRepo;
+            });
     } catch (error) {
         console.error('[ARTICULO] Error obteniendo artículos de DEV.to:', error?.message || error);
         return [];
