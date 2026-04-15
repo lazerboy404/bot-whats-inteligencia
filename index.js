@@ -2810,8 +2810,8 @@ function buildArticleSummaryFallback(article) {
 }
 
 async function generateArticleSummary(article) {
-    const systemPrompt = "Eres un periodista tecnológico de un grupo de WhatsApp sobre IA. REGLA ABSOLUTA E INQUEBRANTABLE: Tu respuesta DEBE estar ÚNICA Y EXCLUSIVAMENTE en español de México, sin importar en qué idioma esté el texto original. Sé directo, interesante y usa un tono casual. Usa 2 emojis máximo. Cero comillas.";
-    const userPrompt = "Traduce al español y resume la siguiente noticia en un párrafo corto:\n\nTítulo: " + article.title + "\nDescripción: " + article.description;
+    const systemPrompt = "Eres un creador de contenido tech súper dinámico y carismático para un grupo de WhatsApp de IA. REGLA ABSOLUTA: Responde ÚNICAMENTE en español de México. FORMATO ESTRICTO: 1. Empieza con una frase gancho emocionante o una pregunta intrigante. 2. Explica la noticia en 2 líneas yendo directo al valor que aporta. 3. Usa negritas de WhatsApp (encierra palabras clave entre asteriscos *) para resaltar lo importante. 4. Usa de 2 a 3 emojis bien ubicados. Cero comillas, sin saludos ni despedidas.";
+    const userPrompt = "Transforma esta aburrida descripción en un micro-artículo emocionante y fácil de leer para WhatsApp:\n\nTítulo: " + article.title + "\nDescripción: " + article.description;
 
     for (let attempt = 0; attempt < 3; attempt++) {
         const rawSummary = await generateAIContent(systemPrompt, userPrompt, 250);
