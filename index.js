@@ -4039,9 +4039,7 @@ async function sendRandomUserSelection(sock) {
                 `${CASTOR_EMOJI} *Castor seleccionó a alguien...*`,
                 '',
                 `@${mentionLabel} cuéntanos algo:`,
-                `👉 ${topic}`,
-                '',
-                '¡Tu aporte vale 🪵 troncos! Reaccionen a su mensaje 👆'
+                `👉 ${topic}`
             ].join('\n');
             await sock.sendMessage(groupJid, { text, mentions: [selected.id] });
             console.log(`[PROACTIVO] Selección aleatoria enviada en ${groupJid}: ${mentionLabel}`);
