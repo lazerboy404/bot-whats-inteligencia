@@ -90,8 +90,6 @@ const PROACTIVE_ARTICLE_MORNING_HOUR = Number(process.env.PROACTIVE_ARTICLE_MORN
 const PROACTIVE_ARTICLE_MORNING_MINUTE = Number(process.env.PROACTIVE_ARTICLE_MORNING_MINUTE || 0);
 const PROACTIVE_ARTICLE_EVENING_HOUR = Number(process.env.PROACTIVE_ARTICLE_EVENING_HOUR || 18);
 const PROACTIVE_ARTICLE_EVENING_MINUTE = Number(process.env.PROACTIVE_ARTICLE_EVENING_MINUTE || 0);
-const PROACTIVE_GITHUB_HOUR = Number(process.env.PROACTIVE_GITHUB_HOUR || 25);
-const PROACTIVE_GITHUB_MINUTE = Number(process.env.PROACTIVE_GITHUB_MINUTE || 0);
 const GITHUB_SEEN_TRACKING_LIMIT = Number(process.env.GITHUB_SEEN_TRACKING_LIMIT || 500);
 const PROACTIVE_JITTER_MS = Number(process.env.PROACTIVE_JITTER_MS || (5 * 1000));
 const PROACTIVE_SHOWCASE_INTERVAL_MS = Number(process.env.PROACTIVE_SHOWCASE_INTERVAL_MS || (60 * 1000));
@@ -1209,8 +1207,7 @@ function getStartupDailyScheduleUpdates(state, mexicoNow) {
         ['lastShowcaseDailyDateAfternoon', PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR, PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE],
         ['lastRandomDailyDate', PROACTIVE_RANDOM_DAILY_HOUR, PROACTIVE_RANDOM_DAILY_MINUTE],
         ['lastDropDailyDateMorning', PROACTIVE_ARTICLE_MORNING_HOUR, PROACTIVE_ARTICLE_MORNING_MINUTE],
-        ['lastDropDailyDateEvening', PROACTIVE_ARTICLE_EVENING_HOUR, PROACTIVE_ARTICLE_EVENING_MINUTE],
-        ['lastGithubDailyDate', PROACTIVE_GITHUB_HOUR, PROACTIVE_GITHUB_MINUTE]
+        ['lastDropDailyDateEvening', PROACTIVE_ARTICLE_EVENING_HOUR, PROACTIVE_ARTICLE_EVENING_MINUTE]
     ];
 
     for (const [stateKey, hour, minute] of scheduleKeys) {
@@ -4075,14 +4072,10 @@ function startProactiveScheduler(sock) {
     if (!lastGroupActivityAt) {
         lastGroupActivityAt = Date.now();
     }
-    const githubScheduleLabel = PROACTIVE_GITHUB_HOUR >= 0 && PROACTIVE_GITHUB_HOUR <= 23
-        ? `${String(PROACTIVE_GITHUB_HOUR).padStart(2, '0')}:${String(PROACTIVE_GITHUB_MINUTE).padStart(2, '0')}`
-        : 'deshabilitado';
     console.log(`[PROACTIVO] Scheduler iniciado. Grupos: ${PROACTIVE_GROUP_JIDS.join(', ')}`);
     console.log(`[PROACTIVO] Prompt: cada ${PROACTIVE_PROMPT_INTERVAL_MS / 3600000}h | Random: cada ${PROACTIVE_RANDOM_USER_INTERVAL_MS / 3600000}h`);
     console.log(`[PROACTIVO] Horarios fijos CDMX -> Showcase #1: ${String(PROACTIVE_SHOWCASE_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_DAILY_MINUTE).padStart(2, '0')} | Showcase #2: ${String(PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE).padStart(2, '0')} | Random: ${String(PROACTIVE_RANDOM_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_RANDOM_DAILY_MINUTE).padStart(2, '0')}`);
     console.log(`[PROACTIVO] Drops CDMX -> Mañana: ${String(PROACTIVE_ARTICLE_MORNING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_MORNING_MINUTE).padStart(2, '0')} | Tarde: ${String(PROACTIVE_ARTICLE_EVENING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_EVENING_MINUTE).padStart(2, '0')}`);
-    console.log(`[PROACTIVO] Código Abierto diario CDMX -> ${githubScheduleLabel}`);
     proactiveCheckInterval = setInterval(async () => {
         if (activeSock !== sock) return;
         if (proactiveCheckRunning) return;
@@ -4142,15 +4135,6 @@ function startProactiveScheduler(sock) {
                 if (activeSock === sock) {
                     await sendAlternatingDrop(sock);
                     updateProactiveState({ lastDropDailyDateEvening: todayKey });
-                }
-                return;
-            }
-            if (currentState.lastGithubDailyDate !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_GITHUB_HOUR, PROACTIVE_GITHUB_MINUTE)) {
-                const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
-                await new Promise((resolve) => setTimeout(resolve, jitter));
-                if (activeSock === sock) {
-                    await sendGithubDrop(sock);
-                    updateProactiveState({ lastGithubDailyDate: todayKey });
                 }
                 return;
             }
