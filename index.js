@@ -3045,11 +3045,7 @@ async function fetchShowcaseData(repoDef) {
 }
 
 function getAlternatingSourceForToday(state, todayKey) {
-    let currentSource = state.currentSource || 'dev';
-    if (state.lastSourceToggleDate !== todayKey) {
-        currentSource = currentSource === 'dev' ? 'netsec' : 'dev';
-    }
-    return currentSource === 'netsec' ? 'netsec' : 'dev';
+    return 'dev';
 }
 
 function decodeHtmlEntities(value) {
@@ -3269,11 +3265,7 @@ async function sendAlternatingDrop(sock) {
     const mexicoNow = getMexicoNow();
     const todayKey = getMexicoDateKey(mexicoNow);
 
-    let currentSource = state.currentSource || 'dev';
-    if (state.lastSourceToggleDate !== todayKey) {
-        currentSource = currentSource === 'dev' ? 'netsec' : 'dev';
-        updateProactiveState({ currentSource, lastSourceToggleDate: todayKey });
-    }
+    const currentSource = 'dev';
 
     const dropContent = await buildAlternatingDropContent(currentSource, {
         ...state,
@@ -3306,6 +3298,7 @@ async function sendAlternatingDrop(sock) {
     }
 
     updateProactiveState({
+        currentSource: 'dev',
         ...dropContent.trackingUpdate,
         lastDropSentAt: new Date().toISOString(),
         lastDropSource: dropContent.source
