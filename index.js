@@ -60,7 +60,7 @@ let incomingBufferTimeout = null;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.comandos', '.reglas', '.miid', '.setadmin', '.troncos', '.dinamica', '.grupoid']);
+const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.comandos', '.reglas', '.miid', '.setadmin', '.troncos', '.dinamica', '.grupoid', '.testart']);
 const POSITIVE_REACTION_EMOJIS = new Set(['👍', '❤️', '👏', '🤯', '🔥', '💯', '🧠', '🤖', '🦫', '💡']);
 const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
 const BAILEYS_CONNECT_TIMEOUT_MS = Number(process.env.BAILEYS_CONNECT_TIMEOUT_MS || 60000);
@@ -84,6 +84,10 @@ const PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR = Number(process.env.PROACTIVE_SHOWCA
 const PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE = Number(process.env.PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE || 0);
 const PROACTIVE_RANDOM_DAILY_HOUR = Number(process.env.PROACTIVE_RANDOM_DAILY_HOUR || 12);
 const PROACTIVE_RANDOM_DAILY_MINUTE = Number(process.env.PROACTIVE_RANDOM_DAILY_MINUTE || 0);
+const PROACTIVE_ARTICLE_MORNING_HOUR = Number(process.env.PROACTIVE_ARTICLE_MORNING_HOUR || 11);
+const PROACTIVE_ARTICLE_MORNING_MINUTE = Number(process.env.PROACTIVE_ARTICLE_MORNING_MINUTE || 0);
+const PROACTIVE_ARTICLE_EVENING_HOUR = Number(process.env.PROACTIVE_ARTICLE_EVENING_HOUR || 18);
+const PROACTIVE_ARTICLE_EVENING_MINUTE = Number(process.env.PROACTIVE_ARTICLE_EVENING_MINUTE || 0);
 const PROACTIVE_JITTER_MS = Number(process.env.PROACTIVE_JITTER_MS || (5 * 1000));
 const PROACTIVE_SHOWCASE_INTERVAL_MS = Number(process.env.PROACTIVE_SHOWCASE_INTERVAL_MS || (60 * 1000));
 const PROACTIVE_SHOWCASE_PROMPT_GAP_MS = Number(process.env.PROACTIVE_SHOWCASE_PROMPT_GAP_MS || (2 * 60 * 1000));
@@ -401,6 +405,53 @@ function cleanDigits(value) {
     return String(value || '').replace(/\D/g, '');
 }
 
+function getDefaultShowcaseTracking() {
+    return SHOWCASE_REPOS.reduce((acc, repoDef) => {
+        acc[repoDef.id] = [];
+        return acc;
+    }, {});
+}
+
+function normalizeNumericTrackingList(value, maxItems = Number.POSITIVE_INFINITY) {
+    const normalized = Array.isArray(value)
+        ? value
+            .map((item) => Number(item))
+            .filter((item) => Number.isInteger(item) && item >= 0)
+        : [];
+    return Number.isFinite(maxItems) ? normalized.slice(-maxItems) : normalized;
+}
+
+function normalizeShowcaseTracking(value) {
+    const tracking = getDefaultShowcaseTracking();
+    if (!value || typeof value !== 'object') {
+        return tracking;
+    }
+    for (const repoDef of SHOWCASE_REPOS) {
+        tracking[repoDef.id] = normalizeNumericTrackingList(value[repoDef.id]);
+    }
+    return tracking;
+}
+
+function getDefaultProactiveState() {
+    return {
+        articleTracking: [],
+        showcaseTracking: getDefaultShowcaseTracking()
+    };
+}
+
+function normalizeProactiveState(state) {
+    const base = getDefaultProactiveState();
+    if (!state || typeof state !== 'object') {
+        return base;
+    }
+    return {
+        ...base,
+        ...state,
+        articleTracking: normalizeNumericTrackingList(state.articleTracking, 50),
+        showcaseTracking: normalizeShowcaseTracking(state.showcaseTracking)
+    };
+}
+
 function getDefaultLocalStore() {
     return {
         modRecords: {},
@@ -410,7 +461,7 @@ function getDefaultLocalStore() {
             adminSenderJid: '',
             updatedAt: null
         },
-        proactiveState: {}
+        proactiveState: getDefaultProactiveState()
     };
 }
 
@@ -420,7 +471,12 @@ function ensureLocalStoreLoaded() {
     }
     try {
         const raw = fs.readFileSync(LOCAL_STORE_FILE, 'utf8');
-        localStoreCache = { ...getDefaultLocalStore(), ...JSON.parse(raw || '{}') };
+        const parsed = JSON.parse(raw || '{}');
+        localStoreCache = {
+            ...getDefaultLocalStore(),
+            ...parsed,
+            proactiveState: normalizeProactiveState(parsed.proactiveState)
+        };
     } catch (error) {
         localStoreCache = getDefaultLocalStore();
     }
@@ -1044,12 +1100,13 @@ function touchGroupActivity(groupJid) {
 
 function getProactiveState() {
     const store = ensureLocalStoreLoaded();
-    return store.proactiveState || {};
+    return normalizeProactiveState(store.proactiveState);
 }
 
 function updateProactiveState(updates) {
     const store = ensureLocalStoreLoaded();
-    store.proactiveState = { ...(store.proactiveState || {}), ...updates };
+    const currentState = normalizeProactiveState(store.proactiveState);
+    store.proactiveState = normalizeProactiveState({ ...currentState, ...(updates || {}) });
     saveLocalStore();
 }
 
@@ -1068,6 +1125,27 @@ function hasReachedMexicoTime(dateObj, hour, minute) {
     const currentMinutes = (dateObj.getHours() * 60) + dateObj.getMinutes();
     const targetMinutes = (hour * 60) + minute;
     return currentMinutes >= targetMinutes;
+}
+
+function getStartupDailyScheduleUpdates(state, mexicoNow) {
+    const currentState = normalizeProactiveState(state);
+    const todayKey = getMexicoDateKey(mexicoNow);
+    const updates = {};
+    const scheduleKeys = [
+        ['lastShowcaseDailyDateMorning', PROACTIVE_SHOWCASE_DAILY_HOUR, PROACTIVE_SHOWCASE_DAILY_MINUTE],
+        ['lastShowcaseDailyDateAfternoon', PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR, PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE],
+        ['lastRandomDailyDate', PROACTIVE_RANDOM_DAILY_HOUR, PROACTIVE_RANDOM_DAILY_MINUTE],
+        ['lastArticleDailyDateMorning', PROACTIVE_ARTICLE_MORNING_HOUR, PROACTIVE_ARTICLE_MORNING_MINUTE],
+        ['lastArticleDailyDateEvening', PROACTIVE_ARTICLE_EVENING_HOUR, PROACTIVE_ARTICLE_EVENING_MINUTE]
+    ];
+
+    for (const [stateKey, hour, minute] of scheduleKeys) {
+        if (currentState[stateKey] === todayKey) continue;
+        if (!hasReachedMexicoTime(mexicoNow, hour, minute)) continue;
+        updates[stateKey] = todayKey;
+    }
+
+    return updates;
 }
 
 async function sendPrivateAdminMessage(sock, text) {
@@ -1987,6 +2065,65 @@ async function handlePingCommand(sock, msg, remoteJid) {
     await sock.sendMessage(remoteJid, { text: '✅ Castor Bot activo.' }, { quoted: msg });
 }
 
+async function handleTestArticleCommand(sock, msg, remoteJid) {
+    const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
+    if (!isAuthorized) {
+        await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
+        return;
+    }
+
+    const senderPrivateJid = msg.key.participant || msg.key.remoteJid;
+    if (!senderPrivateJid) {
+        await sock.sendMessage(remoteJid, { text: 'No pude detectar a quién enviarle la prueba.' }, { quoted: msg });
+        return;
+    }
+
+    const articles = await fetchTopTechArticle();
+    const state = getProactiveState();
+    const articleTracking = normalizeNumericTrackingList(state.articleTracking, 50);
+    const article = articles.find((item) => !articleTracking.includes(item.id));
+
+    if (!article) {
+        await sock.sendMessage(remoteJid, { text: 'No encontré un artículo nuevo disponible para la prueba.' }, { quoted: msg });
+        return;
+    }
+
+    const systemPrompt = "Eres un periodista tecnológico de un grupo de WhatsApp sobre IA. REGLA ABSOLUTA E INQUEBRANTABLE: Tu respuesta DEBE estar ÚNICA Y EXCLUSIVAMENTE en español de México, sin importar en qué idioma esté el texto original. Sé directo, interesante y usa un tono casual. Usa 2 emojis máximo. Cero comillas.";
+    const userPrompt = "Traduce al español y resume la siguiente noticia en un párrafo corto:\n\nTítulo: " + article.title + "\nDescripción: " + article.description;
+    const summary = sanitizeText(cleanModelOutputText(await generateAIContent(systemPrompt, userPrompt, 250)), 1200);
+
+    if (!summary) {
+        await sock.sendMessage(remoteJid, { text: 'No pude generar el resumen de prueba en este momento.' }, { quoted: msg });
+        return;
+    }
+
+    const captionText = [
+        `${CASTOR_EMOJI} *Radar Castor 📡*`,
+        '',
+        summary,
+        '',
+        article.url
+    ].join('\n');
+
+    try {
+        await sock.sendMessage(senderPrivateJid, {
+            image: { url: article.cover_image },
+            caption: captionText
+        });
+    } catch (error) {
+        try {
+            await sock.sendMessage(senderPrivateJid, { text: captionText });
+        } catch (fallbackError) {
+            await sock.sendMessage(remoteJid, { text: 'No pude enviarte la prueba del artículo.' }, { quoted: msg });
+            return;
+        }
+    }
+
+    if (remoteJid !== senderPrivateJid) {
+        await sock.sendMessage(remoteJid, { text: '🧪 Vista previa de Radar Castor enviada por privado.' }, { quoted: msg });
+    }
+}
+
 async function handleCommandsListCommand(sock, msg, remoteJid) {
     await sock.sendMessage(remoteJid, { text: getUserCommandsText() }, { quoted: msg });
 }
@@ -2747,14 +2884,92 @@ async function fetchShowcaseData(repoDef) {
     }
 }
 
+async function fetchTopTechArticle() {
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        const response = await fetch('https://dev.to/api/articles?tag=ai&top=1&per_page=15', { signal: controller.signal });
+        clearTimeout(timeout);
+        if (!response.ok) return [];
+        const payload = await response.json();
+        if (!Array.isArray(payload)) return [];
+        return payload
+            .map((article) => ({
+                id: Number(article?.id),
+                title: String(article?.title || '').trim(),
+                description: String(article?.description || '').trim(),
+                url: String(article?.url || '').trim(),
+                cover_image: String(article?.cover_image || '').trim()
+            }))
+            .filter((article) => Number.isInteger(article.id) && article.title && article.url && article.cover_image);
+    } catch (error) {
+        console.error('[ARTICULO] Error obteniendo artículos de DEV.to:', error?.message || error);
+        return [];
+    }
+}
+
+async function sendArticle(sock) {
+    if (PROACTIVE_GROUP_JIDS.length === 0) return;
+
+    const articles = await fetchTopTechArticle();
+    const state = getProactiveState();
+    const articleTracking = normalizeNumericTrackingList(state.articleTracking, 50);
+    const article = articles.find((item) => !articleTracking.includes(item.id));
+
+    if (!article) return;
+
+    const systemPrompt = "Eres un periodista tecnológico de un grupo de WhatsApp sobre IA. REGLA ABSOLUTA E INQUEBRANTABLE: Tu respuesta DEBE estar ÚNICA Y EXCLUSIVAMENTE en español de México, sin importar en qué idioma esté el texto original. Sé directo, interesante y usa un tono casual. Usa 2 emojis máximo. Cero comillas.";
+    const userPrompt = "Traduce al español y resume la siguiente noticia en un párrafo corto:\n\nTítulo: " + article.title + "\nDescripción: " + article.description;
+    const summary = sanitizeText(cleanModelOutputText(await generateAIContent(systemPrompt, userPrompt, 250)), 1200);
+
+    if (!summary) {
+        console.log(`[ARTICULO] Sin resumen válido para "${article.title}" (${article.id}).`);
+        return;
+    }
+
+    const captionText = [
+        `${CASTOR_EMOJI} *Radar Castor 📡*`,
+        '',
+        summary,
+        '',
+        article.url
+    ].join('\n');
+
+    for (const groupJid of PROACTIVE_GROUP_JIDS) {
+        try {
+            await sock.sendMessage(groupJid, {
+                image: { url: article.cover_image },
+                caption: captionText
+            });
+        } catch (groupError) {
+            console.error(`[ARTICULO] Error enviando artículo a ${groupJid}:`, groupError?.message || groupError);
+            try {
+                await sock.sendMessage(groupJid, { text: captionText });
+            } catch (fallbackError) {
+                console.error(`[ARTICULO] Error enviando fallback de texto a ${groupJid}:`, fallbackError?.message || fallbackError);
+            }
+        }
+
+        if (PROACTIVE_GROUP_JIDS.length > 1) {
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+    }
+
+    updateProactiveState({
+        articleTracking: [...articleTracking, article.id].slice(-50),
+        lastArticleSentAt: new Date().toISOString()
+    });
+    console.log(`[ARTICULO] Enviado: "${article.title}" (${article.id})`);
+}
+
 async function sendPromptShowcase(sock) {
     if (PROACTIVE_GROUP_JIDS.length === 0) return;
     try {
         const state = getProactiveState();
-        let tracking = state.showcaseTracking || { picotrex: [], jimmylv: [] };
+        let tracking = normalizeShowcaseTracking(state.showcaseTracking);
         
         // Alternar repositorios
-        const totalSent = (tracking.picotrex?.length || 0) + (tracking.jimmylv?.length || 0);
+        const totalSent = SHOWCASE_REPOS.reduce((acc, repoDef) => acc + (tracking[repoDef.id]?.length || 0), 0);
         const repoIndex = totalSent % SHOWCASE_REPOS.length;
         const repoDef = SHOWCASE_REPOS[repoIndex];
         
@@ -3044,6 +3259,12 @@ function startProactiveScheduler(sock) {
     }
     stopProactiveScheduler();
     const state = getProactiveState();
+    const startupMexicoNow = getMexicoNow();
+    const startupDailyUpdates = getStartupDailyScheduleUpdates(state, startupMexicoNow);
+    if (Object.keys(startupDailyUpdates).length > 0) {
+        updateProactiveState(startupDailyUpdates);
+        console.log(`[PROACTIVO] Horarios pasados marcados como atendidos por reinicio: ${Object.keys(startupDailyUpdates).join(', ')}`);
+    }
     if (state.lastGroupActivityAt) {
         lastGroupActivityAt = Math.max(lastGroupActivityAt, new Date(state.lastGroupActivityAt).getTime());
     }
@@ -3053,6 +3274,7 @@ function startProactiveScheduler(sock) {
     console.log(`[PROACTIVO] Scheduler iniciado. Grupos: ${PROACTIVE_GROUP_JIDS.join(', ')}`);
     console.log(`[PROACTIVO] Prompt: cada ${PROACTIVE_PROMPT_INTERVAL_MS / 3600000}h | Random: cada ${PROACTIVE_RANDOM_USER_INTERVAL_MS / 3600000}h`);
     console.log(`[PROACTIVO] Horarios fijos CDMX -> Showcase #1: ${String(PROACTIVE_SHOWCASE_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_DAILY_MINUTE).padStart(2, '0')} | Showcase #2: ${String(PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE).padStart(2, '0')} | Random: ${String(PROACTIVE_RANDOM_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_RANDOM_DAILY_MINUTE).padStart(2, '0')}`);
+    console.log(`[PROACTIVO] Artículos CDMX -> Mañana: ${String(PROACTIVE_ARTICLE_MORNING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_MORNING_MINUTE).padStart(2, '0')} | Tarde: ${String(PROACTIVE_ARTICLE_EVENING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_EVENING_MINUTE).padStart(2, '0')}`);
     proactiveCheckInterval = setInterval(async () => {
         if (activeSock !== sock) return;
         if (proactiveCheckRunning) return;
@@ -3094,6 +3316,24 @@ function startProactiveScheduler(sock) {
                 if (activeSock === sock) {
                     await sendRandomUserSelection(sock);
                     updateProactiveState({ lastRandomDailyDate: todayKey });
+                }
+                return;
+            }
+            if (currentState.lastArticleDailyDateMorning !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_ARTICLE_MORNING_HOUR, PROACTIVE_ARTICLE_MORNING_MINUTE)) {
+                const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
+                await new Promise((resolve) => setTimeout(resolve, jitter));
+                if (activeSock === sock) {
+                    await sendArticle(sock);
+                    updateProactiveState({ lastArticleDailyDateMorning: todayKey });
+                }
+                return;
+            }
+            if (currentState.lastArticleDailyDateEvening !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_ARTICLE_EVENING_HOUR, PROACTIVE_ARTICLE_EVENING_MINUTE)) {
+                const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
+                await new Promise((resolve) => setTimeout(resolve, jitter));
+                if (activeSock === sock) {
+                    await sendArticle(sock);
+                    updateProactiveState({ lastArticleDailyDateEvening: todayKey });
                 }
                 return;
             }
@@ -3373,6 +3613,8 @@ async function processIncomingMessage(sock, msg, runId) {
         await handleOpenGroupCommand(sock, msg, remoteJid);
     } else if (command === '.ping') {
         await handlePingCommand(sock, msg, remoteJid);
+    } else if (command === '.testart') {
+        await handleTestArticleCommand(sock, msg, remoteJid);
     } else if (command === '.comandos') {
         await handleCommandsListCommand(sock, msg, remoteJid);
     } else if (command === '.reglas') {
@@ -3605,16 +3847,25 @@ async function startBot() {
                 startConnectionIntervals(sock);
                 startProactiveScheduler(sock);
                 if (PROACTIVE_SEND_SHOWCASE_ON_START && startupShowcaseSentRunId !== runId) {
-                    startupShowcaseSentRunId = runId;
-                    setTimeout(async () => {
-                        if (runId !== botRunId || activeSock !== sock) return;
-                        try {
-                            console.log('[PROACTIVO] Envío inmediato de showcase por reinicio.');
-                            await sendPromptShowcase(sock);
-                        } catch (error) {
-                            console.error('[PROACTIVO] Error en showcase inmediato por reinicio:', error?.message || error);
-                        }
-                    }, 3000);
+                    const startupState = getProactiveState();
+                    const startupTodayKey = getMexicoDateKey(getMexicoNow());
+                    const showcaseHandledToday = startupState.lastShowcaseDailyDateMorning === startupTodayKey
+                        || startupState.lastShowcaseDailyDateAfternoon === startupTodayKey;
+                    if (showcaseHandledToday) {
+                        console.log('[PROACTIVO] Showcase inmediato omitido para evitar duplicados tras reinicio.');
+                    } else {
+                        startupShowcaseSentRunId = runId;
+                        setTimeout(async () => {
+                            if (runId !== botRunId || activeSock !== sock) return;
+                            try {
+                                console.log('[PROACTIVO] Envío inmediato de showcase por reinicio.');
+                                await sendPromptShowcase(sock);
+                                updateProactiveState({ lastShowcaseDailyDateMorning: startupTodayKey });
+                            } catch (error) {
+                                console.error('[PROACTIVO] Error en showcase inmediato por reinicio:', error?.message || error);
+                            }
+                        }, 3000);
+                    }
                 }
                 console.log('✅ BOT CONECTADO A WHATSAPP');
                 processIncomingQueue(sock, runId).catch(() => {});
