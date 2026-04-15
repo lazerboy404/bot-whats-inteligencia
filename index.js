@@ -62,6 +62,7 @@ const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https:
 const GITHUB_DROP_FALLBACK_IMAGE_URL = process.env.GITHUB_DROP_FALLBACK_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/github-drop-fallback.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
 const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.comandos', '.reglas', '.miid', '.setadmin', '.troncos', '.dinamica', '.grupoid', '.testart']);
+const CASTOR_INVALID_COMMAND_EMOJI = '❌';
 const POSITIVE_REACTION_EMOJIS = new Set(['👍', '❤️', '👏', '🤯', '🔥', '💯', '🧠', '🤖', '🦫', '💡']);
 const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
 const BAILEYS_CONNECT_TIMEOUT_MS = Number(process.env.BAILEYS_CONNECT_TIMEOUT_MS || 60000);
@@ -542,6 +543,57 @@ function normalizePhoneForCompare(value) {
         digits = `52${digits.slice(3)}`;
     }
     return digits;
+}
+
+function normalizeCommandText(value) {
+    return String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim();
+}
+
+function getMalformedCommandMatch(text) {
+    const trimmed = String(text || '').trim();
+    if (!trimmed) return '';
+
+    const validCommands = [...CASTOR_VALID_COMMANDS];
+    const validCommandBodies = validCommands.map((command) => command.replace(/^\./, ''));
+    const normalizedBodies = new Set(validCommandBodies.map((command) => normalizeCommandText(command)));
+
+    if (trimmed.startsWith('.')) {
+        const tokens = trimmed.split(/\s+/).filter(Boolean);
+        const firstToken = tokens[0] || '';
+        if (CASTOR_VALID_COMMANDS.has(firstToken.toLowerCase())) {
+            return '';
+        }
+
+        if (firstToken === '.' && tokens[1]) {
+            const secondToken = tokens[1];
+            const normalizedSecondToken = normalizeCommandText(secondToken);
+            if (normalizedBodies.has(normalizedSecondToken)) {
+                return `.${secondToken}`;
+            }
+            return '';
+        }
+
+        const normalizedFirstToken = normalizeCommandText(firstToken.replace(/^\./, ''));
+        if (normalizedBodies.has(normalizedFirstToken)) {
+            return firstToken;
+        }
+        return '';
+    }
+
+    if (/\s/.test(trimmed)) {
+        return '';
+    }
+
+    const normalizedTrimmed = normalizeCommandText(trimmed);
+    if (!normalizedBodies.has(normalizedTrimmed)) {
+        return '';
+    }
+
+    return trimmed;
 }
 
 function getNumberFromJid(jid) {
@@ -4345,11 +4397,20 @@ async function processIncomingMessage(sock, msg, runId) {
         return;
     }
 
-    if (!text || !text.trim().startsWith('.')) {
+    const trimmedText = text ? text.trim() : '';
+    const malformedCommandMatch = getMalformedCommandMatch(trimmedText);
+    if (malformedCommandMatch && !SAFE_DISABLE_COMMAND_REACT) {
+        setTimeout(() => {
+            sock.sendMessage(remoteJid, { react: { text: CASTOR_INVALID_COMMAND_EMOJI, key: msg.key } }).catch(() => {});
+        }, getRandomDelay(300, 900));
         return;
     }
 
-    const command = text.trim().split(/\s+/)[0].toLowerCase();
+    if (!trimmedText || !trimmedText.startsWith('.')) {
+        return;
+    }
+
+    const command = trimmedText.split(/\s+/)[0].toLowerCase();
     if (CASTOR_VALID_COMMANDS.has(command) && !SAFE_DISABLE_COMMAND_REACT) {
         setTimeout(() => {
             sock.sendMessage(remoteJid, { react: { text: CASTOR_EMOJI, key: msg.key } }).catch(() => {});
