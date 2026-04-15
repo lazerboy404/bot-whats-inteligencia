@@ -59,6 +59,7 @@ let isProcessingIncoming = false;
 let incomingBufferTimeout = null;
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
+const GITHUB_DROP_FALLBACK_IMAGE_URL = process.env.GITHUB_DROP_FALLBACK_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/github-drop-fallback.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
 const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.comandos', '.reglas', '.miid', '.setadmin', '.troncos', '.dinamica', '.grupoid', '.testart']);
 const POSITIVE_REACTION_EMOJIS = new Set(['👍', '❤️', '👏', '🤯', '🔥', '💯', '🧠', '🤖', '🦫', '💡']);
@@ -3378,7 +3379,9 @@ function isLikelyGithubPreviewImage(imageUrl) {
     if (value.startsWith('data:')) return false;
     if (value.includes('shields.io') || value.includes('badge') || value.includes('badgen.net')) return false;
     if (/\.(png|jpe?g|webp|gif)(?:[?#].*)?$/.test(value)) return true;
-    return value.includes('raw.githubusercontent.com') || value.includes('githubusercontent.com');
+    return value.includes('raw.githubusercontent.com')
+        || value.includes('githubusercontent.com')
+        || (value.includes('github.com/') && value.includes('/assets/'));
 }
 
 async function fetchGithubRepoImageUrl(repo) {
@@ -3400,7 +3403,7 @@ async function fetchGithubRepoImageUrl(repo) {
                 .map((candidate) => resolveGithubAssetUrl(repo, candidate))
                 .filter(Boolean);
 
-            const preferredImage = candidates.find(isLikelyGithubPreviewImage) || candidates[0] || '';
+            const preferredImage = candidates.find(isLikelyGithubPreviewImage) || '';
             if (preferredImage) {
                 return preferredImage;
             }
@@ -3409,7 +3412,7 @@ async function fetchGithubRepoImageUrl(repo) {
         console.error(`[GITHUB-DROP] Error resolviendo imagen para ${repo.full_name}:`, error?.message || error);
     }
 
-    return `https://opengraph.githubassets.com/1/${repo.full_name}`;
+    return GITHUB_DROP_FALLBACK_IMAGE_URL;
 }
 
 async function buildGithubDropContent(state) {
