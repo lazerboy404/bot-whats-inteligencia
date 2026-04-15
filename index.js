@@ -88,6 +88,8 @@ const PROACTIVE_ARTICLE_MORNING_HOUR = Number(process.env.PROACTIVE_ARTICLE_MORN
 const PROACTIVE_ARTICLE_MORNING_MINUTE = Number(process.env.PROACTIVE_ARTICLE_MORNING_MINUTE || 0);
 const PROACTIVE_ARTICLE_EVENING_HOUR = Number(process.env.PROACTIVE_ARTICLE_EVENING_HOUR || 18);
 const PROACTIVE_ARTICLE_EVENING_MINUTE = Number(process.env.PROACTIVE_ARTICLE_EVENING_MINUTE || 0);
+const PROACTIVE_GITHUB_HOUR = Number(process.env.PROACTIVE_GITHUB_HOUR || 25);
+const PROACTIVE_GITHUB_MINUTE = Number(process.env.PROACTIVE_GITHUB_MINUTE || 0);
 const PROACTIVE_JITTER_MS = Number(process.env.PROACTIVE_JITTER_MS || (5 * 1000));
 const PROACTIVE_SHOWCASE_INTERVAL_MS = Number(process.env.PROACTIVE_SHOWCASE_INTERVAL_MS || (60 * 1000));
 const PROACTIVE_SHOWCASE_PROMPT_GAP_MS = Number(process.env.PROACTIVE_SHOWCASE_PROMPT_GAP_MS || (2 * 60 * 1000));
@@ -443,8 +445,9 @@ function normalizeShowcaseTracking(value) {
 
 function getDefaultProactiveState() {
     return {
-        currentSource: 'dev',
+        currentSource: 'github',
         articleTracking: [],
+        githubTracking: [],
         netsecTracking: [],
         showcaseTracking: getDefaultShowcaseTracking()
     };
@@ -458,8 +461,9 @@ function normalizeProactiveState(state) {
     return {
         ...base,
         ...state,
-        currentSource: state.currentSource === 'netsec' ? 'netsec' : 'dev',
+        currentSource: ['dev', 'netsec', 'github'].includes(state.currentSource) ? state.currentSource : 'github',
         articleTracking: normalizeNumericTrackingList(state.articleTracking, 50),
+        githubTracking: normalizeNumericTrackingList(state.githubTracking, 50),
         netsecTracking: normalizeStringTrackingList(state.netsecTracking, 50),
         showcaseTracking: normalizeShowcaseTracking(state.showcaseTracking)
     };
@@ -1149,7 +1153,8 @@ function getStartupDailyScheduleUpdates(state, mexicoNow) {
         ['lastShowcaseDailyDateAfternoon', PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR, PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE],
         ['lastRandomDailyDate', PROACTIVE_RANDOM_DAILY_HOUR, PROACTIVE_RANDOM_DAILY_MINUTE],
         ['lastDropDailyDateMorning', PROACTIVE_ARTICLE_MORNING_HOUR, PROACTIVE_ARTICLE_MORNING_MINUTE],
-        ['lastDropDailyDateEvening', PROACTIVE_ARTICLE_EVENING_HOUR, PROACTIVE_ARTICLE_EVENING_MINUTE]
+        ['lastDropDailyDateEvening', PROACTIVE_ARTICLE_EVENING_HOUR, PROACTIVE_ARTICLE_EVENING_MINUTE],
+        ['lastGithubDailyDate', PROACTIVE_GITHUB_HOUR, PROACTIVE_GITHUB_MINUTE]
     ];
 
     for (const [stateKey, hour, minute] of scheduleKeys) {
@@ -2092,10 +2097,7 @@ async function handleTestArticleCommand(sock, msg, remoteJid) {
     }
 
     const state = getProactiveState();
-    const mexicoNow = getMexicoNow();
-    const todayKey = getMexicoDateKey(mexicoNow);
-    const currentSource = getAlternatingSourceForToday(state, todayKey);
-    const dropContent = await buildAlternatingDropContent(currentSource, state);
+    const dropContent = await buildGithubDropContent(state);
 
     if (!dropContent) {
         await sock.sendMessage(remoteJid, { text: 'No encontré un drop nuevo disponible para la prueba.' }, { quoted: msg });
@@ -3045,7 +3047,206 @@ async function fetchShowcaseData(repoDef) {
 }
 
 function getAlternatingSourceForToday(state, todayKey) {
-    return 'dev';
+    return 'github';
+}
+
+function cleanGithubSummaryText(text) {
+    return cleanModelOutputText(text)
+        .replace(/\r/g, '')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+function isWeakGithubSummary(text) {
+    const value = String(text || '').trim();
+    if (!value) return true;
+    if (value.length < 140) return true;
+    if (!/\|/.test(value)) return true;
+    if (!/¿Qué es\?:/i.test(value)) return true;
+    if (!/Ideal para:/i.test(value)) return true;
+    if (!/(?:^|\n)(?:•|-)\s+/m.test(value)) return true;
+
+    const weakPatterns = [
+        /^aquí tienes/i,
+        /^claro/i,
+        /^la descripción/i,
+        /^parece tratar sobre/i,
+        /^no hay suficiente/i,
+        /^con base en/i
+    ];
+
+    return weakPatterns.some((pattern) => pattern.test(value));
+}
+
+function buildGithubSummaryFallback(repo) {
+    return [
+        `*${repo.full_name} | stack open source para iterar más rápido*`,
+        `¿Qué es?: Repo activo enfocado en IA open source para acelerar prototipos, pruebas y flujos de producto con una base más reutilizable.`,
+        `Tiene pinta de ser valioso porque junta piezas técnicas que suelen ahorrar tiempo al montar agentes, RAG o integraciones con LLM.`,
+        `• 🧠 Entra en el radar de repos de *LLM, RAG o AI agents* con actividad reciente.`,
+        `• ⚙️ Ya trae una base útil para experimentar, adaptar pipelines y validar arquitectura.`,
+        `• 🚀 Puede servir como referencia para integrar componentes open source sin arrancar desde cero.`,
+        `Ideal para: armar un MVP con IA y acelerar pruebas internas de automatización.`
+    ].join('\n');
+}
+
+async function generateGithubRepoSummary(repo) {
+    const systemPrompt = "Eres un Arquitecto de Software y experto en IA Open Source para un grupo de WhatsApp. REGLA ABSOLUTA: Tu respuesta DEBE estar en español de México. FORMATO ESTRICTO: 1. Título: '[Nombre Repo] | [Frase corta de su superpoder]'. 2. ¿Qué es?: 2 líneas explicando su función técnica y por qué es genial. 3. Specs: 3 viñetas técnicas (usa emojis). 4. Casos de uso: 'Ideal para: [2 casos prácticos]'. 5. Cero comillas.";
+    const userPrompt = "Analiza este repositorio y devuelve la reseña técnica en el formato estricto:\n\nRepo: " + repo.full_name + "\nInfo: " + repo.description;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const rawSummary = await generateAIContent(systemPrompt, userPrompt, 350);
+        const summary = sanitizeText(cleanGithubSummaryText(rawSummary), 1500);
+        if (!isWeakGithubSummary(summary)) {
+            return { text: summary, source: 'groq', attempts: attempt + 1 };
+        }
+    }
+
+    return {
+        text: buildGithubSummaryFallback(repo),
+        source: 'fallback',
+        attempts: 3
+    };
+}
+
+async function fetchTopGithubRepos() {
+    try {
+        const requestHeaders = {
+            'User-Agent': 'NodeJS:CastorBot:v1.0'
+        };
+        const mapGithubItems = (items) => items
+            .map((repo) => ({
+                id: Number(repo?.id),
+                full_name: String(repo?.full_name || '').trim(),
+                description: repo?.description == null ? 'Sin descripción' : String(repo.description).trim() || 'Sin descripción',
+                html_url: String(repo?.html_url || '').trim(),
+                stargazers_count: Number(repo?.stargazers_count || 0),
+                updated_at: String(repo?.updated_at || '').trim()
+            }))
+            .filter((repo) => Number.isInteger(repo.id) && repo.full_name && repo.html_url);
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        const response = await fetch('https://api.github.com/search/repositories?q=topic:llm+OR+topic:rag+OR+topic:ai-agents+stars:>50&sort=updated&order=desc&per_page=15', {
+            headers: {
+                ...requestHeaders
+            },
+            signal: controller.signal
+        });
+        clearTimeout(timeout);
+        if (response.ok) {
+            const data = await response.json();
+            const items = Array.isArray(data?.items) ? data.items : [];
+            const directRepos = mapGithubItems(items);
+            if (directRepos.length > 0) {
+                return directRepos.map(({ updated_at, ...repo }) => repo);
+            }
+        }
+
+        const topicQueries = ['llm', 'rag', 'ai-agents'].map((topic) => {
+            const topicController = new AbortController();
+            const topicTimeout = setTimeout(() => topicController.abort(), 20000);
+            return fetch(`https://api.github.com/search/repositories?q=topic:${encodeURIComponent(topic)}+stars:%3E50&sort=updated&order=desc&per_page=15`, {
+                headers: {
+                    ...requestHeaders
+                },
+                signal: topicController.signal
+            }).then(async (topicResponse) => {
+                clearTimeout(topicTimeout);
+                if (!topicResponse.ok) return [];
+                const payload = await topicResponse.json();
+                const items = Array.isArray(payload?.items) ? payload.items : [];
+                return mapGithubItems(items);
+            }).catch(() => {
+                clearTimeout(topicTimeout);
+                return [];
+            });
+        });
+
+        const topicResults = await Promise.all(topicQueries);
+        const mergedRepos = new Map();
+
+        for (const repo of topicResults.flat()) {
+            const existingRepo = mergedRepos.get(repo.id);
+            if (!existingRepo || new Date(repo.updated_at).getTime() > new Date(existingRepo.updated_at).getTime()) {
+                mergedRepos.set(repo.id, repo);
+            }
+        }
+
+        return [...mergedRepos.values()]
+            .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+            .slice(0, 15)
+            .map(({ updated_at, ...repo }) => repo);
+    } catch (error) {
+        console.error('[GITHUB-DROP] Error obteniendo repositorios de GitHub:', error?.message || error);
+        return [];
+    }
+}
+
+async function buildGithubDropContent(state) {
+    const repos = await fetchTopGithubRepos();
+    if (repos.length === 0) return null;
+
+    const currentState = normalizeProactiveState(state);
+    const githubTracking = normalizeNumericTrackingList(currentState.githubTracking, 50);
+    const repo = repos.find((item) => !githubTracking.includes(item.id));
+
+    if (!repo) return null;
+
+    const summaryResult = await generateGithubRepoSummary(repo);
+    const summary = summaryResult?.text || '';
+
+    if (!summary) return null;
+
+    const text = [
+        `${CASTOR_EMOJI} *Código Abierto 💻*`,
+        '',
+        summary,
+        '',
+        `⭐ Estrellas: ${repo.stargazers_count}`,
+        repo.html_url
+    ].join('\n');
+
+    return {
+        source: 'github',
+        itemId: repo.id,
+        itemTitle: repo.full_name,
+        bannerTitle: 'Código Abierto 💻',
+        summaryResult,
+        payload: { text },
+        trackingUpdate: {
+            githubTracking: [...githubTracking, repo.id].slice(-50),
+            lastGithubSentAt: new Date().toISOString()
+        }
+    };
+}
+
+async function sendGithubDrop(sock) {
+    if (PROACTIVE_GROUP_JIDS.length === 0) return;
+
+    const dropContent = await buildGithubDropContent(getProactiveState());
+    if (!dropContent) return;
+
+    for (const groupJid of PROACTIVE_GROUP_JIDS) {
+        try {
+            await sock.sendMessage(groupJid, dropContent.payload);
+        } catch (groupError) {
+            console.error(`[GITHUB-DROP] Error enviando a ${groupJid}:`, groupError?.message || groupError);
+        }
+
+        if (PROACTIVE_GROUP_JIDS.length > 1) {
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+    }
+
+    updateProactiveState({
+        ...dropContent.trackingUpdate,
+        currentSource: 'github',
+        lastDropSentAt: new Date().toISOString(),
+        lastDropSource: dropContent.source
+    });
+    console.log(`[GITHUB-DROP] Enviado: "${dropContent.itemTitle}" (${dropContent.itemId}) fuente=${dropContent.summaryResult?.source || 'unknown'} intentos=${dropContent.summaryResult?.attempts || 0}`);
 }
 
 function decodeHtmlEntities(value) {
@@ -3259,51 +3460,7 @@ async function buildAlternatingDropContent(currentSource, state) {
 }
 
 async function sendAlternatingDrop(sock) {
-    if (PROACTIVE_GROUP_JIDS.length === 0) return;
-
-    const state = getProactiveState();
-    const mexicoNow = getMexicoNow();
-    const todayKey = getMexicoDateKey(mexicoNow);
-
-    const currentSource = 'dev';
-
-    const dropContent = await buildAlternatingDropContent(currentSource, {
-        ...state,
-        currentSource,
-        lastSourceToggleDate: todayKey
-    });
-    if (!dropContent) return;
-
-    for (const groupJid of PROACTIVE_GROUP_JIDS) {
-        try {
-            if (dropContent.source === 'dev') {
-                await sock.sendMessage(groupJid, dropContent.payload);
-            } else {
-                await sock.sendMessage(groupJid, dropContent.payload);
-            }
-        } catch (groupError) {
-            console.error(`[DROP] Error enviando ${dropContent.source} a ${groupJid}:`, groupError?.message || groupError);
-            if (dropContent.source === 'dev') {
-                try {
-                    await sock.sendMessage(groupJid, { text: dropContent.textFallback });
-                } catch (fallbackError) {
-                    console.error(`[DROP] Error enviando fallback de texto a ${groupJid}:`, fallbackError?.message || fallbackError);
-                }
-            }
-        }
-
-        if (PROACTIVE_GROUP_JIDS.length > 1) {
-            await new Promise((resolve) => setTimeout(resolve, 3000));
-        }
-    }
-
-    updateProactiveState({
-        currentSource: 'dev',
-        ...dropContent.trackingUpdate,
-        lastDropSentAt: new Date().toISOString(),
-        lastDropSource: dropContent.source
-    });
-    console.log(`[DROP] Enviado (${dropContent.source}): "${dropContent.itemTitle}" (${dropContent.itemId}) fuente=${dropContent.summaryResult?.source || 'unknown'} intentos=${dropContent.summaryResult?.attempts || 0}`);
+    return sendGithubDrop(sock);
 }
 
 async function sendPromptShowcase(sock) {
@@ -3615,10 +3772,14 @@ function startProactiveScheduler(sock) {
     if (!lastGroupActivityAt) {
         lastGroupActivityAt = Date.now();
     }
+    const githubScheduleLabel = PROACTIVE_GITHUB_HOUR >= 0 && PROACTIVE_GITHUB_HOUR <= 23
+        ? `${String(PROACTIVE_GITHUB_HOUR).padStart(2, '0')}:${String(PROACTIVE_GITHUB_MINUTE).padStart(2, '0')}`
+        : 'deshabilitado';
     console.log(`[PROACTIVO] Scheduler iniciado. Grupos: ${PROACTIVE_GROUP_JIDS.join(', ')}`);
     console.log(`[PROACTIVO] Prompt: cada ${PROACTIVE_PROMPT_INTERVAL_MS / 3600000}h | Random: cada ${PROACTIVE_RANDOM_USER_INTERVAL_MS / 3600000}h`);
     console.log(`[PROACTIVO] Horarios fijos CDMX -> Showcase #1: ${String(PROACTIVE_SHOWCASE_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_DAILY_MINUTE).padStart(2, '0')} | Showcase #2: ${String(PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE).padStart(2, '0')} | Random: ${String(PROACTIVE_RANDOM_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_RANDOM_DAILY_MINUTE).padStart(2, '0')}`);
     console.log(`[PROACTIVO] Drops CDMX -> Mañana: ${String(PROACTIVE_ARTICLE_MORNING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_MORNING_MINUTE).padStart(2, '0')} | Tarde: ${String(PROACTIVE_ARTICLE_EVENING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_EVENING_MINUTE).padStart(2, '0')}`);
+    console.log(`[PROACTIVO] Código Abierto diario CDMX -> ${githubScheduleLabel}`);
     proactiveCheckInterval = setInterval(async () => {
         if (activeSock !== sock) return;
         if (proactiveCheckRunning) return;
@@ -3678,6 +3839,15 @@ function startProactiveScheduler(sock) {
                 if (activeSock === sock) {
                     await sendAlternatingDrop(sock);
                     updateProactiveState({ lastDropDailyDateEvening: todayKey });
+                }
+                return;
+            }
+            if (currentState.lastGithubDailyDate !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_GITHUB_HOUR, PROACTIVE_GITHUB_MINUTE)) {
+                const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
+                await new Promise((resolve) => setTimeout(resolve, jitter));
+                if (activeSock === sock) {
+                    await sendGithubDrop(sock);
+                    updateProactiveState({ lastGithubDailyDate: todayKey });
                 }
                 return;
             }
