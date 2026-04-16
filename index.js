@@ -4159,8 +4159,8 @@ function formatOsintSummaryText(text, repoFullName = '') {
             continue;
         }
 
-        if (/^Disclaimer/i.test(line)) {
-            disclaimer = line.replace(/^Disclaimer(?:\s+ÉTICO OBLIGATORIO)?\s*:?\s*/i, '').trim();
+        if (/^(?:Disclaimer|Nota ética|Nota etica|Advertencia ética|Advertencia etica|Uso ético|Uso etico|⚠️|☠️)/i.test(line)) {
+            disclaimer = line.replace(/^(?:Disclaimer(?:\s+ÉTICO OBLIGATORIO)?|Nota ética(?:\s+importante)?|Nota etica(?:\s+importante)?|Advertencia ética|Advertencia etica|Uso ético|Uso etico|⚠️|☠️)\s*:?\s*/i, '').trim();
             section = 'disclaimer';
             continue;
         }
@@ -4197,8 +4197,18 @@ function formatOsintSummaryText(text, repoFullName = '') {
         .map((item) => item.replace(/\s+/g, ' ').trim())
         .filter(Boolean)
         .slice(0, 3);
-    const normalizedScenario = scenario
-        ? scenario.replace(/^Ideal para:\s*/i, '').trim()
+    let scenarioText = scenario ? scenario.replace(/^Ideal para:\s*/i, '').trim() : '';
+    const scenarioDisclaimerMatch = scenarioText.match(/(.+?)(?:\.\s*)?(?:nota ética(?:\s+importante)?|nota etica(?:\s+importante)?|disclaimer|advertencia ética|advertencia etica)\s*:?\s*(.+)$/i);
+    if (scenarioDisclaimerMatch) {
+        scenarioText = String(scenarioDisclaimerMatch[1] || '').trim();
+        const inlineDisclaimer = String(scenarioDisclaimerMatch[2] || '').trim();
+        if (inlineDisclaimer) {
+            disclaimer = disclaimer ? `${inlineDisclaimer}. ${disclaimer}` : inlineDisclaimer;
+        }
+    }
+
+    const normalizedScenario = scenarioText
+        ? scenarioText
         : 'Bug Bounty, Footprinting.';
     const normalizedDisclaimer = disclaimer
         ? disclaimer.replace(/\s+/g, ' ').trim()
@@ -4217,7 +4227,7 @@ function formatOsintSummaryText(text, repoFullName = '') {
         ]),
         '',
         `Escenario: Ideal para: ${normalizedScenario}`,
-        `Disclaimer: ${normalizedDisclaimer}`
+        `⚠️ ☠️ Disclaimer: ${normalizedDisclaimer}`
     ].join('\n');
 }
 
