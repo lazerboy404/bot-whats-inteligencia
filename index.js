@@ -90,6 +90,8 @@ const PROACTIVE_ARTICLE_MORNING_HOUR = Number(process.env.PROACTIVE_ARTICLE_MORN
 const PROACTIVE_ARTICLE_MORNING_MINUTE = Number(process.env.PROACTIVE_ARTICLE_MORNING_MINUTE || 0);
 const PROACTIVE_ARTICLE_EVENING_HOUR = Number(process.env.PROACTIVE_ARTICLE_EVENING_HOUR || 18);
 const PROACTIVE_ARTICLE_EVENING_MINUTE = Number(process.env.PROACTIVE_ARTICLE_EVENING_MINUTE || 0);
+const PROACTIVE_OSINT_HOUR = Number(process.env.PROACTIVE_OSINT_HOUR || 20);
+const PROACTIVE_OSINT_MINUTE = Number(process.env.PROACTIVE_OSINT_MINUTE || 0);
 const GITHUB_SEEN_TRACKING_LIMIT = Number(process.env.GITHUB_SEEN_TRACKING_LIMIT || 500);
 const RANDOM_TOPIC_TRACKING_LIMIT = Number(process.env.RANDOM_TOPIC_TRACKING_LIMIT || 500);
 const RANDOM_TOPIC_PROMPT_HISTORY_LIMIT = Number(process.env.RANDOM_TOPIC_PROMPT_HISTORY_LIMIT || 30);
@@ -568,6 +570,7 @@ function getDefaultProactiveState() {
         articleTracking: [],
         githubTracking: [],
         githubSeenTracking: [],
+        osintTracking: [],
         randomTopicTracking: [],
         randomUserRotationByGroup: {},
         pendingRandomUserFollowUps: [],
@@ -584,10 +587,11 @@ function normalizeProactiveState(state) {
     return {
         ...base,
         ...state,
-        currentSource: ['dev', 'netsec', 'github'].includes(state.currentSource) ? state.currentSource : 'github',
+        currentSource: ['dev', 'netsec', 'github', 'osint'].includes(state.currentSource) ? state.currentSource : 'github',
         articleTracking: normalizeNumericTrackingList(state.articleTracking, 50),
         githubTracking: normalizeNumericTrackingList(state.githubTracking, 50),
         githubSeenTracking: normalizeNumericTrackingList(state.githubSeenTracking, GITHUB_SEEN_TRACKING_LIMIT),
+        osintTracking: normalizeNumericTrackingList(state.osintTracking, 50),
         randomTopicTracking: normalizeStringTrackingList(state.randomTopicTracking, RANDOM_TOPIC_TRACKING_LIMIT),
         randomUserRotationByGroup: normalizeRandomUserRotationByGroup(state.randomUserRotationByGroup),
         pendingRandomUserFollowUps: normalizeRandomUserFollowUps(state.pendingRandomUserFollowUps),
@@ -1360,7 +1364,8 @@ function getStartupDailyScheduleUpdates(state, mexicoNow) {
         ['lastShowcaseDailyDateAfternoon', PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR, PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE],
         ['lastRandomDailyDate', PROACTIVE_RANDOM_DAILY_HOUR, PROACTIVE_RANDOM_DAILY_MINUTE],
         ['lastDropDailyDateMorning', PROACTIVE_ARTICLE_MORNING_HOUR, PROACTIVE_ARTICLE_MORNING_MINUTE],
-        ['lastDropDailyDateEvening', PROACTIVE_ARTICLE_EVENING_HOUR, PROACTIVE_ARTICLE_EVENING_MINUTE]
+        ['lastDropDailyDateEvening', PROACTIVE_ARTICLE_EVENING_HOUR, PROACTIVE_ARTICLE_EVENING_MINUTE],
+        ['lastOsintDailyDate', PROACTIVE_OSINT_HOUR, PROACTIVE_OSINT_MINUTE]
     ];
 
     for (const [stateKey, hour, minute] of scheduleKeys) {
@@ -4085,6 +4090,148 @@ async function sendGithubDrop(sock) {
     console.log(`[GITHUB-DROP] Enviado: "${dropContent.itemTitle}" (${dropContent.itemId}) fuente=${dropContent.summaryResult?.source || 'unknown'} intentos=${dropContent.summaryResult?.attempts || 0}`);
 }
 
+function buildOsintSummaryFallback(repo) {
+    return [
+        `${String(repo?.full_name || '').toUpperCase()} | potencia táctica para tu reconocimiento`,
+        '',
+        `¿Qué hace?: ${repo?.full_name || 'Este repo'} está orientado a tareas de ciberseguridad y OSINT para acelerar reconocimiento técnico y validación de hallazgos. Tiene valor porque ayuda a aterrizar trabajo real de footprinting y pruebas controladas con una base abierta.`,
+        '',
+        `Arsenal:`,
+        `- 🛰️ Automatiza parte del reconocimiento y la recolección técnica.`,
+        `- 🧰 Sirve como base reutilizable para laboratorios, PoC o auditorías controladas.`,
+        `- 🔎 Puede apoyar procesos de análisis, mapeo de superficie o validación operativa.`,
+        '',
+        `Escenario: Ideal para: Bug Bounty, Footprinting.`,
+        `Disclaimer: Úsalo solo con autorización; emplearlo contra sistemas ajenos es ilegal.`
+    ].join('\n');
+}
+
+async function generateOsintRepoSummary(repo) {
+    const systemPrompt = "Eres un Pentester Senior y experto en OSINT para un grupo de WhatsApp. REGLA ABSOLUTA: Tu respuesta DEBE estar en español de México. FORMATO ESTRICTO: 1. Título: '[Nombre Repo] | [Su objetivo letal]'. 2. ¿Qué hace?: 2 líneas explicando su función técnica. 3. Arsenal: 3 viñetas técnicas con lo que incluye (usa emojis). 4. Escenario: 'Ideal para: [2 casos tácticos, ej. Bug Bounty, Footprinting]'. 5. Disclaimer ÉTICO OBLIGATORIO: Advierte brevemente que su uso sin autorización es ilegal. 6. Cero comillas.";
+    const userPrompt = "Analiza este repositorio de ciberseguridad y devuelve la reseña técnica en el formato estricto:\n\nRepo: " + repo.full_name + "\nInfo: " + repo.description;
+    const summary = sanitizeText(await generateAIContent(systemPrompt, userPrompt, 350), 2000);
+    return summary || buildOsintSummaryFallback(repo);
+}
+
+async function fetchTopOsintRepos() {
+    try {
+        const requestHeaders = {
+            'User-Agent': 'NodeJS:CastorBot:v1.0'
+        };
+        const mapGithubItems = (items) => items
+            .map((repo) => ({
+                id: Number(repo?.id),
+                full_name: String(repo?.full_name || '').trim(),
+                description: repo?.description == null ? 'Herramienta táctica sin descripción' : String(repo.description).trim() || 'Herramienta táctica sin descripción',
+                html_url: String(repo?.html_url || '').trim(),
+                stargazers_count: Number(repo?.stargazers_count || 0),
+                updated_at: String(repo?.updated_at || '').trim()
+            }))
+            .filter((repo) => Number.isInteger(repo.id) && repo.full_name && repo.html_url);
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        const response = await fetch('https://api.github.com/search/repositories?q=topic:osint+OR+topic:red-team+OR+topic:pentesting+OR+topic:bug-bounty+stars:>30&sort=updated&order=desc&per_page=15', {
+            headers: {
+                ...requestHeaders
+            },
+            signal: controller.signal
+        });
+        clearTimeout(timeout);
+        if (response.ok) {
+            const data = await response.json();
+            const items = Array.isArray(data?.items) ? data.items : [];
+            const directRepos = mapGithubItems(items);
+            if (directRepos.length > 0) {
+                return directRepos.map(({ updated_at, ...repo }) => repo);
+            }
+        } else {
+            console.log(`[OSINT-DROP] GitHub búsqueda directa respondió ${response.status}, activando fallback por tópicos.`);
+        }
+
+        const topicQueries = ['osint', 'red-team', 'pentesting', 'bug-bounty'].map((topic) => {
+            const topicController = new AbortController();
+            const topicTimeout = setTimeout(() => topicController.abort(), 20000);
+            return fetch(`https://api.github.com/search/repositories?q=topic:${encodeURIComponent(topic)}+stars:%3E30&sort=updated&order=desc&per_page=15`, {
+                headers: {
+                    ...requestHeaders
+                },
+                signal: topicController.signal
+            }).then(async (topicResponse) => {
+                clearTimeout(topicTimeout);
+                if (!topicResponse.ok) return [];
+                const payload = await topicResponse.json();
+                const items = Array.isArray(payload?.items) ? payload.items : [];
+                return mapGithubItems(items);
+            }).catch(() => {
+                clearTimeout(topicTimeout);
+                return [];
+            });
+        });
+
+        const topicResults = await Promise.all(topicQueries);
+        const mergedRepos = new Map();
+
+        for (const repo of topicResults.flat()) {
+            const existingRepo = mergedRepos.get(repo.id);
+            if (!existingRepo || new Date(repo.updated_at).getTime() > new Date(existingRepo.updated_at).getTime()) {
+                mergedRepos.set(repo.id, repo);
+            }
+        }
+
+        return [...mergedRepos.values()]
+            .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+            .slice(0, 15)
+            .map(({ updated_at, ...repo }) => repo);
+    } catch (error) {
+        console.error('[OSINT-DROP] Error obteniendo repositorios OSINT de GitHub:', error?.message || error);
+        return [];
+    }
+}
+
+async function sendOsintDrop(sock) {
+    if (PROACTIVE_GROUP_JIDS.length === 0) return;
+
+    const repos = await fetchTopOsintRepos();
+    if (repos.length === 0) return;
+
+    const state = getProactiveState();
+    const osintTracking = normalizeNumericTrackingList(state.osintTracking, 50);
+    const repo = repos.find((item) => !osintTracking.includes(item.id));
+    if (!repo) return;
+
+    const summary = await generateOsintRepoSummary(repo);
+    if (!summary) return;
+
+    const message = [
+        `${CASTOR_EMOJI} *Arsenal Cyber 🏴‍☠️*`,
+        '',
+        summary,
+        '',
+        `⭐ Estrellas: ${repo.stargazers_count}`,
+        repo.html_url
+    ].join('\n');
+
+    for (const groupJid of PROACTIVE_GROUP_JIDS) {
+        try {
+            await sock.sendMessage(groupJid, { text: message });
+        } catch (groupError) {
+            console.error(`[OSINT-DROP] Error enviando a ${groupJid}:`, groupError?.message || groupError);
+        }
+
+        if (PROACTIVE_GROUP_JIDS.length > 1) {
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+    }
+
+    updateProactiveState({
+        osintTracking: [...osintTracking, repo.id].slice(-50),
+        currentSource: 'osint',
+        lastOsintSentAt: new Date().toISOString()
+    });
+    console.log(`[OSINT-DROP] Enviado: "${repo.full_name}" (${repo.id})`);
+}
+
 function decodeHtmlEntities(value) {
     return String(value || '')
         .replace(/&#(\d+);/g, (_, code) => {
@@ -4750,7 +4897,7 @@ function startProactiveScheduler(sock) {
     console.log(`[PROACTIVO] Scheduler iniciado. Grupos: ${PROACTIVE_GROUP_JIDS.join(', ')}`);
     console.log(`[PROACTIVO] Prompt: cada ${PROACTIVE_PROMPT_INTERVAL_MS / 3600000}h | Random: cada ${PROACTIVE_RANDOM_USER_INTERVAL_MS / 3600000}h`);
     console.log(`[PROACTIVO] Horarios fijos CDMX -> Showcase #1: ${String(PROACTIVE_SHOWCASE_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_DAILY_MINUTE).padStart(2, '0')} | Showcase #2: ${String(PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE).padStart(2, '0')} | Random: ${String(PROACTIVE_RANDOM_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_RANDOM_DAILY_MINUTE).padStart(2, '0')}`);
-    console.log(`[PROACTIVO] Drops CDMX -> Mañana: ${String(PROACTIVE_ARTICLE_MORNING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_MORNING_MINUTE).padStart(2, '0')} | Tarde: ${String(PROACTIVE_ARTICLE_EVENING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_EVENING_MINUTE).padStart(2, '0')}`);
+    console.log(`[PROACTIVO] Drops CDMX -> Mañana: ${String(PROACTIVE_ARTICLE_MORNING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_MORNING_MINUTE).padStart(2, '0')} | Tarde: ${String(PROACTIVE_ARTICLE_EVENING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_EVENING_MINUTE).padStart(2, '0')} | OSINT: ${String(PROACTIVE_OSINT_HOUR).padStart(2, '0')}:${String(PROACTIVE_OSINT_MINUTE).padStart(2, '0')}`);
     proactiveCheckInterval = setInterval(async () => {
         if (activeSock !== sock) return;
         if (proactiveCheckRunning) return;
@@ -4810,6 +4957,15 @@ function startProactiveScheduler(sock) {
                 if (activeSock === sock) {
                     await sendAlternatingDrop(sock);
                     updateProactiveState({ lastDropDailyDateEvening: todayKey });
+                }
+                return;
+            }
+            if (currentState.lastOsintDailyDate !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_OSINT_HOUR, PROACTIVE_OSINT_MINUTE)) {
+                const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
+                await new Promise((resolve) => setTimeout(resolve, jitter));
+                if (activeSock === sock) {
+                    await sendOsintDrop(sock);
+                    updateProactiveState({ lastOsintDailyDate: todayKey });
                 }
                 return;
             }
