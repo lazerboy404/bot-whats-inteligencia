@@ -521,7 +521,10 @@ function normalizeRandomUserFollowUps(value) {
                 const topic = cleanRandomUserTopic(item?.topic || '');
                 const promptMessageId = String(item?.promptMessageId || '').trim();
                 const assignedAtMs = new Date(item?.assignedAt || '').getTime();
+                const lastInteractionAtMs = new Date(item?.lastInteractionAt || item?.assignedAt || '').getTime();
+                const lastBotReplyAtMs = new Date(item?.lastBotReplyAt || item?.assignedAt || '').getTime();
                 const expiresAtMs = new Date(item?.expiresAt || '').getTime();
+                const replyCount = Math.max(0, Number(item?.replyCount) || 0);
                 if (!groupJid.endsWith('@g.us') || !targetJid || !topic) {
                     return null;
                 }
@@ -534,6 +537,9 @@ function normalizeRandomUserFollowUps(value) {
                     topic,
                     promptMessageId,
                     assignedAt: new Date(assignedAtMs).toISOString(),
+                    lastInteractionAt: Number.isFinite(lastInteractionAtMs) ? new Date(lastInteractionAtMs).toISOString() : new Date(assignedAtMs).toISOString(),
+                    lastBotReplyAt: Number.isFinite(lastBotReplyAtMs) ? new Date(lastBotReplyAtMs).toISOString() : new Date(assignedAtMs).toISOString(),
+                    replyCount,
                     expiresAt: new Date(expiresAtMs).toISOString()
                 };
             })
@@ -2748,6 +2754,25 @@ function removePendingRandomUserFollowUp(followUps, groupJid, targetJid) {
         .filter((item) => !(item.groupJid === groupJid && item.targetJid === targetJid));
 }
 
+function extendPendingRandomUserFollowUpConversation(followUps, pendingFollowUp) {
+    const nowIso = new Date().toISOString();
+    const nextExpiresAt = new Date(Date.now() + RANDOM_USER_REPLY_WINDOW_MS).toISOString();
+    return normalizeRandomUserFollowUps(
+        normalizeRandomUserFollowUps(followUps).map((item) => {
+            if (item.groupJid !== pendingFollowUp.groupJid || item.targetJid !== pendingFollowUp.targetJid) {
+                return item;
+            }
+            return {
+                ...item,
+                lastInteractionAt: nowIso,
+                lastBotReplyAt: nowIso,
+                replyCount: Math.max(0, Number(item.replyCount) || 0) + 1,
+                expiresAt: nextExpiresAt
+            };
+        })
+    );
+}
+
 async function generateRandomUserReplyPerspective(topic, responseText) {
     const cleanTopic = cleanRandomUserTopic(topic || '');
     const cleanResponse = sanitizeText(responseText || '', 700);
@@ -2795,7 +2820,7 @@ async function maybeHandlePendingRandomUserFollowUp(sock, msg, remoteJid, sender
 
     await sock.sendMessage(remoteJid, { text: replyText, mentions: [senderJid] }, { quoted: msg });
     updateProactiveState({
-        pendingRandomUserFollowUps: removePendingRandomUserFollowUp(followUps, remoteJid, senderJid)
+        pendingRandomUserFollowUps: extendPendingRandomUserFollowUpConversation(followUps, pendingFollowUp)
     });
     return true;
 }
@@ -4348,6 +4373,9 @@ async function sendRandomUserSelection(sock) {
                 topic,
                 promptMessageId: String(sentMessage?.key?.id || '').trim(),
                 assignedAt: new Date().toISOString(),
+                lastInteractionAt: new Date().toISOString(),
+                lastBotReplyAt: new Date().toISOString(),
+                replyCount: 0,
                 expiresAt: new Date(Date.now() + RANDOM_USER_REPLY_WINDOW_MS).toISOString()
             });
             const topicKey = normalizeRandomTopicKey(topic);
