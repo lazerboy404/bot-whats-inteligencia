@@ -90,8 +90,6 @@ const PROACTIVE_ARTICLE_MORNING_HOUR = Number(process.env.PROACTIVE_ARTICLE_MORN
 const PROACTIVE_ARTICLE_MORNING_MINUTE = Number(process.env.PROACTIVE_ARTICLE_MORNING_MINUTE || 0);
 const PROACTIVE_ARTICLE_EVENING_HOUR = Number(process.env.PROACTIVE_ARTICLE_EVENING_HOUR || 18);
 const PROACTIVE_ARTICLE_EVENING_MINUTE = Number(process.env.PROACTIVE_ARTICLE_EVENING_MINUTE || 0);
-const PROACTIVE_OSINT_HOUR = Number(process.env.PROACTIVE_OSINT_HOUR || 20);
-const PROACTIVE_OSINT_MINUTE = Number(process.env.PROACTIVE_OSINT_MINUTE || 0);
 const GITHUB_SEEN_TRACKING_LIMIT = Number(process.env.GITHUB_SEEN_TRACKING_LIMIT || 500);
 const RANDOM_TOPIC_TRACKING_LIMIT = Number(process.env.RANDOM_TOPIC_TRACKING_LIMIT || 500);
 const RANDOM_TOPIC_PROMPT_HISTORY_LIMIT = Number(process.env.RANDOM_TOPIC_PROMPT_HISTORY_LIMIT || 30);
@@ -1364,8 +1362,7 @@ function getStartupDailyScheduleUpdates(state, mexicoNow) {
         ['lastShowcaseDailyDateAfternoon', PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR, PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE],
         ['lastRandomDailyDate', PROACTIVE_RANDOM_DAILY_HOUR, PROACTIVE_RANDOM_DAILY_MINUTE],
         ['lastDropDailyDateMorning', PROACTIVE_ARTICLE_MORNING_HOUR, PROACTIVE_ARTICLE_MORNING_MINUTE],
-        ['lastDropDailyDateEvening', PROACTIVE_ARTICLE_EVENING_HOUR, PROACTIVE_ARTICLE_EVENING_MINUTE],
-        ['lastOsintDailyDate', PROACTIVE_OSINT_HOUR, PROACTIVE_OSINT_MINUTE]
+        ['lastDropDailyDateEvening', PROACTIVE_ARTICLE_EVENING_HOUR, PROACTIVE_ARTICLE_EVENING_MINUTE]
     ];
 
     for (const [stateKey, hour, minute] of scheduleKeys) {
@@ -4897,7 +4894,7 @@ function startProactiveScheduler(sock) {
     console.log(`[PROACTIVO] Scheduler iniciado. Grupos: ${PROACTIVE_GROUP_JIDS.join(', ')}`);
     console.log(`[PROACTIVO] Prompt: cada ${PROACTIVE_PROMPT_INTERVAL_MS / 3600000}h | Random: cada ${PROACTIVE_RANDOM_USER_INTERVAL_MS / 3600000}h`);
     console.log(`[PROACTIVO] Horarios fijos CDMX -> Showcase #1: ${String(PROACTIVE_SHOWCASE_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_DAILY_MINUTE).padStart(2, '0')} | Showcase #2: ${String(PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE).padStart(2, '0')} | Random: ${String(PROACTIVE_RANDOM_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_RANDOM_DAILY_MINUTE).padStart(2, '0')}`);
-    console.log(`[PROACTIVO] Drops CDMX -> Mañana: ${String(PROACTIVE_ARTICLE_MORNING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_MORNING_MINUTE).padStart(2, '0')} | Tarde: ${String(PROACTIVE_ARTICLE_EVENING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_EVENING_MINUTE).padStart(2, '0')} | OSINT: ${String(PROACTIVE_OSINT_HOUR).padStart(2, '0')}:${String(PROACTIVE_OSINT_MINUTE).padStart(2, '0')}`);
+    console.log(`[PROACTIVO] Drops CDMX -> 11am Código Abierto: ${String(PROACTIVE_ARTICLE_MORNING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_MORNING_MINUTE).padStart(2, '0')} | 6pm Arsenal Cyber: ${String(PROACTIVE_ARTICLE_EVENING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_EVENING_MINUTE).padStart(2, '0')}`);
     proactiveCheckInterval = setInterval(async () => {
         if (activeSock !== sock) return;
         if (proactiveCheckRunning) return;
@@ -4955,17 +4952,8 @@ function startProactiveScheduler(sock) {
                 const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
                 await new Promise((resolve) => setTimeout(resolve, jitter));
                 if (activeSock === sock) {
-                    await sendAlternatingDrop(sock);
-                    updateProactiveState({ lastDropDailyDateEvening: todayKey });
-                }
-                return;
-            }
-            if (currentState.lastOsintDailyDate !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_OSINT_HOUR, PROACTIVE_OSINT_MINUTE)) {
-                const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
-                await new Promise((resolve) => setTimeout(resolve, jitter));
-                if (activeSock === sock) {
                     await sendOsintDrop(sock);
-                    updateProactiveState({ lastOsintDailyDate: todayKey });
+                    updateProactiveState({ lastDropDailyDateEvening: todayKey });
                 }
                 return;
             }
