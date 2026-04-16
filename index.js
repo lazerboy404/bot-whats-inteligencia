@@ -53,6 +53,7 @@ let sessionResetDoneThisBoot = false;
 let startupShowcaseSentRunId = 0;
 let lastSocketActivityAt = Date.now();
 let lastCommandHandledAt = 0;
+let proactiveStartupSweepApplied = false;
 const processedMessageIds = new Set();
 const incomingQueue = [];
 let isProcessingIncoming = false;
@@ -99,6 +100,9 @@ const RANDOM_USER_FOLLOWUP_LIMIT = Number(process.env.RANDOM_USER_FOLLOWUP_LIMIT
 const RANDOM_USER_REPLY_WINDOW_MS = Number(process.env.RANDOM_USER_REPLY_WINDOW_MS || (24 * 60 * 60 * 1000));
 const RANDOM_USER_DUEL_CHANCE = Math.min(1, Math.max(0, Number(process.env.RANDOM_USER_DUEL_CHANCE || (1 / 3))));
 const PROACTIVE_JITTER_MS = Number(process.env.PROACTIVE_JITTER_MS || (5 * 1000));
+const PROACTIVE_STARTUP_RECOVERY_WINDOW_MS = Number(process.env.PROACTIVE_STARTUP_RECOVERY_WINDOW_MS || (30 * 60 * 1000));
+const EFFECTIVE_BOT_STALE_SOCKET_MS = Math.max(BOT_STALE_SOCKET_MS, BOT_PRESENCE_KEEPALIVE_MS + (BOT_HEALTHCHECK_INTERVAL_MS * 2));
+const EFFECTIVE_PROACTIVE_JITTER_MS = Math.min(PROACTIVE_JITTER_MS, 15000);
 const PROACTIVE_SHOWCASE_INTERVAL_MS = Number(process.env.PROACTIVE_SHOWCASE_INTERVAL_MS || (60 * 1000));
 const PROACTIVE_SHOWCASE_PROMPT_GAP_MS = Number(process.env.PROACTIVE_SHOWCASE_PROMPT_GAP_MS || (2 * 60 * 1000));
 const PROACTIVE_SEND_SHOWCASE_ON_START = !['0', 'false', 'no', 'off'].includes(String(process.env.PROACTIVE_SEND_SHOWCASE_ON_START || 'false').toLowerCase());
@@ -1369,6 +1373,17 @@ function hasReachedMexicoTime(dateObj, hour, minute) {
     return currentMinutes >= targetMinutes;
 }
 
+function getMexicoScheduledDate(dateObj, hour, minute) {
+    const scheduledDate = new Date(dateObj);
+    scheduledDate.setHours(hour, minute, 0, 0);
+    return scheduledDate;
+}
+
+function hasExceededMexicoRecoveryWindow(dateObj, hour, minute, recoveryWindowMs = PROACTIVE_STARTUP_RECOVERY_WINDOW_MS) {
+    const scheduledDate = getMexicoScheduledDate(dateObj, hour, minute);
+    return (dateObj.getTime() - scheduledDate.getTime()) >= recoveryWindowMs;
+}
+
 function getStartupDailyScheduleUpdates(state, mexicoNow) {
     const currentState = normalizeProactiveState(state);
     const todayKey = getMexicoDateKey(mexicoNow);
@@ -1383,7 +1398,7 @@ function getStartupDailyScheduleUpdates(state, mexicoNow) {
 
     for (const [stateKey, hour, minute] of scheduleKeys) {
         if (currentState[stateKey] === todayKey) continue;
-        if (!hasReachedMexicoTime(mexicoNow, hour, minute)) continue;
+        if (!hasExceededMexicoRecoveryWindow(mexicoNow, hour, minute)) continue;
         updates[stateKey] = todayKey;
     }
 
@@ -5805,19 +5820,22 @@ async function buildPreviewRotatingKnowledgeDropContent(state, slotOffset = 0) {
 }
 
 async function sendAlternatingDrop(sock) {
-    if (PROACTIVE_GROUP_JIDS.length === 0) return;
+    if (PROACTIVE_GROUP_JIDS.length === 0) return false;
 
     const dropContent = await buildRotatingKnowledgeDropContent(getProactiveState());
-    if (!dropContent) return;
+    if (!dropContent) return false;
 
+    let deliveredGroups = 0;
     for (const groupJid of PROACTIVE_GROUP_JIDS) {
         try {
             await sock.sendMessage(groupJid, dropContent.payload);
+            deliveredGroups += 1;
         } catch (groupError) {
             console.error(`[ROTATING-DROP] Error enviando ${dropContent.source} a ${groupJid}:`, groupError?.message || groupError);
             if (dropContent.textFallback) {
                 try {
                     await sock.sendMessage(groupJid, { text: dropContent.textFallback });
+                    deliveredGroups += 1;
                 } catch (fallbackError) {
                     console.error(`[ROTATING-DROP] Error enviando fallback de ${dropContent.source} a ${groupJid}:`, fallbackError?.message || fallbackError);
                 }
@@ -5829,6 +5847,11 @@ async function sendAlternatingDrop(sock) {
         }
     }
 
+    if (deliveredGroups === 0) {
+        console.log(`[ROTATING-DROP] Sin entregas para "${dropContent.itemTitle}". Se mantiene pendiente el horario.`);
+        return false;
+    }
+
     updateProactiveState({
         ...dropContent.trackingUpdate,
         currentSource: dropContent.source,
@@ -5837,6 +5860,7 @@ async function sendAlternatingDrop(sock) {
         lastDropSource: dropContent.source
     });
     console.log(`[ROTATING-DROP] Enviado: "${dropContent.itemTitle}" fuente=${dropContent.source} cursor=${dropContent.nextCategoryCursor} resumen=${dropContent.summaryResult?.source || 'unknown'} intentos=${dropContent.summaryResult?.attempts || 0}`);
+    return true;
 }
 
 async function sendOsintDrop(sock) {
@@ -5867,7 +5891,7 @@ async function sendOsintDrop(sock) {
 }
 
 async function sendPromptShowcase(sock) {
-    if (PROACTIVE_GROUP_JIDS.length === 0) return;
+    if (PROACTIVE_GROUP_JIDS.length === 0) return false;
     try {
         const state = getProactiveState();
         let tracking = normalizeShowcaseTracking(state.showcaseTracking);
@@ -5883,7 +5907,7 @@ async function sendPromptShowcase(sock) {
         const showcases = await fetchShowcaseData(repoDef);
         if (!showcases || showcases.length === 0) {
             console.log(`[SHOWCASE] No hay showcases disponibles en ${repoDef.id}`);
-            return;
+            return false;
         }
         
         let available = showcases.map((s, i) => i).filter((i) => !sentIndices.includes(i));
@@ -5965,6 +5989,7 @@ async function sendPromptShowcase(sock) {
         const captionText = captionLines.join('\n');
         
         let imageLabels = [];
+        let deliveredGroups = 0;
         if (showcase.imageUrls.length > 1) {
             try {
                 const fileNames = showcase.imageUrls.map(u => u.substring(u.lastIndexOf('/') + 1));
@@ -6005,6 +6030,7 @@ REGLA ESTRICTA: Devuelve ÚNICAMENTE un arreglo en formato JSON válido con exac
                 if (showcase.imageUrls.length > 1) {
                     // Enviar texto principal separado si hay múltiples imágenes
                     await sock.sendMessage(groupJid, { text: captionText });
+                    deliveredGroups += 1;
                     
                     // Enviar imágenes en orden
                     for (let i = 0; i < showcase.imageUrls.length; i++) {
@@ -6026,9 +6052,11 @@ REGLA ESTRICTA: Devuelve ÚNICAMENTE un arreglo en formato JSON válido con exac
                             image: { url: showcase.imageUrls[0] },
                             caption: captionText
                         });
+                        deliveredGroups += 1;
                     } catch (imgError) {
                         console.error(`[SHOWCASE] Error enviando imagen única a ${groupJid}:`, imgError?.message);
                         await sock.sendMessage(groupJid, { text: captionText });
+                        deliveredGroups += 1;
                     }
                 }
                 
@@ -6054,15 +6082,22 @@ REGLA ESTRICTA: Devuelve ÚNICAMENTE un arreglo en formato JSON válido con exac
             }
             if (PROACTIVE_GROUP_JIDS.length > 1) await new Promise((r) => setTimeout(r, 3000));
         }
-        
+
+        if (deliveredGroups === 0) {
+            console.log(`[SHOWCASE] Sin entregas para "${finalTitle}". Se mantiene pendiente el horario.`);
+            return false;
+        }
+
         tracking[repoDef.id].push(selectedIndex);
         updateProactiveState({
             lastShowcaseSentAt: new Date().toISOString(),
             showcaseTracking: tracking
         });
         console.log(`[SHOWCASE] Enviado: "${finalTitle}" (repo: ${repoDef.id}, quedan ${available.length - 1} sin enviar)`);
+        return true;
     } catch (error) {
         console.error('[SHOWCASE] Error enviando showcase:', error?.message || error);
+        return false;
     }
 }
 
@@ -6188,7 +6223,7 @@ async function sendRandomUserSelection(sock) {
 }
 
 async function sendRandomUserSelection(sock) {
-    if (PROACTIVE_GROUP_JIDS.length === 0) return;
+    if (PROACTIVE_GROUP_JIDS.length === 0) return false;
     const state = getProactiveState();
     const todayKey = getMexicoDateKey(getMexicoNow());
     const randomTopicTracking = normalizeStringTrackingList(state.randomTopicTracking, RANDOM_TOPIC_TRACKING_LIMIT);
@@ -6196,6 +6231,7 @@ async function sendRandomUserSelection(sock) {
     let pendingRandomUserFollowUps = normalizeRandomUserFollowUps(state.pendingRandomUserFollowUps);
     const usedTopicKeys = new Set(randomTopicTracking.map((topic) => normalizeRandomTopicKey(topic)));
     const topicsUsedThisRun = [];
+    let deliveredGroups = 0;
 
     for (const groupJid of PROACTIVE_GROUP_JIDS) {
         try {
@@ -6253,6 +6289,7 @@ async function sendRandomUserSelection(sock) {
                 text,
                 mentions: selectedParticipants.map((participant) => participant.id)
             });
+            deliveredGroups += 1;
 
             rotationEntry.remaining = rotationEntry.remaining.slice(selectedParticipants.length);
             randomUserRotationByGroup[groupJid] = rotationEntry;
@@ -6286,6 +6323,11 @@ async function sendRandomUserSelection(sock) {
         if (PROACTIVE_GROUP_JIDS.length > 1) await new Promise((r) => setTimeout(r, 3000));
     }
 
+    if (deliveredGroups === 0) {
+        console.log('[PROACTIVO] Selección aleatoria sin entregas. Se mantiene pendiente el horario.');
+        return false;
+    }
+
     const proactiveUpdates = { lastRandomUserAt: new Date().toISOString() };
     if (topicsUsedThisRun.length > 0) {
         proactiveUpdates.randomTopicTracking = [...randomTopicTracking, ...topicsUsedThisRun].slice(-RANDOM_TOPIC_TRACKING_LIMIT);
@@ -6293,6 +6335,7 @@ async function sendRandomUserSelection(sock) {
     proactiveUpdates.randomUserRotationByGroup = randomUserRotationByGroup;
     proactiveUpdates.pendingRandomUserFollowUps = pendingRandomUserFollowUps;
     updateProactiveState(proactiveUpdates);
+    return true;
 }
 
 function startProactiveScheduler(sock) {
@@ -6302,11 +6345,16 @@ function startProactiveScheduler(sock) {
     }
     stopProactiveScheduler();
     const state = getProactiveState();
-    const startupMexicoNow = getMexicoNow();
-    const startupDailyUpdates = getStartupDailyScheduleUpdates(state, startupMexicoNow);
-    if (Object.keys(startupDailyUpdates).length > 0) {
-        updateProactiveState(startupDailyUpdates);
-        console.log(`[PROACTIVO] Horarios pasados marcados como atendidos por reinicio: ${Object.keys(startupDailyUpdates).join(', ')}`);
+    if (!proactiveStartupSweepApplied) {
+        const startupMexicoNow = getMexicoNow();
+        const startupDailyUpdates = getStartupDailyScheduleUpdates(state, startupMexicoNow);
+        proactiveStartupSweepApplied = true;
+        if (Object.keys(startupDailyUpdates).length > 0) {
+            updateProactiveState(startupDailyUpdates);
+            console.log(`[PROACTIVO] Horarios antiguos marcados como atendidos en arranque: ${Object.keys(startupDailyUpdates).join(', ')}`);
+        }
+    } else {
+        console.log('[PROACTIVO] Reinicio de conexión detectado; se conservan los horarios pendientes de hoy.');
     }
     if (state.lastGroupActivityAt) {
         lastGroupActivityAt = Math.max(lastGroupActivityAt, new Date(state.lastGroupActivityAt).getTime());
@@ -6318,6 +6366,7 @@ function startProactiveScheduler(sock) {
     console.log(`[PROACTIVO] Prompt: cada ${PROACTIVE_PROMPT_INTERVAL_MS / 3600000}h | Random: cada ${PROACTIVE_RANDOM_USER_INTERVAL_MS / 3600000}h`);
     console.log(`[PROACTIVO] Horarios fijos CDMX -> Showcase #1: ${String(PROACTIVE_SHOWCASE_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_DAILY_MINUTE).padStart(2, '0')} | Showcase #2: ${String(PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE).padStart(2, '0')} | Random: ${String(PROACTIVE_RANDOM_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_RANDOM_DAILY_MINUTE).padStart(2, '0')}`);
     console.log(`[PROACTIVO] Drops CDMX -> ${String(PROACTIVE_ARTICLE_MORNING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_MORNING_MINUTE).padStart(2, '0')} y ${String(PROACTIVE_ARTICLE_EVENING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_EVENING_MINUTE).padStart(2, '0')} | Rotación: ${KNOWLEDGE_DROP_CATEGORIES.join(', ')}`);
+    console.log(`[PROACTIVO] Jitter efectivo para horarios fijos: ${EFFECTIVE_PROACTIVE_JITTER_MS}ms`);
     proactiveCheckInterval = setInterval(async () => {
         if (activeSock !== sock) return;
         if (proactiveCheckRunning) return;
@@ -6336,47 +6385,67 @@ function startProactiveScheduler(sock) {
                 }
             }
             if (currentState.lastShowcaseDailyDateMorning !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_SHOWCASE_DAILY_HOUR, PROACTIVE_SHOWCASE_DAILY_MINUTE)) {
-                const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
+                const jitter = getRandomDelay(0, EFFECTIVE_PROACTIVE_JITTER_MS);
                 await new Promise((resolve) => setTimeout(resolve, jitter));
                 if (activeSock === sock) {
-                    await sendPromptShowcase(sock);
-                    updateProactiveState({ lastShowcaseDailyDateMorning: todayKey });
+                    const sent = await sendPromptShowcase(sock);
+                    if (sent) {
+                        updateProactiveState({ lastShowcaseDailyDateMorning: todayKey });
+                    } else {
+                        console.log('[PROACTIVO] Showcase matutino no se marcó porque no hubo envío real.');
+                    }
                 }
                 return;
             }
             if (currentState.lastShowcaseDailyDateAfternoon !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR, PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE)) {
-                const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
+                const jitter = getRandomDelay(0, EFFECTIVE_PROACTIVE_JITTER_MS);
                 await new Promise((resolve) => setTimeout(resolve, jitter));
                 if (activeSock === sock) {
-                    await sendPromptShowcase(sock);
-                    updateProactiveState({ lastShowcaseDailyDateAfternoon: todayKey });
+                    const sent = await sendPromptShowcase(sock);
+                    if (sent) {
+                        updateProactiveState({ lastShowcaseDailyDateAfternoon: todayKey });
+                    } else {
+                        console.log('[PROACTIVO] Showcase vespertino no se marcó porque no hubo envío real.');
+                    }
                 }
                 return;
             }
             if (currentState.lastRandomDailyDate !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_RANDOM_DAILY_HOUR, PROACTIVE_RANDOM_DAILY_MINUTE)) {
-                const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
+                const jitter = getRandomDelay(0, EFFECTIVE_PROACTIVE_JITTER_MS);
                 await new Promise((resolve) => setTimeout(resolve, jitter));
                 if (activeSock === sock) {
-                    await sendRandomUserSelection(sock);
-                    updateProactiveState({ lastRandomDailyDate: todayKey });
+                    const sent = await sendRandomUserSelection(sock);
+                    if (sent) {
+                        updateProactiveState({ lastRandomDailyDate: todayKey });
+                    } else {
+                        console.log('[PROACTIVO] Selección aleatoria no se marcó porque no hubo envío real.');
+                    }
                 }
                 return;
             }
             if (currentState.lastDropDailyDateMorning !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_ARTICLE_MORNING_HOUR, PROACTIVE_ARTICLE_MORNING_MINUTE)) {
-                const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
+                const jitter = getRandomDelay(0, EFFECTIVE_PROACTIVE_JITTER_MS);
                 await new Promise((resolve) => setTimeout(resolve, jitter));
                 if (activeSock === sock) {
-                    await sendAlternatingDrop(sock);
-                    updateProactiveState({ lastDropDailyDateMorning: todayKey });
+                    const sent = await sendAlternatingDrop(sock);
+                    if (sent) {
+                        updateProactiveState({ lastDropDailyDateMorning: todayKey });
+                    } else {
+                        console.log('[PROACTIVO] Drop de la mañana no se marcó porque no hubo envío real.');
+                    }
                 }
                 return;
             }
             if (currentState.lastDropDailyDateEvening !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_ARTICLE_EVENING_HOUR, PROACTIVE_ARTICLE_EVENING_MINUTE)) {
-                const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
+                const jitter = getRandomDelay(0, EFFECTIVE_PROACTIVE_JITTER_MS);
                 await new Promise((resolve) => setTimeout(resolve, jitter));
                 if (activeSock === sock) {
-                    await sendAlternatingDrop(sock);
-                    updateProactiveState({ lastDropDailyDateEvening: todayKey });
+                    const sent = await sendAlternatingDrop(sock);
+                    if (sent) {
+                        updateProactiveState({ lastDropDailyDateEvening: todayKey });
+                    } else {
+                        console.log('[PROACTIVO] Drop de la tarde no se marcó porque no hubo envío real.');
+                    }
                 }
                 return;
             }
@@ -6454,12 +6523,15 @@ function startHealthWatchdog() {
     if (healthWatchInterval) {
         return;
     }
+    if (EFFECTIVE_BOT_STALE_SOCKET_MS !== BOT_STALE_SOCKET_MS) {
+        console.log(`[WATCHDOG] Ajustando stale socket efectivo de ${BOT_STALE_SOCKET_MS}ms a ${EFFECTIVE_BOT_STALE_SOCKET_MS}ms para no chocar con el keepalive.`);
+    }
     healthWatchInterval = setInterval(() => {
         if (!activeSock || isStartingBot) {
             return;
         }
         const idleMs = Date.now() - lastSocketActivityAt;
-        if (idleMs >= BOT_STALE_SOCKET_MS) {
+        if (idleMs >= EFFECTIVE_BOT_STALE_SOCKET_MS) {
             const lastCommandAgo = lastCommandHandledAt ? `${Date.now() - lastCommandHandledAt}ms` : 'sin comandos previos';
             console.log(`Watchdog detectó socket inactivo por ${idleMs}ms. Último comando: ${lastCommandAgo}. Reiniciando conexión.`);
             scheduleReconnect('watchdog_stale_socket');
