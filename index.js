@@ -4109,10 +4109,10 @@ function buildOsintSummaryFallback(repo) {
         '',
         `¿Qué hace?: ${repo?.full_name || 'Este repo'} sirve para mover más rápido tareas de reconocimiento, enumeración y análisis técnico sin arrancar desde cero. Aporta valor porque te deja mapear superficie, correlacionar señales y montar flujos más útiles para laboratorio o evaluación controlada.`,
         '',
-        `🧰 Arsenal:`,
-        `- 🛰️ Automatiza parte de la enumeración y la recolección de señales útiles.`,
-        `- 🧰 Te da una base reutilizable para labs, PoC y validaciones con enfoque ofensivo controlado.`,
-        `- 🔎 Ayuda a mapear superficie, perfilar objetivos y pivotear hallazgos con más contexto.`,
+        `Arsenal:`,
+        `- Automatiza parte de la enumeración y la recolección de señales útiles.`,
+        `- Te da una base reutilizable para labs, PoC y validaciones con enfoque ofensivo controlado.`,
+        `- Ayuda a mapear superficie, perfilar objetivos y pivotear hallazgos con más contexto.`,
         '',
         `🎯 Escenario: Ideal para: Footprinting, Bug Bounty.`,
         `Disclaimer: Úsalo solo con autorización; meterlo contra sistemas ajenos o fuera de alcance es ilegal.`
@@ -4124,6 +4124,12 @@ function normalizeOsintChunk(value) {
         .replace(/\s+/g, ' ')
         .replace(/^[\s:;,.|-]+/, '')
         .replace(/[\s:;,.|-]+$/, '')
+        .trim();
+}
+
+function stripLeadingOsintEmoji(value) {
+    return String(value || '')
+        .replace(/^(?:[\p{Extended_Pictographic}\p{So}\uFE0F\u200D]+\s*)+/gu, '')
         .trim();
 }
 
@@ -4272,7 +4278,7 @@ function formatOsintSummaryText(text, repoFullName = '') {
     }
 
     const cleanedArsenal = arsenal
-        .map((item) => normalizeOsintChunk(item))
+        .map((item) => stripLeadingOsintEmoji(normalizeOsintChunk(item)))
         .filter((item) => item.length >= 10)
         .filter((item) => !/^[^a-záéíóúñ0-9]*$/i.test(item))
         .filter(Boolean)
@@ -4306,7 +4312,7 @@ function formatOsintSummaryText(text, repoFullName = '') {
         '',
         `¿Qué hace?: ${whatDoes.replace(/\s+/g, ' ').trim()}`,
         '',
-        '🧰 Arsenal:',
+        'Arsenal:',
         ...(cleanedArsenal.length > 0 ? cleanedArsenal.map((item) => `- ${item}`) : [
             '- Automatiza parte del reconocimiento y la recolección técnica.',
             '- Sirve como base reutilizable para laboratorios, PoC o auditorías controladas.',
