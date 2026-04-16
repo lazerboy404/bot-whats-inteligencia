@@ -4095,17 +4095,17 @@ async function sendGithubDrop(sock) {
 
 function buildOsintSummaryFallback(repo) {
     return [
-        `${String(repo?.full_name || '').toUpperCase()} | potencia táctica para tu reconocimiento`,
+        `${String(repo?.full_name || '').toUpperCase()} | músculo táctico para reconocimiento y pivoteo`,
         '',
-        `¿Qué hace?: ${repo?.full_name || 'Este repo'} está orientado a tareas de ciberseguridad y OSINT para acelerar reconocimiento técnico y validación de hallazgos. Tiene valor porque ayuda a aterrizar trabajo real de footprinting y pruebas controladas con una base abierta.`,
+        `¿Qué hace?: ${repo?.full_name || 'Este repo'} sirve para mover más rápido tareas de reconocimiento, enumeración y análisis técnico sin arrancar desde cero. Aporta valor porque te deja mapear superficie, correlacionar señales y montar flujos más útiles para laboratorio o evaluación controlada.`,
         '',
         `Arsenal:`,
-        `- 🛰️ Automatiza parte del reconocimiento y la recolección técnica.`,
-        `- 🧰 Sirve como base reutilizable para laboratorios, PoC o auditorías controladas.`,
-        `- 🔎 Puede apoyar procesos de análisis, mapeo de superficie o validación operativa.`,
+        `- 🛰️ Automatiza parte de la enumeración y la recolección de señales útiles.`,
+        `- 🧰 Te da una base reutilizable para labs, PoC y validaciones con enfoque ofensivo controlado.`,
+        `- 🔎 Ayuda a mapear superficie, perfilar objetivos y pivotear hallazgos con más contexto.`,
         '',
-        `Escenario: Ideal para: Bug Bounty, Footprinting.`,
-        `Disclaimer: Úsalo solo con autorización; emplearlo contra sistemas ajenos es ilegal.`
+        `Escenario: Ideal para: Footprinting, Bug Bounty.`,
+        `Disclaimer: Úsalo solo con autorización; meterlo contra sistemas ajenos o fuera de alcance es ilegal.`
     ].join('\n');
 }
 
@@ -4240,12 +4240,21 @@ function isWeakOsintRepoSummary(text) {
     if (!value.includes('Escenario:')) return true;
     if (!value.includes('Disclaimer:')) return true;
     if (!/(?:^|\n)-\s+/m.test(value)) return true;
+    const weakPatterns = [
+        /lista estructurada/i,
+        /solución estándar/i,
+        /ofrece una solución/i,
+        /proporciona una lista/i,
+        /en el ámbito de la ciberseguridad/i,
+        /evaluación de habilidades/i
+    ];
+    if (weakPatterns.some((pattern) => pattern.test(value))) return true;
     return false;
 }
 
 async function generateOsintRepoSummary(repo) {
-    const systemPrompt = "Eres un Pentester Senior y experto en OSINT para un grupo de WhatsApp. REGLA ABSOLUTA: Tu respuesta DEBE estar en español de México. FORMATO ESTRICTO: 1. Título: '[Nombre Repo] | [Su objetivo letal]'. 2. ¿Qué hace?: 2 líneas explicando su función técnica. 3. Arsenal: 3 viñetas técnicas con lo que incluye (usa emojis). 4. Escenario: 'Ideal para: [2 casos tácticos, ej. Bug Bounty, Footprinting]'. 5. Disclaimer ÉTICO OBLIGATORIO: Advierte brevemente que su uso sin autorización es ilegal. 6. Cero comillas.";
-    const userPrompt = "Analiza este repositorio de ciberseguridad y devuelve la reseña técnica en el formato estricto:\n\nRepo: " + repo.full_name + "\nInfo: " + repo.description;
+    const systemPrompt = "Eres un operador red team, Pentester Senior y analista OSINT para un grupo de WhatsApp. REGLA ABSOLUTA: Tu respuesta DEBE estar en español de México. TONO OBLIGATORIO: táctico, directo, de operador a operador; no suenes corporativo, académico ni de marketing. FORMATO ESTRICTO: 1. Título: '[Nombre Repo] | [Su ventaja táctica]'. 2. ¿Qué hace?: 2 líneas explicando su función técnica y por qué da ventaja operativa. 3. Arsenal: 3 viñetas técnicas con lo que incluye, cada una con emoji. 4. Escenario: 'Ideal para: [2 casos tácticos reales, ej. Footprinting, Enumeración, Bug Bounty, Surface Mapping]'. 5. Disclaimer ÉTICO OBLIGATORIO: advierte brevemente que usarlo sin autorización es ilegal. 6. Cero comillas.";
+    const userPrompt = "Analiza este repositorio de ciberseguridad y devuelve la reseña táctica en el formato estricto. Evita sonar corporativo o genérico; enfócate en reconocimiento, enumeración, pivotear hallazgos y valor operativo real.\n\nRepo: " + repo.full_name + "\nInfo: " + repo.description;
 
     for (let attempt = 0; attempt < 3; attempt++) {
         const rawSummary = await generateAIContent(systemPrompt, userPrompt, 350);
