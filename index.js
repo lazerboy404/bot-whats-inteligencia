@@ -4099,12 +4099,12 @@ function buildOsintSummaryFallback(repo) {
         '',
         `¿Qué hace?: ${repo?.full_name || 'Este repo'} sirve para mover más rápido tareas de reconocimiento, enumeración y análisis técnico sin arrancar desde cero. Aporta valor porque te deja mapear superficie, correlacionar señales y montar flujos más útiles para laboratorio o evaluación controlada.`,
         '',
-        `Arsenal:`,
+        `🧰 Arsenal:`,
         `- 🛰️ Automatiza parte de la enumeración y la recolección de señales útiles.`,
         `- 🧰 Te da una base reutilizable para labs, PoC y validaciones con enfoque ofensivo controlado.`,
         `- 🔎 Ayuda a mapear superficie, perfilar objetivos y pivotear hallazgos con más contexto.`,
         '',
-        `Escenario: Ideal para: Footprinting, Bug Bounty.`,
+        `🎯 Escenario: Ideal para: Footprinting, Bug Bounty.`,
         `Disclaimer: Úsalo solo con autorización; meterlo contra sistemas ajenos o fuera de alcance es ilegal.`
     ].join('\n');
 }
@@ -4188,8 +4188,8 @@ function formatOsintSummaryText(text, repoFullName = '') {
             continue;
         }
 
-        if (/^¿Qué hace\??\s*:/i.test(line)) {
-            const { lead, bullets } = splitInlineOsintBullets(line.replace(/^¿Qué hace\??\s*:\s*/i, '').trim());
+        if (/^(?:[^\p{L}\p{N}]|\s)*¿Qué hace\??\s*:/iu.test(line)) {
+            const { lead, bullets } = splitInlineOsintBullets(line.replace(/^(?:[^\p{L}\p{N}]|\s)*¿Qué hace\??\s*:\s*/iu, '').trim());
             if (lead) {
                 whatDoes = lead;
             }
@@ -4202,19 +4202,19 @@ function formatOsintSummaryText(text, repoFullName = '') {
             continue;
         }
 
-        if (/^Arsenal\s*:/i.test(line)) {
+        if (/^(?:[^\p{L}\p{N}]|\s)*Arsenal\s*:/iu.test(line)) {
             section = 'arsenal';
             continue;
         }
 
-        if (/^(Escenario|Ideal para)\s*:/i.test(line)) {
-            scenario = line.replace(/^(Escenario|Ideal para)\s*:\s*/i, '').trim();
+        if (/^(?:[^\p{L}\p{N}]|\s)*(Escenario|Ideal para)\s*:/iu.test(line)) {
+            scenario = line.replace(/^(?:[^\p{L}\p{N}]|\s)*(Escenario|Ideal para)\s*:\s*/iu, '').trim();
             section = 'scenario';
             continue;
         }
 
-        if (/^(?:Disclaimer|Nota ética|Nota etica|Advertencia ética|Advertencia etica|Uso ético|Uso etico|⚠️|☠️)/i.test(line)) {
-            disclaimer = line.replace(/^(?:Disclaimer(?:\s+ÉTICO OBLIGATORIO)?|Nota ética(?:\s+importante)?|Nota etica(?:\s+importante)?|Advertencia ética|Advertencia etica|Uso ético|Uso etico|⚠️|☠️)\s*:?\s*/i, '').trim();
+        if (/^(?:[^\p{L}\p{N}]|\s)*(?:Disclaimer|Nota ética|Nota etica|Advertencia ética|Advertencia etica|Uso ético|Uso etico|⚠️|☠️)/iu.test(line)) {
+            disclaimer = line.replace(/^(?:[^\p{L}\p{N}]|\s)*(?:Disclaimer(?:\s+ÉTICO OBLIGATORIO)?|Nota ética(?:\s+importante)?|Nota etica(?:\s+importante)?|Advertencia ética|Advertencia etica|Uso ético|Uso etico|⚠️|☠️)\s*:?\s*/iu, '').trim();
             section = 'disclaimer';
             continue;
         }
@@ -4294,14 +4294,14 @@ function formatOsintSummaryText(text, repoFullName = '') {
         '',
         `¿Qué hace?: ${whatDoes.replace(/\s+/g, ' ').trim()}`,
         '',
-        'Arsenal:',
+        '🧰 Arsenal:',
         ...(cleanedArsenal.length > 0 ? cleanedArsenal.map((item) => `- ${item}`) : [
             '- Automatiza parte del reconocimiento y la recolección técnica.',
             '- Sirve como base reutilizable para laboratorios, PoC o auditorías controladas.',
             '- Puede apoyar procesos de análisis, mapeo de superficie o validación operativa.'
         ]),
         '',
-        `Escenario: Ideal para: ${normalizedScenario}`,
+        `🎯 Escenario: Ideal para: ${normalizedScenario}`,
         `⚠️ ☠️ Disclaimer: ${normalizedDisclaimer}`
     ].join('\n');
 }
