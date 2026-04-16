@@ -90,6 +90,7 @@ const PROACTIVE_ARTICLE_MORNING_HOUR = Number(process.env.PROACTIVE_ARTICLE_MORN
 const PROACTIVE_ARTICLE_MORNING_MINUTE = Number(process.env.PROACTIVE_ARTICLE_MORNING_MINUTE || 0);
 const PROACTIVE_ARTICLE_EVENING_HOUR = Number(process.env.PROACTIVE_ARTICLE_EVENING_HOUR || 18);
 const PROACTIVE_ARTICLE_EVENING_MINUTE = Number(process.env.PROACTIVE_ARTICLE_EVENING_MINUTE || 0);
+const KNOWLEDGE_RADAR_TRACKING_LIMIT = Number(process.env.KNOWLEDGE_RADAR_TRACKING_LIMIT || 80);
 const GITHUB_SEEN_TRACKING_LIMIT = Number(process.env.GITHUB_SEEN_TRACKING_LIMIT || 500);
 const RANDOM_TOPIC_TRACKING_LIMIT = Number(process.env.RANDOM_TOPIC_TRACKING_LIMIT || 500);
 const RANDOM_TOPIC_PROMPT_HISTORY_LIMIT = Number(process.env.RANDOM_TOPIC_PROMPT_HISTORY_LIMIT || 30);
@@ -443,6 +444,7 @@ const PROACTIVE_REACTIVATION_MESSAGES = [
     'Esto está más callado que servidor sin internet 🔇\n\n¿Nadie tiene un descubrimiento de IA que compartir?',
     'Últiiiima llamada para castores activos 📢\n\n¿Qué herramienta de IA han estado usando?'
 ];
+const KNOWLEDGE_DROP_CATEGORIES = ['github', 'osint', 'launch', 'paper', 'benchmark'];
 
 let lastGroupActivityAt = 0;
 let proactiveCheckInterval = null;
@@ -568,6 +570,10 @@ function getDefaultProactiveState() {
         articleTracking: [],
         githubTracking: [],
         githubSeenTracking: [],
+        launchTracking: [],
+        paperTracking: [],
+        benchmarkTracking: [],
+        knowledgeCategoryCursor: 0,
         osintTracking: [],
         randomTopicTracking: [],
         randomUserRotationByGroup: {},
@@ -585,10 +591,14 @@ function normalizeProactiveState(state) {
     return {
         ...base,
         ...state,
-        currentSource: ['dev', 'netsec', 'github', 'osint'].includes(state.currentSource) ? state.currentSource : 'github',
+        currentSource: ['dev', 'netsec', 'github', 'osint', 'launch', 'paper', 'benchmark'].includes(state.currentSource) ? state.currentSource : 'github',
         articleTracking: normalizeNumericTrackingList(state.articleTracking, 50),
         githubTracking: normalizeNumericTrackingList(state.githubTracking, 50),
         githubSeenTracking: normalizeNumericTrackingList(state.githubSeenTracking, GITHUB_SEEN_TRACKING_LIMIT),
+        launchTracking: normalizeNumericTrackingList(state.launchTracking, KNOWLEDGE_RADAR_TRACKING_LIMIT),
+        paperTracking: normalizeStringTrackingList(state.paperTracking, KNOWLEDGE_RADAR_TRACKING_LIMIT),
+        benchmarkTracking: normalizeStringTrackingList(state.benchmarkTracking, KNOWLEDGE_RADAR_TRACKING_LIMIT),
+        knowledgeCategoryCursor: Math.abs(Number(state.knowledgeCategoryCursor) || 0) % KNOWLEDGE_DROP_CATEGORIES.length,
         osintTracking: normalizeNumericTrackingList(state.osintTracking, 50),
         randomTopicTracking: normalizeStringTrackingList(state.randomTopicTracking, RANDOM_TOPIC_TRACKING_LIMIT),
         randomUserRotationByGroup: normalizeRandomUserRotationByGroup(state.randomUserRotationByGroup),
@@ -2328,9 +2338,16 @@ async function handleTestDropCommand(sock, msg, remoteJid, dropMode = 'github') 
     }
 
     const state = getProactiveState();
-    const dropContent = dropMode === 'osint'
-        ? await buildOsintDropContent(state)
-        : await buildGithubDropContent(state);
+    let dropContent = null;
+    if (dropMode === 'schedule-next') {
+        dropContent = await buildPreviewRotatingKnowledgeDropContent(state, 0);
+    } else if (dropMode === 'schedule-following') {
+        dropContent = await buildPreviewRotatingKnowledgeDropContent(state, 1);
+    } else if (dropMode === 'osint') {
+        dropContent = await buildOsintDropContent(state);
+    } else {
+        dropContent = await buildGithubDropContent(state);
+    }
 
     if (!dropContent) {
         await sock.sendMessage(remoteJid, { text: 'No encontré un drop nuevo disponible para la prueba.' }, { quoted: msg });
@@ -2360,7 +2377,7 @@ async function handleTestDropCommand(sock, msg, remoteJid, dropMode = 'github') 
 }
 
 async function handleTestArticleCommand(sock, msg, remoteJid) {
-    return handleTestDropCommand(sock, msg, remoteJid, 'github');
+    return handleTestDropCommand(sock, msg, remoteJid, 'schedule-next');
 }
 
 async function handleCommandsListCommand(sock, msg, remoteJid) {
@@ -4028,7 +4045,8 @@ async function buildGithubDropContent(state) {
     const currentState = normalizeProactiveState(state);
     const githubTracking = normalizeNumericTrackingList(currentState.githubTracking, 50);
     const githubSeenTracking = normalizeNumericTrackingList(currentState.githubSeenTracking, GITHUB_SEEN_TRACKING_LIMIT);
-    const seenRepoIds = new Set([...githubTracking, ...githubSeenTracking]);
+    const launchTracking = normalizeNumericTrackingList(currentState.launchTracking, KNOWLEDGE_RADAR_TRACKING_LIMIT);
+    const seenRepoIds = new Set([...githubTracking, ...githubSeenTracking, ...launchTracking]);
     const repo = repos.find((item) => !seenRepoIds.has(item.id));
 
     if (!repo) return null;
@@ -4698,8 +4716,763 @@ async function buildAlternatingDropContent(currentSource, state) {
     };
 }
 
+function getIsoDateDaysAgo(daysAgo = 30) {
+    const date = new Date(Date.now() - (Math.max(0, Number(daysAgo) || 0) * 24 * 60 * 60 * 1000));
+    return date.toISOString().slice(0, 10);
+}
+
+function formatMexicoShortDate(value) {
+    try {
+        return new Intl.DateTimeFormat('es-MX', {
+            day: 'numeric',
+            month: 'short',
+            year: 'numeric',
+            timeZone: 'America/Mexico_City'
+        }).format(new Date(value));
+    } catch (error) {
+        return '';
+    }
+}
+
+async function fetchGithubRepoSearchItems(query, perPage = 15) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
+    try {
+        const params = new URLSearchParams({
+            q: query,
+            sort: 'updated',
+            order: 'desc',
+            per_page: String(perPage)
+        });
+        const response = await fetch(`https://api.github.com/search/repositories?${params.toString()}`, {
+            headers: {
+                'User-Agent': 'NodeJS:CastorBot:v1.0'
+            },
+            signal: controller.signal
+        });
+        if (!response.ok) {
+            return [];
+        }
+        const payload = await response.json();
+        return Array.isArray(payload?.items) ? payload.items : [];
+    } catch (error) {
+        return [];
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+function mapLaunchGithubItems(items) {
+    return (Array.isArray(items) ? items : [])
+        .map((repo) => ({
+            id: Number(repo?.id),
+            full_name: String(repo?.full_name || '').trim(),
+            description: repo?.description == null ? 'Lanzamiento open source sin descripción' : String(repo.description).trim() || 'Lanzamiento open source sin descripción',
+            html_url: String(repo?.html_url || '').trim(),
+            stargazers_count: Number(repo?.stargazers_count || 0),
+            default_branch: String(repo?.default_branch || 'main').trim() || 'main',
+            created_at: String(repo?.created_at || '').trim(),
+            updated_at: String(repo?.updated_at || '').trim()
+        }))
+        .filter((repo) => Number.isInteger(repo.id) && repo.full_name && repo.html_url);
+}
+
+function isLaunchRepoCandidate(repo) {
+    const haystack = `${repo?.full_name || ''} ${repo?.description || ''}`;
+    const hasToolSignal = /agent|framework|tool|sdk|platform|workflow|runtime|assistant|copilot|orchestr|rag|llm|inference|search|memory|vector|automation/i.test(haystack);
+    const blockedSignal = /\b(?:keys?|awesome|curated|list|prompts?|tutorial|course|writeups?|skills|newsletter|paper|benchmark|leaderboard|dataset)\b/i.test(haystack);
+    return hasToolSignal && !blockedSignal;
+}
+
+async function fetchLatestLaunchRepos() {
+    try {
+        const recentDate = getIsoDateDaysAgo(45);
+        const directQuery = `topic:llm OR topic:rag OR topic:ai-agents OR topic:agentic-ai created:>${recentDate} stars:>50`;
+        const directItems = mapLaunchGithubItems(await fetchGithubRepoSearchItems(directQuery, 15)).filter(isLaunchRepoCandidate);
+        if (directItems.length > 0) {
+            return directItems.slice(0, 15);
+        }
+
+        const recentTopics = ['llm', 'rag', 'ai-agents', 'agentic-ai'];
+        const recentResults = await Promise.all(
+            recentTopics.map((topic) => fetchGithubRepoSearchItems(`topic:${topic} created:>${recentDate} stars:>50`, 15))
+        );
+        const mergedRecent = new Map();
+        for (const repo of mapLaunchGithubItems(recentResults.flat()).filter(isLaunchRepoCandidate)) {
+            const current = mergedRecent.get(repo.id);
+            if (!current || new Date(repo.updated_at).getTime() > new Date(current.updated_at).getTime()) {
+                mergedRecent.set(repo.id, repo);
+            }
+        }
+        if (mergedRecent.size > 0) {
+            return [...mergedRecent.values()]
+                .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+                .slice(0, 15);
+        }
+
+        const evergreenTopics = ['llm', 'rag', 'ai-agents', 'agentic-ai'];
+        const evergreenResults = await Promise.all(
+            evergreenTopics.map((topic) => fetchGithubRepoSearchItems(`topic:${topic} stars:>50`, 15))
+        );
+        const mergedEvergreen = new Map();
+        for (const repo of mapLaunchGithubItems(evergreenResults.flat()).filter(isLaunchRepoCandidate)) {
+            const current = mergedEvergreen.get(repo.id);
+            if (!current || new Date(repo.updated_at).getTime() > new Date(current.updated_at).getTime()) {
+                mergedEvergreen.set(repo.id, repo);
+            }
+        }
+        return [...mergedEvergreen.values()]
+            .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+            .slice(0, 15);
+    } catch (error) {
+        console.error('[RADAR-LAUNCH] Error obteniendo lanzamientos de GitHub:', error?.message || error);
+        return [];
+    }
+}
+
+function parseArxivEntries(xml) {
+    const entries = String(xml || '').match(/<entry>[\s\S]*?<\/entry>/gi) || [];
+    return entries
+        .map((entry) => {
+            const id = decodeHtmlEntities((entry.match(/<id>([\s\S]*?)<\/id>/i)?.[1] || '').trim());
+            const title = decodeHtmlEntities((entry.match(/<title>([\s\S]*?)<\/title>/i)?.[1] || '').replace(/\s+/g, ' ').trim());
+            const summary = decodeHtmlEntities(stripHtmlTags((entry.match(/<summary>([\s\S]*?)<\/summary>/i)?.[1] || ''))).replace(/\s+/g, ' ').trim();
+            const publishedAt = (entry.match(/<published>([\s\S]*?)<\/published>/i)?.[1] || '').trim();
+            const url = decodeHtmlEntities((entry.match(/<link[^>]+rel="alternate"[^>]+href="([^"]+)"/i)?.[1] || '').trim()) || id;
+            return {
+                id,
+                title,
+                summary,
+                url,
+                published_at: publishedAt
+            };
+        })
+        .filter((entry) => entry.id && entry.title && entry.summary && entry.url);
+}
+
+async function fetchArxivEntries(searchQuery, maxResults = 15) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
+    try {
+        const params = new URLSearchParams({
+            search_query: searchQuery,
+            start: '0',
+            max_results: String(maxResults),
+            sortBy: 'submittedDate',
+            sortOrder: 'descending'
+        });
+        const response = await fetch(`https://export.arxiv.org/api/query?${params.toString()}`, {
+            headers: {
+                'User-Agent': 'NodeJS:CastorBot:v1.0'
+            },
+            signal: controller.signal
+        });
+        if (!response.ok) {
+            return [];
+        }
+        const xml = await response.text();
+        return parseArxivEntries(xml);
+    } catch (error) {
+        console.error('[RADAR-ARXIV] Error consultando arXiv:', error?.message || error);
+        return [];
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+async function fetchLatestPapers() {
+    const entries = await fetchArxivEntries('all:(llm OR "large language model" OR rag OR agents OR "reasoning model")', 15);
+    return entries
+        .filter((entry) => !/benchmark|leaderboard|evaluation|evals?/i.test(`${entry.title} ${entry.summary}`))
+        .slice(0, 15);
+}
+
+async function fetchLatestBenchmarks() {
+    const entries = await fetchArxivEntries('all:(benchmark OR leaderboard OR evaluation OR evals) AND all:(llm OR rag OR agents OR "reasoning model")', 15);
+    return entries
+        .filter((entry) => /benchmark|leaderboard|evaluation|evals?/i.test(`${entry.title} ${entry.summary}`))
+        .slice(0, 15);
+}
+
+function cleanStructuredLines(text) {
+    return cleanModelOutputText(text)
+        .replace(/\r/g, '')
+        .split('\n')
+        .map((line) => String(line || '').replace(/\*/g, '').trim())
+        .filter(Boolean);
+}
+
+function normalizeLaunchSummaryText(text, repoFullName = '') {
+    const lines = cleanStructuredLines(text);
+    let title = '';
+    let whatIs = '';
+    let why = '';
+    const highlights = [];
+    let section = '';
+
+    for (const line of lines) {
+        if (!title && line.includes('|')) {
+            const [, ...rest] = line.split('|');
+            const repoName = String(repoFullName || '').trim().toUpperCase();
+            const power = rest.join('|').trim();
+            title = power ? `${repoName} | ${power}` : repoName;
+            continue;
+        }
+        if (/^(?:¿Qué lanzó\??|¿Qué es\??|Qué lanzó\??|Lanzamiento)\s*:/i.test(line)) {
+            whatIs = line.replace(/^(?:¿Qué lanzó\??|¿Qué es\??|Qué lanzó\??|Lanzamiento)\s*:\s*/i, '').trim();
+            section = 'what';
+            continue;
+        }
+        if (/^(?:Highlights|Claves|Puntos clave)\s*:/i.test(line)) {
+            const content = line.replace(/^(?:Highlights|Claves|Puntos clave)\s*:\s*/i, '').trim();
+            if (content) highlights.push(content);
+            section = 'highlights';
+            continue;
+        }
+        if (/^(?:Por qué importa|Porque importa)\s*:/i.test(line)) {
+            why = line.replace(/^(?:Por qué importa|Porque importa)\s*:\s*/i, '').trim();
+            section = 'why';
+            continue;
+        }
+        if (/^[-•]\s*/.test(line)) {
+            highlights.push(line.replace(/^[-•]\s*/u, '').trim());
+            section = 'highlights';
+            continue;
+        }
+        if (section === 'what') {
+            whatIs = whatIs ? `${whatIs} ${line}` : line;
+            continue;
+        }
+        if (section === 'highlights') {
+            highlights.push(line);
+            continue;
+        }
+        if (section === 'why') {
+            why = why ? `${why} ${line}` : line;
+        }
+    }
+
+    const cleanHighlights = highlights
+        .map((item) => item.replace(/\s+/g, ' ').trim())
+        .filter((item) => item.length >= 12)
+        .slice(0, 3);
+
+    if (!whatIs) {
+        return '';
+    }
+
+    return [
+        title || `${String(repoFullName || '').trim().toUpperCase()} | lanzamiento que merece radar`,
+        '',
+        `¿Qué lanzó?: ${whatIs.replace(/\s+/g, ' ').trim()}`,
+        '',
+        'Highlights:',
+        ...(cleanHighlights.length > 0 ? cleanHighlights.map((item) => `- ${item}`) : [
+            '- Se siente como una base útil para montar agentes, automatizaciones o flujos con LLM.',
+            '- Trae piezas reutilizables para prototipos, pruebas internas o integraciones rápidas.',
+            '- Puede acelerar validaciones técnicas sin arrancar un stack completo desde cero.'
+        ]),
+        '',
+        `Por qué importa: ${(why || 'Vale seguirlo porque puede ahorrarte tiempo al probar ideas nuevas y aterrizar arquitectura open source.').replace(/\s+/g, ' ').trim()}`
+    ].join('\n');
+}
+
+function isWeakLaunchSummary(text) {
+    const value = String(text || '').trim();
+    if (!value) return true;
+    if (value.length < 140) return true;
+    if (!value.includes('¿Qué lanzó?:')) return true;
+    if (!value.includes('Highlights:')) return true;
+    if (!value.includes('Por qué importa:')) return true;
+    if (!/(?:^|\n)-\s+/m.test(value)) return true;
+    return false;
+}
+
+function buildLaunchSummaryFallback(repo) {
+    return [
+        `${String(repo?.full_name || '').trim().toUpperCase()} | lanzamiento con pinta de mover el tablero`,
+        '',
+        `¿Qué lanzó?: ${repo?.full_name || 'Este repo'} apunta a acelerar trabajo real con IA open source desde una base más aterrizada. ${repo?.description || 'Su propuesta se siente útil para iterar agentes, RAG o automatizaciones sin partir totalmente de cero.'}`,
+        '',
+        'Highlights:',
+        '- Base reciente para experimentar con flujos, componentes o integraciones de IA.',
+        '- Buen candidato para seguir si quieres detectar releases con actividad viva en GitHub.',
+        '- Puede servir como referencia práctica para validar arquitectura y velocidad de ejecución.',
+        '',
+        'Por qué importa: Este tipo de lanzamientos suele adelantar hacia dónde se está moviendo el stack open source antes de que llegue al mainstream.'
+    ].join('\n');
+}
+
+async function generateLaunchSummary(repo) {
+    const systemPrompt = "Eres un scout de lanzamientos open source de IA para un grupo de WhatsApp. REGLA ABSOLUTA: responde solo en español de México. FORMATO ESTRICTO: 1. Título: '[Nombre Repo] | [Frase corta de por qué llama la atención]'. 2. ¿Qué lanzó?: 2 líneas sobre qué trae el repo y qué problema resuelve. 3. Highlights: 3 viñetas concretas. 4. Por qué importa: 1 línea sobre el valor real para builders. Cero comillas y nada de tono corporativo.";
+    const userPrompt = `Analiza este lanzamiento open source y devuelve la reseña en el formato estricto.\n\nRepo: ${repo.full_name}\nInfo: ${repo.description}`;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const rawSummary = await generateAIContent(systemPrompt, userPrompt, 320);
+        const summary = sanitizeRichText(normalizeLaunchSummaryText(rawSummary, repo.full_name), 1700);
+        if (!isWeakLaunchSummary(summary)) {
+            return { text: summary, source: 'groq', attempts: attempt + 1 };
+        }
+    }
+
+    return {
+        text: normalizeLaunchSummaryText(buildLaunchSummaryFallback(repo), repo.full_name),
+        source: 'fallback',
+        attempts: 3
+    };
+}
+
+function normalizePaperSummaryText(text, paperTitle = '') {
+    const lines = cleanStructuredLines(text);
+    let title = '';
+    let finding = '';
+    let why = '';
+    const keys = [];
+    let section = '';
+
+    for (const line of lines) {
+        if (!title && !/^(?:Hallazgo|Puntos clave|Claves|Por qué importa|Porque importa)\s*:/i.test(line)) {
+            title = line;
+            continue;
+        }
+        if (/^(?:Hallazgo|¿Qué propone\??|Resumen)\s*:/i.test(line)) {
+            finding = line.replace(/^(?:Hallazgo|¿Qué propone\??|Resumen)\s*:\s*/i, '').trim();
+            section = 'finding';
+            continue;
+        }
+        if (/^(?:Puntos clave|Claves)\s*:/i.test(line)) {
+            const content = line.replace(/^(?:Puntos clave|Claves)\s*:\s*/i, '').trim();
+            if (content) keys.push(content);
+            section = 'keys';
+            continue;
+        }
+        if (/^(?:Por qué importa|Porque importa)\s*:/i.test(line)) {
+            why = line.replace(/^(?:Por qué importa|Porque importa)\s*:\s*/i, '').trim();
+            section = 'why';
+            continue;
+        }
+        if (/^[-•]\s*/.test(line)) {
+            keys.push(line.replace(/^[-•]\s*/u, '').trim());
+            section = 'keys';
+            continue;
+        }
+        if (section === 'finding') {
+            finding = finding ? `${finding} ${line}` : line;
+            continue;
+        }
+        if (section === 'keys') {
+            keys.push(line);
+            continue;
+        }
+        if (section === 'why') {
+            why = why ? `${why} ${line}` : line;
+        }
+    }
+
+    const cleanKeys = keys
+        .map((item) => item.replace(/\s+/g, ' ').trim())
+        .filter((item) => item.length >= 12)
+        .slice(0, 3);
+
+    if (!finding) {
+        return '';
+    }
+
+    return [
+        title || paperTitle || 'Paper reciente que vale radar',
+        '',
+        `Hallazgo: ${finding.replace(/\s+/g, ' ').trim()}`,
+        '',
+        'Puntos clave:',
+        ...(cleanKeys.length > 0 ? cleanKeys.map((item) => `- ${item}`) : [
+            '- Toca un problema vigente en modelos, agentes o RAG.',
+            '- Aporta una idea práctica que vale la pena seguir de cerca.',
+            '- Puede mover cómo evaluamos o construimos sistemas de IA.'
+        ]),
+        '',
+        `Por qué importa: ${(why || 'Conviene seguirlo porque puede cambiar decisiones reales de producto, evaluación o arquitectura.').replace(/\s+/g, ' ').trim()}`
+    ].join('\n');
+}
+
+function isWeakPaperSummary(text) {
+    const value = String(text || '').trim();
+    if (!value) return true;
+    if (value.length < 140) return true;
+    if (!value.includes('Hallazgo:')) return true;
+    if (!value.includes('Puntos clave:')) return true;
+    if (!value.includes('Por qué importa:')) return true;
+    return false;
+}
+
+function buildPaperSummaryFallback(paper) {
+    return [
+        paper?.title || 'Paper reciente que vale radar',
+        '',
+        `Hallazgo: ${paper?.summary || 'Este paper propone una idea nueva o una lectura útil sobre el stack actual de IA.'}`,
+        '',
+        'Puntos clave:',
+        '- Va alineado con temas vigentes como agentes, razonamiento, RAG o uso práctico de LLM.',
+        '- Puede servir para entender hacia dónde se mueve la investigación aplicada.',
+        '- Deja señales útiles para builders que siguen papers con aterrizaje real.',
+        '',
+        'Por qué importa: Vale seguirlo porque puede influir en cómo diseñamos producto, evaluación o automatización con IA.'
+    ].join('\n');
+}
+
+async function generatePaperSummary(paper) {
+    const systemPrompt = "Eres un editor técnico que aterriza papers de IA para un grupo de WhatsApp. REGLA ABSOLUTA: responde solo en español de México. FORMATO ESTRICTO: 1. Título con el nombre del paper. 2. Hallazgo: 2 líneas sobre qué propone realmente. 3. Puntos clave: 3 viñetas cortas. 4. Por qué importa: 1 línea de impacto real. Cero comillas y nada académico de más.";
+    const userPrompt = `Resume este paper para gente que construye cosas con IA.\n\nTítulo: ${paper.title}\nResumen: ${paper.summary}`;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const rawSummary = await generateAIContent(systemPrompt, userPrompt, 320);
+        const summary = sanitizeRichText(normalizePaperSummaryText(rawSummary, paper.title), 1700);
+        if (!isWeakPaperSummary(summary)) {
+            return { text: summary, source: 'groq', attempts: attempt + 1 };
+        }
+    }
+
+    return {
+        text: normalizePaperSummaryText(buildPaperSummaryFallback(paper), paper.title),
+        source: 'fallback',
+        attempts: 3
+    };
+}
+
+function normalizeBenchmarkSummaryText(text, benchmarkTitle = '') {
+    const lines = cleanStructuredLines(text);
+    let title = '';
+    let measured = '';
+    let why = '';
+    const quickRead = [];
+    let section = '';
+
+    for (const line of lines) {
+        if (!title && !/^(?:Qué midió|¿Qué midió\??|Lectura rápida|Por qué importa|Porque importa)\s*:/i.test(line)) {
+            title = line;
+            continue;
+        }
+        if (/^(?:Qué midió|¿Qué midió\??|Lectura del benchmark)\s*:/i.test(line)) {
+            measured = line.replace(/^(?:Qué midió|¿Qué midió\??|Lectura del benchmark)\s*:\s*/i, '').trim();
+            section = 'measured';
+            continue;
+        }
+        if (/^(?:Lectura rápida|Claves|Puntos clave)\s*:/i.test(line)) {
+            const content = line.replace(/^(?:Lectura rápida|Claves|Puntos clave)\s*:\s*/i, '').trim();
+            if (content) quickRead.push(content);
+            section = 'quick';
+            continue;
+        }
+        if (/^(?:Por qué importa|Porque importa)\s*:/i.test(line)) {
+            why = line.replace(/^(?:Por qué importa|Porque importa)\s*:\s*/i, '').trim();
+            section = 'why';
+            continue;
+        }
+        if (/^[-•]\s*/.test(line)) {
+            quickRead.push(line.replace(/^[-•]\s*/u, '').trim());
+            section = 'quick';
+            continue;
+        }
+        if (section === 'measured') {
+            measured = measured ? `${measured} ${line}` : line;
+            continue;
+        }
+        if (section === 'quick') {
+            quickRead.push(line);
+            continue;
+        }
+        if (section === 'why') {
+            why = why ? `${why} ${line}` : line;
+        }
+    }
+
+    const cleanQuickRead = quickRead
+        .map((item) => item.replace(/\s+/g, ' ').trim())
+        .filter((item) => item.length >= 12)
+        .slice(0, 3);
+
+    if (!measured) {
+        return '';
+    }
+
+    return [
+        title || benchmarkTitle || 'Benchmark nuevo que vale radar',
+        '',
+        `Qué midió: ${measured.replace(/\s+/g, ' ').trim()}`,
+        '',
+        'Lectura rápida:',
+        ...(cleanQuickRead.length > 0 ? cleanQuickRead.map((item) => `- ${item}`) : [
+            '- Da una lectura comparativa útil para modelos, agentes o pipelines.',
+            '- Ayuda a separar marketing de rendimiento observado.',
+            '- Puede mover decisiones de evaluación, selección o despliegue.'
+        ]),
+        '',
+        `Por qué importa: ${(why || 'Importa porque aterriza comparaciones que luego terminan impactando producto y decisiones de stack.').replace(/\s+/g, ' ').trim()}`
+    ].join('\n');
+}
+
+function isWeakBenchmarkSummary(text) {
+    const value = String(text || '').trim();
+    if (!value) return true;
+    if (value.length < 140) return true;
+    if (!value.includes('Qué midió:')) return true;
+    if (!value.includes('Lectura rápida:')) return true;
+    if (!value.includes('Por qué importa:')) return true;
+    return false;
+}
+
+function buildBenchmarkSummaryFallback(benchmark) {
+    return [
+        benchmark?.title || 'Benchmark nuevo que vale radar',
+        '',
+        `Qué midió: ${benchmark?.summary || 'Este benchmark compara o evalúa modelos, agentes o pipelines en tareas relevantes para IA aplicada.'}`,
+        '',
+        'Lectura rápida:',
+        '- Ayuda a ver señales reales de rendimiento más allá del puro hype.',
+        '- Puede influir en cómo comparamos proveedores, modelos o estrategias.',
+        '- Conviene seguirlo si tomas decisiones de stack con datos y no solo intuición.',
+        '',
+        'Por qué importa: Este tipo de benchmarks suele definir conversaciones de producto, evaluación y compra de infraestructura.'
+    ].join('\n');
+}
+
+async function generateBenchmarkSummary(benchmark) {
+    const systemPrompt = "Eres un analista de benchmarks de IA para un grupo de WhatsApp. REGLA ABSOLUTA: responde solo en español de México. FORMATO ESTRICTO: 1. Título con el nombre del benchmark o paper. 2. Qué midió: 2 líneas. 3. Lectura rápida: 3 viñetas. 4. Por qué importa: 1 línea de impacto real. Cero comillas y nada de tono corporativo.";
+    const userPrompt = `Resume este benchmark de IA para una audiencia técnica.\n\nTítulo: ${benchmark.title}\nResumen: ${benchmark.summary}`;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const rawSummary = await generateAIContent(systemPrompt, userPrompt, 320);
+        const summary = sanitizeRichText(normalizeBenchmarkSummaryText(rawSummary, benchmark.title), 1700);
+        if (!isWeakBenchmarkSummary(summary)) {
+            return { text: summary, source: 'groq', attempts: attempt + 1 };
+        }
+    }
+
+    return {
+        text: normalizeBenchmarkSummaryText(buildBenchmarkSummaryFallback(benchmark), benchmark.title),
+        source: 'fallback',
+        attempts: 3
+    };
+}
+
+async function buildLaunchDropContent(state) {
+    const repos = await fetchLatestLaunchRepos();
+    if (repos.length === 0) return null;
+
+    const currentState = normalizeProactiveState(state);
+    const launchTracking = normalizeNumericTrackingList(currentState.launchTracking, KNOWLEDGE_RADAR_TRACKING_LIMIT);
+    const githubTracking = normalizeNumericTrackingList(currentState.githubTracking, 50);
+    const githubSeenTracking = normalizeNumericTrackingList(currentState.githubSeenTracking, GITHUB_SEEN_TRACKING_LIMIT);
+    const seenRepoIds = new Set([...launchTracking, ...githubTracking, ...githubSeenTracking]);
+    const repo = repos.find((item) => !seenRepoIds.has(item.id));
+    if (!repo) return null;
+
+    const summaryResult = await generateLaunchSummary(repo);
+    const summary = summaryResult?.text || '';
+    if (!summary) return null;
+
+    const imageUrl = await fetchGithubRepoImageUrl(repo);
+    const text = [
+        `${CASTOR_EMOJI} *Radar Launch 🚀*`,
+        '',
+        summary,
+        '',
+        `⭐ Estrellas: ${repo.stargazers_count}`,
+        repo.html_url
+    ].join('\n');
+
+    return {
+        source: 'launch',
+        itemId: repo.id,
+        itemTitle: repo.full_name,
+        bannerTitle: 'Radar Launch 🚀',
+        summaryResult,
+        payload: imageUrl
+            ? {
+                image: { url: imageUrl },
+                caption: text
+            }
+            : { text },
+        textFallback: text,
+        trackingUpdate: {
+            launchTracking: [...launchTracking, repo.id].slice(-KNOWLEDGE_RADAR_TRACKING_LIMIT),
+            lastLaunchSentAt: new Date().toISOString()
+        }
+    };
+}
+
+async function buildPaperDropContent(state) {
+    const papers = await fetchLatestPapers();
+    if (papers.length === 0) return null;
+
+    const currentState = normalizeProactiveState(state);
+    const paperTracking = normalizeStringTrackingList(currentState.paperTracking, KNOWLEDGE_RADAR_TRACKING_LIMIT);
+    const paper = papers.find((item) => !paperTracking.includes(String(item.id)));
+    if (!paper) return null;
+
+    const summaryResult = await generatePaperSummary(paper);
+    const summary = summaryResult?.text || '';
+    if (!summary) return null;
+
+    const publishedDate = formatMexicoShortDate(paper.published_at);
+    return {
+        source: 'paper',
+        itemId: String(paper.id),
+        itemTitle: paper.title,
+        bannerTitle: 'Radar Paper 📄',
+        summaryResult,
+        payload: {
+            text: [
+                `${CASTOR_EMOJI} *Radar Paper 📄*`,
+                '',
+                summary,
+                ...(publishedDate ? ['', `📅 Publicado: ${publishedDate}`] : []),
+                '',
+                paper.url
+            ].join('\n')
+        },
+        textFallback: [
+            `${CASTOR_EMOJI} *Radar Paper 📄*`,
+            '',
+            summary,
+            ...(publishedDate ? ['', `📅 Publicado: ${publishedDate}`] : []),
+            '',
+            paper.url
+        ].join('\n'),
+        trackingUpdate: {
+            paperTracking: [...paperTracking, String(paper.id)].slice(-KNOWLEDGE_RADAR_TRACKING_LIMIT),
+            lastPaperSentAt: new Date().toISOString()
+        }
+    };
+}
+
+async function buildBenchmarkDropContent(state) {
+    const benchmarks = await fetchLatestBenchmarks();
+    if (benchmarks.length === 0) return null;
+
+    const currentState = normalizeProactiveState(state);
+    const benchmarkTracking = normalizeStringTrackingList(currentState.benchmarkTracking, KNOWLEDGE_RADAR_TRACKING_LIMIT);
+    const benchmark = benchmarks.find((item) => !benchmarkTracking.includes(String(item.id)));
+    if (!benchmark) return null;
+
+    const summaryResult = await generateBenchmarkSummary(benchmark);
+    const summary = summaryResult?.text || '';
+    if (!summary) return null;
+
+    const publishedDate = formatMexicoShortDate(benchmark.published_at);
+    return {
+        source: 'benchmark',
+        itemId: String(benchmark.id),
+        itemTitle: benchmark.title,
+        bannerTitle: 'Radar Benchmark 📊',
+        summaryResult,
+        payload: {
+            text: [
+                `${CASTOR_EMOJI} *Radar Benchmark 📊*`,
+                '',
+                summary,
+                ...(publishedDate ? ['', `📅 Publicado: ${publishedDate}`] : []),
+                '',
+                benchmark.url
+            ].join('\n')
+        },
+        textFallback: [
+            `${CASTOR_EMOJI} *Radar Benchmark 📊*`,
+            '',
+            summary,
+            ...(publishedDate ? ['', `📅 Publicado: ${publishedDate}`] : []),
+            '',
+            benchmark.url
+        ].join('\n'),
+        trackingUpdate: {
+            benchmarkTracking: [...benchmarkTracking, String(benchmark.id)].slice(-KNOWLEDGE_RADAR_TRACKING_LIMIT),
+            lastBenchmarkSentAt: new Date().toISOString()
+        }
+    };
+}
+
+async function buildRotatingKnowledgeDropContent(state, categoryOffset = 0) {
+    const currentState = normalizeProactiveState(state);
+    const builders = {
+        github: buildGithubDropContent,
+        osint: buildOsintDropContent,
+        launch: buildLaunchDropContent,
+        paper: buildPaperDropContent,
+        benchmark: buildBenchmarkDropContent
+    };
+    const categoryCount = KNOWLEDGE_DROP_CATEGORIES.length;
+    const baseCursor = (currentState.knowledgeCategoryCursor + Math.max(0, Number(categoryOffset) || 0)) % categoryCount;
+
+    for (let attempt = 0; attempt < categoryCount; attempt++) {
+        const index = (baseCursor + attempt) % categoryCount;
+        const category = KNOWLEDGE_DROP_CATEGORIES[index];
+        const builder = builders[category];
+        if (!builder) continue;
+        const dropContent = await builder(currentState);
+        if (dropContent) {
+            return {
+                ...dropContent,
+                category,
+                nextCategoryCursor: (index + 1) % categoryCount
+            };
+        }
+    }
+
+    return null;
+}
+
+async function buildPreviewRotatingKnowledgeDropContent(state, slotOffset = 0) {
+    let simulatedState = normalizeProactiveState(state);
+    let dropContent = null;
+
+    for (let index = 0; index <= Math.max(0, Number(slotOffset) || 0); index++) {
+        dropContent = await buildRotatingKnowledgeDropContent(simulatedState);
+        if (!dropContent) {
+            return null;
+        }
+        simulatedState = normalizeProactiveState({
+            ...simulatedState,
+            ...dropContent.trackingUpdate,
+            currentSource: dropContent.source,
+            knowledgeCategoryCursor: dropContent.nextCategoryCursor
+        });
+    }
+
+    return dropContent;
+}
+
 async function sendAlternatingDrop(sock) {
-    return sendGithubDrop(sock);
+    if (PROACTIVE_GROUP_JIDS.length === 0) return;
+
+    const dropContent = await buildRotatingKnowledgeDropContent(getProactiveState());
+    if (!dropContent) return;
+
+    for (const groupJid of PROACTIVE_GROUP_JIDS) {
+        try {
+            await sock.sendMessage(groupJid, dropContent.payload);
+        } catch (groupError) {
+            console.error(`[ROTATING-DROP] Error enviando ${dropContent.source} a ${groupJid}:`, groupError?.message || groupError);
+            if (dropContent.textFallback) {
+                try {
+                    await sock.sendMessage(groupJid, { text: dropContent.textFallback });
+                } catch (fallbackError) {
+                    console.error(`[ROTATING-DROP] Error enviando fallback de ${dropContent.source} a ${groupJid}:`, fallbackError?.message || fallbackError);
+                }
+            }
+        }
+
+        if (PROACTIVE_GROUP_JIDS.length > 1) {
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+    }
+
+    updateProactiveState({
+        ...dropContent.trackingUpdate,
+        currentSource: dropContent.source,
+        knowledgeCategoryCursor: dropContent.nextCategoryCursor,
+        lastDropSentAt: new Date().toISOString(),
+        lastDropSource: dropContent.source
+    });
+    console.log(`[ROTATING-DROP] Enviado: "${dropContent.itemTitle}" fuente=${dropContent.source} cursor=${dropContent.nextCategoryCursor} resumen=${dropContent.summaryResult?.source || 'unknown'} intentos=${dropContent.summaryResult?.attempts || 0}`);
 }
 
 async function sendOsintDrop(sock) {
@@ -5180,7 +5953,7 @@ function startProactiveScheduler(sock) {
     console.log(`[PROACTIVO] Scheduler iniciado. Grupos: ${PROACTIVE_GROUP_JIDS.join(', ')}`);
     console.log(`[PROACTIVO] Prompt: cada ${PROACTIVE_PROMPT_INTERVAL_MS / 3600000}h | Random: cada ${PROACTIVE_RANDOM_USER_INTERVAL_MS / 3600000}h`);
     console.log(`[PROACTIVO] Horarios fijos CDMX -> Showcase #1: ${String(PROACTIVE_SHOWCASE_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_DAILY_MINUTE).padStart(2, '0')} | Showcase #2: ${String(PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE).padStart(2, '0')} | Random: ${String(PROACTIVE_RANDOM_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_RANDOM_DAILY_MINUTE).padStart(2, '0')}`);
-    console.log(`[PROACTIVO] Drops CDMX -> 11am Código Abierto: ${String(PROACTIVE_ARTICLE_MORNING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_MORNING_MINUTE).padStart(2, '0')} | 6pm Arsenal Cyber: ${String(PROACTIVE_ARTICLE_EVENING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_EVENING_MINUTE).padStart(2, '0')}`);
+    console.log(`[PROACTIVO] Drops CDMX -> ${String(PROACTIVE_ARTICLE_MORNING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_MORNING_MINUTE).padStart(2, '0')} y ${String(PROACTIVE_ARTICLE_EVENING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_EVENING_MINUTE).padStart(2, '0')} | Rotación: ${KNOWLEDGE_DROP_CATEGORIES.join(', ')}`);
     proactiveCheckInterval = setInterval(async () => {
         if (activeSock !== sock) return;
         if (proactiveCheckRunning) return;
@@ -5238,7 +6011,7 @@ function startProactiveScheduler(sock) {
                 const jitter = getRandomDelay(0, PROACTIVE_JITTER_MS);
                 await new Promise((resolve) => setTimeout(resolve, jitter));
                 if (activeSock === sock) {
-                    await sendOsintDrop(sock);
+                    await sendAlternatingDrop(sock);
                     updateProactiveState({ lastDropDailyDateEvening: todayKey });
                 }
                 return;
@@ -5538,7 +6311,7 @@ async function processIncomingMessage(sock, msg, runId) {
     } else if (command === '.testart' || command === '.test11') {
         await handleTestArticleCommand(sock, msg, remoteJid);
     } else if (command === '.test6') {
-        await handleTestDropCommand(sock, msg, remoteJid, 'osint');
+        await handleTestDropCommand(sock, msg, remoteJid, 'schedule-following');
     } else if (command === '.comandos') {
         await handleCommandsListCommand(sock, msg, remoteJid);
     } else if (command === '.reglas') {
