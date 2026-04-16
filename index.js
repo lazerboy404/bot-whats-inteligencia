@@ -61,7 +61,7 @@ const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const GITHUB_DROP_FALLBACK_IMAGE_URL = process.env.GITHUB_DROP_FALLBACK_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/github-drop-fallback.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.comandos', '.reglas', '.miid', '.setadmin', '.troncos', '.dinamica', '.grupoid', '.testart']);
+const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.comandos', '.reglas', '.miid', '.setadmin', '.troncos', '.dinamica', '.grupoid', '.testart', '.test11', '.test6']);
 const CASTOR_INVALID_COMMAND_EMOJI = '❌';
 const POSITIVE_REACTION_EMOJIS = new Set(['👍', '❤️', '👏', '🤯', '🔥', '💯', '🧠', '🤖', '🦫', '💡']);
 const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
@@ -2304,7 +2304,7 @@ async function handlePingCommand(sock, msg, remoteJid) {
     await sock.sendMessage(remoteJid, { text: '✅ Castor Bot activo.' }, { quoted: msg });
 }
 
-async function handleTestArticleCommand(sock, msg, remoteJid) {
+async function handleTestDropCommand(sock, msg, remoteJid, dropMode = 'github') {
     const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
     if (!isAuthorized) {
         await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
@@ -2318,7 +2318,9 @@ async function handleTestArticleCommand(sock, msg, remoteJid) {
     }
 
     const state = getProactiveState();
-    const dropContent = await buildGithubDropContent(state);
+    const dropContent = dropMode === 'osint'
+        ? await buildOsintDropContent(state)
+        : await buildGithubDropContent(state);
 
     if (!dropContent) {
         await sock.sendMessage(remoteJid, { text: 'No encontré un drop nuevo disponible para la prueba.' }, { quoted: msg });
@@ -2345,6 +2347,10 @@ async function handleTestArticleCommand(sock, msg, remoteJid) {
     if (remoteJid !== senderPrivateJid) {
         await sock.sendMessage(remoteJid, { text: `🧪 Vista previa de ${dropContent.bannerTitle} enviada por privado.` }, { quoted: msg });
     }
+}
+
+async function handleTestArticleCommand(sock, msg, remoteJid) {
+    return handleTestDropCommand(sock, msg, remoteJid, 'github');
 }
 
 async function handleCommandsListCommand(sock, msg, remoteJid) {
@@ -4186,19 +4192,51 @@ async function fetchTopOsintRepos() {
     }
 }
 
+async function buildOsintDropContent(state) {
+    const repos = await fetchTopOsintRepos();
+    if (repos.length === 0) return null;
+
+    const currentState = normalizeProactiveState(state);
+    const osintTracking = normalizeNumericTrackingList(currentState.osintTracking, 50);
+    const repo = repos.find((item) => !osintTracking.includes(item.id));
+    if (!repo) return null;
+
+    const summary = await generateOsintRepoSummary(repo);
+    if (!summary) return null;
+
+    const text = [
+        `${CASTOR_EMOJI} *Arsenal Cyber ðŸ´â€â˜ ï¸*`,
+        '',
+        summary,
+        '',
+        `â­ Estrellas: ${repo.stargazers_count}`,
+        repo.html_url
+    ].join('\n');
+
+    return {
+        source: 'osint',
+        itemId: repo.id,
+        itemTitle: repo.full_name,
+        bannerTitle: 'Arsenal Cyber ðŸ´â€â˜ ï¸',
+        summaryResult: {
+            source: 'groq',
+            attempts: 1
+        },
+        payload: { text },
+        textFallback: text,
+        trackingUpdate: {
+            osintTracking: [...osintTracking, repo.id].slice(-50),
+            lastOsintSentAt: new Date().toISOString()
+        }
+    };
+}
+
 async function sendOsintDrop(sock) {
     if (PROACTIVE_GROUP_JIDS.length === 0) return;
 
-    const repos = await fetchTopOsintRepos();
-    if (repos.length === 0) return;
+    const dropContent = await buildOsintDropContent(getProactiveState());
+    if (!dropContent) return;
 
-    const state = getProactiveState();
-    const osintTracking = normalizeNumericTrackingList(state.osintTracking, 50);
-    const repo = repos.find((item) => !osintTracking.includes(item.id));
-    if (!repo) return;
-
-    const summary = await generateOsintRepoSummary(repo);
-    if (!summary) return;
 
     const message = [
         `${CASTOR_EMOJI} *Arsenal Cyber 🏴‍☠️*`,
@@ -4211,7 +4249,7 @@ async function sendOsintDrop(sock) {
 
     for (const groupJid of PROACTIVE_GROUP_JIDS) {
         try {
-            await sock.sendMessage(groupJid, { text: message });
+            await sock.sendMessage(groupJid, dropContent.payload);
         } catch (groupError) {
             console.error(`[OSINT-DROP] Error enviando a ${groupJid}:`, groupError?.message || groupError);
         }
@@ -4441,6 +4479,33 @@ async function buildAlternatingDropContent(currentSource, state) {
 
 async function sendAlternatingDrop(sock) {
     return sendGithubDrop(sock);
+}
+
+async function sendOsintDrop(sock) {
+    if (PROACTIVE_GROUP_JIDS.length === 0) return;
+
+    const dropContent = await buildOsintDropContent(getProactiveState());
+    if (!dropContent) return;
+
+    for (const groupJid of PROACTIVE_GROUP_JIDS) {
+        try {
+            await sock.sendMessage(groupJid, dropContent.payload);
+        } catch (groupError) {
+            console.error(`[OSINT-DROP] Error enviando a ${groupJid}:`, groupError?.message || groupError);
+        }
+
+        if (PROACTIVE_GROUP_JIDS.length > 1) {
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+    }
+
+    updateProactiveState({
+        ...dropContent.trackingUpdate,
+        currentSource: 'osint',
+        lastDropSentAt: new Date().toISOString(),
+        lastDropSource: dropContent.source
+    });
+    console.log(`[OSINT-DROP] Enviado: "${dropContent.itemTitle}" (${dropContent.itemId})`);
 }
 
 async function sendPromptShowcase(sock) {
@@ -5249,8 +5314,10 @@ async function processIncomingMessage(sock, msg, runId) {
         await handleOpenGroupCommand(sock, msg, remoteJid);
     } else if (command === '.ping') {
         await handlePingCommand(sock, msg, remoteJid);
-    } else if (command === '.testart') {
+    } else if (command === '.testart' || command === '.test11') {
         await handleTestArticleCommand(sock, msg, remoteJid);
+    } else if (command === '.test6') {
+        await handleTestDropCommand(sock, msg, remoteJid, 'osint');
     } else if (command === '.comandos') {
         await handleCommandsListCommand(sock, msg, remoteJid);
     } else if (command === '.reglas') {
