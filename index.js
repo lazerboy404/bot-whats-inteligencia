@@ -96,6 +96,7 @@ const RANDOM_TOPIC_PROMPT_HISTORY_LIMIT = Number(process.env.RANDOM_TOPIC_PROMPT
 const RANDOM_USER_ROTATION_LIMIT = Number(process.env.RANDOM_USER_ROTATION_LIMIT || 2048);
 const RANDOM_USER_FOLLOWUP_LIMIT = Number(process.env.RANDOM_USER_FOLLOWUP_LIMIT || 20);
 const RANDOM_USER_REPLY_WINDOW_MS = Number(process.env.RANDOM_USER_REPLY_WINDOW_MS || (24 * 60 * 60 * 1000));
+const RANDOM_USER_DUEL_CHANCE = Math.min(1, Math.max(0, Number(process.env.RANDOM_USER_DUEL_CHANCE || 0.25)));
 const PROACTIVE_JITTER_MS = Number(process.env.PROACTIVE_JITTER_MS || (5 * 1000));
 const PROACTIVE_SHOWCASE_INTERVAL_MS = Number(process.env.PROACTIVE_SHOWCASE_INTERVAL_MS || (60 * 1000));
 const PROACTIVE_SHOWCASE_PROMPT_GAP_MS = Number(process.env.PROACTIVE_SHOWCASE_PROMPT_GAP_MS || (2 * 60 * 1000));
@@ -415,6 +416,19 @@ const PROACTIVE_RANDOM_TOPIC_SEEDS = [
     'Tool battle: Vende tu herramienta favorita como si tuvieras 10 segundos para convencer al grupo.',
     'Antes y después: Cuéntanos cómo hacías una tarea antes de IA y cómo la haces hoy.',
     'Antes y después: ¿Qué cambió en tu forma de trabajar desde que metiste IA en tu rutina?'
+];
+
+const PROACTIVE_RANDOM_DUEL_SEEDS = [
+    'Duelo de prompts: cada quien comparta en una sola respuesta el prompt más fino que usaría para resolver la misma tarea.',
+    'Tool battle: cada quien defienda una herramienta distinta de IA en una frase y diga por qué gana.',
+    'Reto entre dos: uno propone un prompt base y el otro lo mejora sin perder claridad.',
+    'Duelo express: ambos cuenten en 3 líneas cómo automatizarían la misma tarea con IA.',
+    'Prompt roast en pareja: uno comparte un prompt flojo y el otro lo aterriza a una versión más poderosa.',
+    'Caso práctico: los dos expliquen cómo resolverían el mismo problema usando herramientas diferentes.',
+    'Mini debate: uno se va por agentes y el otro por automatizaciones simples; ambos expliquen por qué.',
+    'Repo battle: cada quien recomiende un repo open source de IA y diga por qué merece entrar al radar.',
+    'Workflow cara a cara: ambos compartan su mini flujo ideal para pasar de idea a prototipo con IA.',
+    'Reto de criterio: cada quien diga qué modelo usaría hoy para la misma tarea y por qué.'
 ];
 
 const PROACTIVE_REACTIVATION_MESSAGES = [
@@ -2707,6 +2721,14 @@ function getUnusedRandomTopicSeed(usedTopicKeys = new Set()) {
     return availableTopics[Math.floor(Math.random() * availableTopics.length)];
 }
 
+function getUnusedRandomDuelTopicSeed(usedTopicKeys = new Set()) {
+    const availableTopics = PROACTIVE_RANDOM_DUEL_SEEDS.filter((topic) => !usedTopicKeys.has(normalizeRandomTopicKey(topic)));
+    if (availableTopics.length === 0) {
+        return '';
+    }
+    return availableTopics[Math.floor(Math.random() * availableTopics.length)];
+}
+
 async function generateFreshRandomUserTopic(usedTopicKeys = new Set(), recentTopics = []) {
     const localTopic = getUnusedRandomTopicSeed(usedTopicKeys);
     if (localTopic) {
@@ -2736,6 +2758,47 @@ No repitas ni reformules demasiado estas dinámicas ya usadas recientemente:
 ${recentTopicsText}
 
 Genera una dinámica verdaderamente nueva:`;
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+        const result = await generateAIContent(systemPrompt, userPrompt, 120);
+        const clean = isReusableRandomTopic(result, usedTopicKeys);
+        if (clean) {
+            return clean;
+        }
+    }
+
+    return null;
+}
+
+async function generateFreshRandomDuelTopic(usedTopicKeys = new Set(), recentTopics = []) {
+    const localTopic = getUnusedRandomDuelTopicSeed(usedTopicKeys);
+    if (localTopic) {
+        return localTopic;
+    }
+
+    const recentContext = normalizeStringTrackingList(recentTopics, RANDOM_TOPIC_PROMPT_HISTORY_LIMIT).slice(-RANDOM_TOPIC_PROMPT_HISTORY_LIMIT);
+    const recentTopicsText = recentContext.length > 0
+        ? recentContext.map((topic, index) => `${index + 1}. ${topic}`).join('\n')
+        : 'Ninguna todavia.';
+    const systemPrompt = 'Eres un community manager creativo para un grupo de WhatsApp sobre IA. REGLA ABSOLUTA: responde unicamente en espanol de Mexico.';
+    const userPrompt = `Genera UNA sola dinamica nueva para etiquetar a dos personas del grupo al mismo tiempo.
+
+Debe:
+- Sonar como duelo, reto amistoso o comparativa entre dos personas.
+- Pedir una aportacion util sobre IA, prompts, automatizacion, agentes, LLM, herramientas o repos.
+- Ser concreta, accionable y facil de responder en WhatsApp.
+
+Formato:
+- Solo devuelve la dinamica final.
+- Maximo 180 caracteres.
+- Sin emojis.
+- Sin comillas.
+- Sin mencionar nombres ni usar @.
+
+No repitas ni reformules demasiado estas dinamicas ya usadas recientemente:
+${recentTopicsText}
+
+Genera una dinamica nueva para dos personas:`;
 
     for (let attempt = 0; attempt < 4; attempt += 1) {
         const result = await generateAIContent(systemPrompt, userPrompt, 120);
@@ -2784,9 +2847,22 @@ function buildRandomUserRotationEntry(existingEntry, candidateIds = []) {
     return { pool, remaining };
 }
 
+function shouldUseRandomUserDuelMode(groupJid, todayKey, remainingCount) {
+    if (remainingCount < 2 || RANDOM_USER_DUEL_CHANCE <= 0) {
+        return false;
+    }
+    const normalizedSeed = normalizeRandomTopicKey(`${groupJid} ${todayKey}`);
+    let hash = 0;
+    for (const char of normalizedSeed) {
+        hash = ((hash * 31) + char.charCodeAt(0)) % 1000;
+    }
+    const threshold = Math.round(RANDOM_USER_DUEL_CHANCE * 1000);
+    return hash < threshold;
+}
+
 function setPendingRandomUserFollowUp(followUps, nextFollowUp) {
     const activeFollowUps = normalizeRandomUserFollowUps(followUps)
-        .filter((item) => item.groupJid !== nextFollowUp.groupJid);
+        .filter((item) => !(item.groupJid === nextFollowUp.groupJid && item.targetJid === nextFollowUp.targetJid));
     activeFollowUps.push(nextFollowUp);
     return normalizeRandomUserFollowUps(activeFollowUps);
 }
@@ -4535,6 +4611,114 @@ async function sendRandomUserSelection(sock) {
         }
         if (PROACTIVE_GROUP_JIDS.length > 1) await new Promise((r) => setTimeout(r, 3000));
     }
+    const proactiveUpdates = { lastRandomUserAt: new Date().toISOString() };
+    if (topicsUsedThisRun.length > 0) {
+        proactiveUpdates.randomTopicTracking = [...randomTopicTracking, ...topicsUsedThisRun].slice(-RANDOM_TOPIC_TRACKING_LIMIT);
+    }
+    proactiveUpdates.randomUserRotationByGroup = randomUserRotationByGroup;
+    proactiveUpdates.pendingRandomUserFollowUps = pendingRandomUserFollowUps;
+    updateProactiveState(proactiveUpdates);
+}
+
+async function sendRandomUserSelection(sock) {
+    if (PROACTIVE_GROUP_JIDS.length === 0) return;
+    const state = getProactiveState();
+    const todayKey = getMexicoDateKey(getMexicoNow());
+    const randomTopicTracking = normalizeStringTrackingList(state.randomTopicTracking, RANDOM_TOPIC_TRACKING_LIMIT);
+    const randomUserRotationByGroup = normalizeRandomUserRotationByGroup(state.randomUserRotationByGroup);
+    let pendingRandomUserFollowUps = normalizeRandomUserFollowUps(state.pendingRandomUserFollowUps);
+    const usedTopicKeys = new Set(randomTopicTracking.map((topic) => normalizeRandomTopicKey(topic)));
+    const topicsUsedThisRun = [];
+
+    for (const groupJid of PROACTIVE_GROUP_JIDS) {
+        try {
+            const metadata = await sock.groupMetadata(groupJid);
+            const candidates = (metadata.participants || []).filter((participant) => {
+                if (participant.id === sock.user?.id) return false;
+                if (participant.admin === 'admin' || participant.admin === 'superadmin') return false;
+                return true;
+            });
+            if (candidates.length === 0) {
+                console.log(`[PROACTIVO] No hay candidatos en ${groupJid}.`);
+                continue;
+            }
+
+            const rotationEntry = buildRandomUserRotationEntry(
+                randomUserRotationByGroup[groupJid],
+                candidates.map((participant) => participant.id)
+            );
+            const useDuelMode = shouldUseRandomUserDuelMode(groupJid, todayKey, rotationEntry.remaining.length);
+            const requestedCount = useDuelMode ? 2 : 1;
+            const selectedParticipants = rotationEntry.remaining
+                .slice(0, requestedCount)
+                .map((participantId) => candidates.find((participant) => participant.id === participantId))
+                .filter(Boolean);
+
+            if (selectedParticipants.length === 0 || (useDuelMode && selectedParticipants.length < 2)) {
+                console.log(`[PROACTIVO] No encontré participantes suficientes para ${useDuelMode ? 'duelo' : 'selección'} en ${groupJid}.`);
+                continue;
+            }
+
+            const topic = useDuelMode
+                ? await generateFreshRandomDuelTopic(usedTopicKeys, [...randomTopicTracking, ...topicsUsedThisRun])
+                : await generateFreshRandomUserTopic(usedTopicKeys, [...randomTopicTracking, ...topicsUsedThisRun]);
+            if (!topic) {
+                console.log(`[PROACTIVO] No encontré un tema nuevo para ${groupJid}.`);
+                continue;
+            }
+
+            const mentionLabels = selectedParticipants.map((participant) => `@${getParticipantMentionLabel(participant, participant.id)}`);
+            const text = useDuelMode
+                ? [
+                    `${CASTOR_EMOJI} *Castor armó un duelo...*`,
+                    '',
+                    `${mentionLabels.join(' y ')}, les toca reto entre ustedes:`,
+                    `👉 ${topic}`
+                ].join('\n')
+                : [
+                    `${CASTOR_EMOJI} *Castor seleccionó a alguien...*`,
+                    '',
+                    `${mentionLabels[0]} cuéntanos algo:`,
+                    `👉 ${topic}`
+                ].join('\n');
+
+            const sentMessage = await sock.sendMessage(groupJid, {
+                text,
+                mentions: selectedParticipants.map((participant) => participant.id)
+            });
+
+            rotationEntry.remaining = rotationEntry.remaining.slice(selectedParticipants.length);
+            randomUserRotationByGroup[groupJid] = rotationEntry;
+
+            const nowIso = new Date().toISOString();
+            const expiresAt = new Date(Date.now() + RANDOM_USER_REPLY_WINDOW_MS).toISOString();
+            for (const participant of selectedParticipants) {
+                pendingRandomUserFollowUps = setPendingRandomUserFollowUp(pendingRandomUserFollowUps, {
+                    groupJid,
+                    targetJid: participant.id,
+                    topic,
+                    promptMessageId: String(sentMessage?.key?.id || '').trim(),
+                    assignedAt: nowIso,
+                    lastInteractionAt: nowIso,
+                    lastBotReplyAt: nowIso,
+                    replyCount: 0,
+                    expiresAt
+                });
+            }
+
+            const topicKey = normalizeRandomTopicKey(topic);
+            usedTopicKeys.add(topicKey);
+            topicsUsedThisRun.push(topic);
+            const selectedLabels = selectedParticipants
+                .map((participant) => getParticipantMentionLabel(participant, participant.id))
+                .join(', ');
+            console.log(`[PROACTIVO] ${useDuelMode ? 'Duelo' : 'Selección'} aleatoria enviada en ${groupJid}: ${selectedLabels}`);
+        } catch (groupError) {
+            console.error(`[PROACTIVO] Error en selección aleatoria para ${groupJid}:`, groupError?.message);
+        }
+        if (PROACTIVE_GROUP_JIDS.length > 1) await new Promise((r) => setTimeout(r, 3000));
+    }
+
     const proactiveUpdates = { lastRandomUserAt: new Date().toISOString() };
     if (topicsUsedThisRun.length > 0) {
         proactiveUpdates.randomTopicTracking = [...randomTopicTracking, ...topicsUsedThisRun].slice(-RANDOM_TOPIC_TRACKING_LIMIT);
