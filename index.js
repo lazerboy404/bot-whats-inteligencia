@@ -61,7 +61,7 @@ const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const GITHUB_DROP_FALLBACK_IMAGE_URL = process.env.GITHUB_DROP_FALLBACK_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/github-drop-fallback.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.comandos', '.reglas', '.miid', '.setadmin', '.troncos', '.dinamica', '.grupoid', '.testart', '.test11', '.test6']);
+const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.comandos', '.reglas', '.miid', '.setadmin', '.troncos', '.dinamica', '.grupoid', '.testart', '.test11', '.test6', '.launch', '.paper', '.benchamark', '.benchmark']);
 const CASTOR_INVALID_COMMAND_EMOJI = '❌';
 const POSITIVE_REACTION_EMOJIS = new Set(['👍', '❤️', '👏', '🤯', '🔥', '💯', '🧠', '🤖', '🦫', '💡']);
 const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
@@ -2343,6 +2343,12 @@ async function handleTestDropCommand(sock, msg, remoteJid, dropMode = 'github') 
         dropContent = await buildPreviewRotatingKnowledgeDropContent(state, 0);
     } else if (dropMode === 'schedule-following') {
         dropContent = await buildPreviewRotatingKnowledgeDropContent(state, 1);
+    } else if (dropMode === 'launch') {
+        dropContent = await buildLaunchDropContent(state);
+    } else if (dropMode === 'paper') {
+        dropContent = await buildPaperDropContent(state);
+    } else if (dropMode === 'benchmark') {
+        dropContent = await buildBenchmarkDropContent(state);
     } else if (dropMode === 'osint') {
         dropContent = await buildOsintDropContent(state);
     } else {
@@ -6312,6 +6318,12 @@ async function processIncomingMessage(sock, msg, runId) {
         await handleTestArticleCommand(sock, msg, remoteJid);
     } else if (command === '.test6') {
         await handleTestDropCommand(sock, msg, remoteJid, 'schedule-following');
+    } else if (command === '.launch') {
+        await handleTestDropCommand(sock, msg, remoteJid, 'launch');
+    } else if (command === '.paper') {
+        await handleTestDropCommand(sock, msg, remoteJid, 'paper');
+    } else if (command === '.benchamark' || command === '.benchmark') {
+        await handleTestDropCommand(sock, msg, remoteJid, 'benchmark');
     } else if (command === '.comandos') {
         await handleCommandsListCommand(sock, msg, remoteJid);
     } else if (command === '.reglas') {
