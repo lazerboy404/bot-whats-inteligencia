@@ -1005,6 +1005,35 @@ function describeQuotedContent(quotedMessage) {
     return { mediaType, text, raw };
 }
 
+function getReadableQuotedContentType(mediaType) {
+    const labels = {
+        conversation: 'texto',
+        extendedTextMessage: 'texto',
+        imageMessage: 'imagen',
+        videoMessage: 'video',
+        audioMessage: 'audio',
+        documentMessage: 'documento',
+        stickerMessage: 'sticker',
+        contactMessage: 'contacto',
+        locationMessage: 'ubicación',
+        liveLocationMessage: 'ubicación en vivo',
+        pollCreationMessage: 'encuesta'
+    };
+    return labels[mediaType] || mediaType || 'desconocido';
+}
+
+function buildQuotedContentPreview(detail) {
+    const quotedText = sanitizeText(detail?.text || '', 500);
+    if (quotedText) {
+        return quotedText;
+    }
+    const readableType = getReadableQuotedContentType(detail?.mediaType);
+    if (readableType === 'imagen' || readableType === 'video' || readableType === 'documento' || readableType === 'audio' || readableType === 'sticker') {
+        return `Mensaje de ${readableType} sin texto visible.`;
+    }
+    return 'Sin texto visible en el mensaje citado.';
+}
+
 function parseTargetFromTextOrMention(msg, text) {
     const contextInfo = getContextInfoFromMessage(msg.message);
     const mentioned = contextInfo?.mentionedJid || [];
@@ -1031,7 +1060,7 @@ function parseTargetFromReportText(text) {
 }
 
 function parseGroupFromReportText(text) {
-    const match = String(text || '').match(/Grupo:\s*([0-9\-]+@g\.us)/i);
+    const match = String(text || '').match(/Grupo(?:\s+JID)?:\s*([0-9\-]+@g\.us)/i);
     if (match?.[1]) return match[1];
     return null;
 }
@@ -1676,25 +1705,38 @@ async function handleReportCommand(sock, msg, text, remoteJid) {
     const reporterInfo = await getGroupParticipantSummary(sock, remoteJid, reporterId);
     const offenderInfo = await getGroupParticipantSummary(sock, remoteJid, offenderId);
     const motive = sanitizeText(text).split(/\s+/).slice(1).join(' ');
-    const cleanMotive = motive || 'Sin motivo adicional.';
+    const cleanMotive = sanitizeText(motive || 'Sin motivo adicional.', 280);
     const reporterReadable = getReadableReportIdentity(reporterInfo);
     const offenderReadable = getReadableReportIdentity(offenderInfo);
+    const evidencePreview = buildQuotedContentPreview(detail);
+    const evidenceType = getReadableQuotedContentType(detail.mediaType);
 
     const reportText = [
-        '🧾 REPORTE FORENSE',
-        `Grupo: ${reporterInfo.groupName}`,
-        `Reportante: ${reporterReadable}`,
-        `Referencia reportante: ${reporterInfo.moderationReference}`,
-        `ID reportante: ${reporterId}`,
-        `Infractor: ${offenderReadable}`,
-        `Referencia infractor: ${offenderInfo.moderationReference}`,
-        `ID infractor: ${offenderId}`,
-        `Motivo: ${cleanMotive}`,
-        `Tipo de contenido: ${detail.mediaType}`,
-        `Texto citado: ${detail.text || '(sin texto visible)'}`,
-        `Contenido crudo: ${detail.raw || '(sin contenido)'}`,
+        '🧾 REPORTE CASTOR',
         '',
-        'Acciones rápidas:',
+        `Grupo: ${reporterInfo.groupName}`,
+        `Grupo JID: ${remoteJid}`,
+        '',
+        'Reportante:',
+        `- Usuario: ${reporterReadable}`,
+        `- Ref: ${reporterInfo.moderationReference}`,
+        `- ID: ${reporterId}`,
+        '',
+        'Infractor:',
+        `- Usuario: ${offenderReadable}`,
+        `- Ref: ${offenderInfo.moderationReference}`,
+        `ID infractor: ${offenderId}`,
+        '',
+        'Motivo:',
+        `- ${cleanMotive}`,
+        '',
+        'Evidencia:',
+        `- Tipo: ${evidenceType}`,
+        `- Contenido citado: ${evidencePreview}`
+    ].join('\n');
+
+    const quickActionsText = [
+        '🛠️ Comandos rápidos para copiar y pegar en el grupo:',
         `.advertir ${offenderId}`,
         `.ban ${offenderId}`
     ].join('\n');
@@ -1705,7 +1747,7 @@ async function handleReportCommand(sock, msg, text, remoteJid) {
             mentions: [reporterId, offenderId]
         });
         reportReferenceMap.set(sentReport.key.id, { offenderJid: offenderId, groupJid: remoteJid });
-        await sendPrivateAdminMessage(sock, `.advertir ${offenderId}`);
+        await sendPrivateAdminMessage(sock, quickActionsText);
         await sock.sendMessage(remoteJid, { text: '✅ Reporte recibido. Evidencia preservada y enviada a administración.' }, { quoted: msg });
         await sendReactionSticker(sock, remoteJid, 'reportar.webp');
     } catch (error) {
