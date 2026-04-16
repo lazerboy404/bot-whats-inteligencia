@@ -4900,6 +4900,134 @@ async function fetchLatestBenchmarks() {
         .slice(0, 15);
 }
 
+function escapeSvgText(value) {
+    return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function wrapTextForCard(value, maxCharsPerLine = 28, maxLines = 4) {
+    const words = String(value || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+    if (words.length === 0) return [];
+    const lines = [];
+    let current = '';
+    let index = 0;
+
+    while (index < words.length) {
+        const word = words[index];
+        const next = current ? `${current} ${word}` : word;
+        if (next.length <= maxCharsPerLine || !current) {
+            current = next;
+            index += 1;
+            continue;
+        }
+        lines.push(current);
+        current = word;
+        if (lines.length === maxLines - 1) {
+            index += 1;
+            break;
+        }
+        index += 1;
+    }
+
+    const remainingWords = words.slice(index);
+    if (current) {
+        lines.push(current);
+    }
+    if (remainingWords.length > 0 && lines.length > 0) {
+        const remainder = remainingWords.join(' ');
+        lines[lines.length - 1] = `${lines[lines.length - 1]} ${remainder}`.trim();
+    }
+
+    return lines.slice(0, maxLines).map((line, index, arr) => {
+        if (index !== arr.length - 1) return line;
+        return line.length > maxCharsPerLine ? `${line.slice(0, Math.max(0, maxCharsPerLine - 1)).trimEnd()}…` : line;
+    });
+}
+
+async function createKnowledgeRadarCardBuffer(options = {}) {
+    if (!sharp) {
+        return null;
+    }
+
+    const kind = String(options.kind || 'paper').toLowerCase();
+    const title = String(options.title || '').trim();
+    if (!title) {
+        return null;
+    }
+
+    const palettes = {
+        launch: {
+            bgA: '#0f172a',
+            bgB: '#092f49',
+            accent: '#38bdf8',
+            accentSoft: '#22d3ee',
+            label: 'RADAR LAUNCH',
+            badge: 'OPEN SOURCE'
+        },
+        paper: {
+            bgA: '#111827',
+            bgB: '#1f2937',
+            accent: '#f59e0b',
+            accentSoft: '#fde68a',
+            label: 'RADAR PAPER',
+            badge: 'ARXIV'
+        },
+        benchmark: {
+            bgA: '#0b1220',
+            bgB: '#1b2d4b',
+            accent: '#a78bfa',
+            accentSoft: '#c4b5fd',
+            label: 'RADAR BENCHMARK',
+            badge: 'EVAL'
+        }
+    };
+    const palette = palettes[kind] || palettes.paper;
+    const subtitle = String(options.subtitle || '').trim();
+    const footer = String(options.footer || '').trim();
+    const wrappedTitle = wrapTextForCard(title, 30, 4);
+    const titleSpans = wrappedTitle.map((line, index) => {
+        const dy = index === 0 ? '0' : '68';
+        return `<tspan x="86" dy="${dy}">${escapeSvgText(line)}</tspan>`;
+    }).join('');
+
+    const svg = `
+<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="${palette.bgA}" />
+      <stop offset="100%" stop-color="${palette.bgB}" />
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="${palette.accent}" stop-opacity="0.95" />
+      <stop offset="100%" stop-color="${palette.accentSoft}" stop-opacity="0.55" />
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)" />
+  <circle cx="1025" cy="138" r="182" fill="${palette.accent}" opacity="0.14" />
+  <circle cx="1120" cy="98" r="78" fill="${palette.accentSoft}" opacity="0.16" />
+  <rect x="70" y="58" width="1060" height="514" rx="32" fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.08)" />
+  <rect x="86" y="82" width="296" height="16" rx="8" fill="url(#glow)" />
+  <text x="86" y="138" fill="${palette.accentSoft}" font-size="28" font-family="Segoe UI, Arial, sans-serif" font-weight="700" letter-spacing="3">${escapeSvgText(palette.label)}</text>
+  <text x="86" y="226" fill="#ffffff" font-size="60" font-family="Segoe UI, Arial, sans-serif" font-weight="800">${titleSpans}</text>
+  ${subtitle ? `<text x="86" y="438" fill="rgba(255,255,255,0.86)" font-size="30" font-family="Segoe UI, Arial, sans-serif" font-weight="500">${escapeSvgText(subtitle)}</text>` : ''}
+  <rect x="86" y="486" width="218" height="54" rx="27" fill="rgba(255,255,255,0.10)" stroke="rgba(255,255,255,0.14)" />
+  <text x="195" y="521" text-anchor="middle" fill="#ffffff" font-size="24" font-family="Segoe UI, Arial, sans-serif" font-weight="700">${escapeSvgText(palette.badge)}</text>
+  <text x="86" y="578" fill="rgba(255,255,255,0.70)" font-size="24" font-family="Segoe UI, Arial, sans-serif" font-weight="600">${escapeSvgText(footer || 'Castor Bot')}</text>
+  <text x="1118" y="578" text-anchor="end" fill="rgba(255,255,255,0.78)" font-size="26" font-family="Segoe UI, Arial, sans-serif" font-weight="700">CASTOR BOT</text>
+</svg>`;
+
+    try {
+        return await sharp(Buffer.from(svg)).png().toBuffer();
+    } catch (error) {
+        console.error('[RADAR-CARD] Error generando portada:', error?.message || error);
+        return null;
+    }
+}
+
 function cleanStructuredLines(text) {
     return cleanModelOutputText(text)
         .replace(/\r/g, '')
@@ -5277,6 +5405,14 @@ async function buildLaunchDropContent(state) {
     if (!summary) return null;
 
     const imageUrl = await fetchGithubRepoImageUrl(repo);
+    const launchCardBuffer = imageUrl === GITHUB_DROP_FALLBACK_IMAGE_URL
+        ? await createKnowledgeRadarCardBuffer({
+            kind: 'launch',
+            title: repo.full_name,
+            subtitle: 'Release detectado en GitHub',
+            footer: `⭐ ${repo.stargazers_count} estrellas`
+        })
+        : null;
     const text = [
         `${CASTOR_EMOJI} *Radar Launch 🚀*`,
         '',
@@ -5292,12 +5428,17 @@ async function buildLaunchDropContent(state) {
         itemTitle: repo.full_name,
         bannerTitle: 'Radar Launch 🚀',
         summaryResult,
-        payload: imageUrl
+        payload: launchCardBuffer
             ? {
+                image: launchCardBuffer,
+                caption: text
+            }
+            : imageUrl
+                ? {
                 image: { url: imageUrl },
                 caption: text
             }
-            : { text },
+                : { text },
         textFallback: text,
         trackingUpdate: {
             launchTracking: [...launchTracking, repo.id].slice(-KNOWLEDGE_RADAR_TRACKING_LIMIT),
@@ -5320,30 +5461,33 @@ async function buildPaperDropContent(state) {
     if (!summary) return null;
 
     const publishedDate = formatMexicoShortDate(paper.published_at);
+    const paperCardBuffer = await createKnowledgeRadarCardBuffer({
+        kind: 'paper',
+        title: paper.title,
+        subtitle: 'Lectura rápida del paper',
+        footer: publishedDate ? `Publicado ${publishedDate}` : 'Fuente: arXiv'
+    });
+    const text = [
+        `${CASTOR_EMOJI} *Radar Paper 📄*`,
+        '',
+        summary,
+        ...(publishedDate ? ['', `📅 Publicado: ${publishedDate}`] : []),
+        '',
+        paper.url
+    ].join('\n');
     return {
         source: 'paper',
         itemId: String(paper.id),
         itemTitle: paper.title,
         bannerTitle: 'Radar Paper 📄',
         summaryResult,
-        payload: {
-            text: [
-                `${CASTOR_EMOJI} *Radar Paper 📄*`,
-                '',
-                summary,
-                ...(publishedDate ? ['', `📅 Publicado: ${publishedDate}`] : []),
-                '',
-                paper.url
-            ].join('\n')
-        },
-        textFallback: [
-            `${CASTOR_EMOJI} *Radar Paper 📄*`,
-            '',
-            summary,
-            ...(publishedDate ? ['', `📅 Publicado: ${publishedDate}`] : []),
-            '',
-            paper.url
-        ].join('\n'),
+        payload: paperCardBuffer
+            ? {
+                image: paperCardBuffer,
+                caption: text
+            }
+            : { text },
+        textFallback: text,
         trackingUpdate: {
             paperTracking: [...paperTracking, String(paper.id)].slice(-KNOWLEDGE_RADAR_TRACKING_LIMIT),
             lastPaperSentAt: new Date().toISOString()
@@ -5365,30 +5509,33 @@ async function buildBenchmarkDropContent(state) {
     if (!summary) return null;
 
     const publishedDate = formatMexicoShortDate(benchmark.published_at);
+    const benchmarkCardBuffer = await createKnowledgeRadarCardBuffer({
+        kind: 'benchmark',
+        title: benchmark.title,
+        subtitle: 'Lectura rápida del benchmark',
+        footer: publishedDate ? `Publicado ${publishedDate}` : 'Fuente: arXiv'
+    });
+    const text = [
+        `${CASTOR_EMOJI} *Radar Benchmark 📊*`,
+        '',
+        summary,
+        ...(publishedDate ? ['', `📅 Publicado: ${publishedDate}`] : []),
+        '',
+        benchmark.url
+    ].join('\n');
     return {
         source: 'benchmark',
         itemId: String(benchmark.id),
         itemTitle: benchmark.title,
         bannerTitle: 'Radar Benchmark 📊',
         summaryResult,
-        payload: {
-            text: [
-                `${CASTOR_EMOJI} *Radar Benchmark 📊*`,
-                '',
-                summary,
-                ...(publishedDate ? ['', `📅 Publicado: ${publishedDate}`] : []),
-                '',
-                benchmark.url
-            ].join('\n')
-        },
-        textFallback: [
-            `${CASTOR_EMOJI} *Radar Benchmark 📊*`,
-            '',
-            summary,
-            ...(publishedDate ? ['', `📅 Publicado: ${publishedDate}`] : []),
-            '',
-            benchmark.url
-        ].join('\n'),
+        payload: benchmarkCardBuffer
+            ? {
+                image: benchmarkCardBuffer,
+                caption: text
+            }
+            : { text },
+        textFallback: text,
         trackingUpdate: {
             benchmarkTracking: [...benchmarkTracking, String(benchmark.id)].slice(-KNOWLEDGE_RADAR_TRACKING_LIMIT),
             lastBenchmarkSentAt: new Date().toISOString()
