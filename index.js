@@ -4109,6 +4109,42 @@ function buildOsintSummaryFallback(repo) {
     ].join('\n');
 }
 
+function normalizeOsintChunk(value) {
+    return String(value || '')
+        .replace(/\s+/g, ' ')
+        .replace(/^[\s:;,.|-]+/, '')
+        .replace(/[\s:;,.|-]+$/, '')
+        .trim();
+}
+
+function splitInlineOsintDisclaimer(line) {
+    const source = String(line || '').trim();
+    if (!source) {
+        return { content: '', disclaimer: '' };
+    }
+    const match = source.match(/^(.*?)(?:\s+|^)(?:AVISO ÉTICO|AVISO ETICO|Nota ética(?: importante)?|Nota etica(?: importante)?|Disclaimer|Advertencia ética|Advertencia etica|Uso ético|Uso etico)\s*:?\s*(.+)$/i);
+    if (!match) {
+        return { content: source, disclaimer: '' };
+    }
+    return {
+        content: normalizeOsintChunk(match[1]),
+        disclaimer: normalizeOsintChunk(match[2])
+    };
+}
+
+function splitInlineOsintBullets(line) {
+    const source = String(line || '').trim();
+    if (!source) {
+        return { lead: '', bullets: [] };
+    }
+    const parts = source.split(/\s+(?=-\s+|•\s+|🛰️|🧰|🔎|⚙️|🛠️|🎯|🔍|📡)/u);
+    const lead = normalizeOsintChunk(parts.shift() || '');
+    const bullets = parts
+        .map((part) => normalizeOsintChunk(part.replace(/^(-|•)\s*/u, '')))
+        .filter(Boolean);
+    return { lead, bullets };
+}
+
 function formatOsintSummaryText(text, repoFullName = '') {
     const source = cleanModelOutputText(text)
         .replace(/\r/g, '')
@@ -4133,6 +4169,16 @@ function formatOsintSummaryText(text, repoFullName = '') {
             .trim();
         if (!line) continue;
 
+        const inlineSplit = splitInlineOsintDisclaimer(line);
+        line = inlineSplit.content;
+        if (inlineSplit.disclaimer) {
+            disclaimer = disclaimer ? `${inlineSplit.disclaimer}. ${disclaimer}` : inlineSplit.disclaimer;
+        }
+        if (!line) {
+            section = 'disclaimer';
+            continue;
+        }
+
         if (!title && line.includes('|')) {
             const [rawName, ...rest] = line.split('|');
             const repoName = String(rawName || repoFullName || '').trim().toUpperCase();
@@ -4143,8 +4189,16 @@ function formatOsintSummaryText(text, repoFullName = '') {
         }
 
         if (/^¿Qué hace\??\s*:/i.test(line)) {
-            whatDoes = line.replace(/^¿Qué hace\??\s*:\s*/i, '').trim();
-            section = 'what';
+            const { lead, bullets } = splitInlineOsintBullets(line.replace(/^¿Qué hace\??\s*:\s*/i, '').trim());
+            if (lead) {
+                whatDoes = lead;
+            }
+            if (bullets.length > 0) {
+                arsenal.push(...bullets);
+                section = 'arsenal';
+            } else {
+                section = 'what';
+            }
             continue;
         }
 
@@ -4166,17 +4220,31 @@ function formatOsintSummaryText(text, repoFullName = '') {
         }
 
         if (section === 'what') {
-            whatDoes = whatDoes ? `${whatDoes} ${line}` : line;
+            const { lead, bullets } = splitInlineOsintBullets(line);
+            if (lead) {
+                whatDoes = whatDoes ? `${whatDoes} ${lead}` : lead;
+            }
+            if (bullets.length > 0) {
+                arsenal.push(...bullets);
+                section = 'arsenal';
+            }
             continue;
         }
 
         if (section === 'arsenal') {
-            arsenal.push(line.replace(/^-+\s*/, '').trim());
+            const { lead, bullets } = splitInlineOsintBullets(line);
+            const candidateItems = [lead, ...bullets].map(normalizeOsintChunk).filter(Boolean);
+            arsenal.push(...candidateItems);
             continue;
         }
 
         if (section === 'scenario') {
-            scenario = scenario ? `${scenario} ${line}` : line;
+            const { lead, bullets } = splitInlineOsintBullets(line);
+            const scenarioItems = [lead, ...bullets].map(normalizeOsintChunk).filter(Boolean);
+            const scenarioLine = scenarioItems.join(', ');
+            if (scenarioLine) {
+                scenario = scenario ? `${scenario} ${scenarioLine}` : scenarioLine;
+            }
             continue;
         }
 
@@ -4194,18 +4262,25 @@ function formatOsintSummaryText(text, repoFullName = '') {
     }
 
     const cleanedArsenal = arsenal
-        .map((item) => item.replace(/\s+/g, ' ').trim())
+        .map((item) => normalizeOsintChunk(item))
+        .filter((item) => item.length >= 10)
+        .filter((item) => !/^[^a-záéíóúñ0-9]*$/i.test(item))
         .filter(Boolean)
         .slice(0, 3);
     let scenarioText = scenario ? scenario.replace(/^Ideal para:\s*/i, '').trim() : '';
-    const scenarioDisclaimerMatch = scenarioText.match(/(.+?)(?:\.\s*)?(?:nota ética(?:\s+importante)?|nota etica(?:\s+importante)?|disclaimer|advertencia ética|advertencia etica)\s*:?\s*(.+)$/i);
+    const scenarioDisclaimerMatch = scenarioText.match(/(.+?)(?:\.\s*)?(?:aviso ético|aviso etico|nota ética(?:\s+importante)?|nota etica(?:\s+importante)?|disclaimer|advertencia ética|advertencia etica)\s*:?\s*(.+)$/i);
     if (scenarioDisclaimerMatch) {
-        scenarioText = String(scenarioDisclaimerMatch[1] || '').trim();
-        const inlineDisclaimer = String(scenarioDisclaimerMatch[2] || '').trim();
+        scenarioText = normalizeOsintChunk(scenarioDisclaimerMatch[1]);
+        const inlineDisclaimer = normalizeOsintChunk(scenarioDisclaimerMatch[2]);
         if (inlineDisclaimer) {
             disclaimer = disclaimer ? `${inlineDisclaimer}. ${disclaimer}` : inlineDisclaimer;
         }
     }
+    scenarioText = scenarioText
+        .replace(/\s+-\s+/g, ', ')
+        .replace(/,+/g, ',')
+        .replace(/\s+,/g, ',')
+        .trim();
 
     const normalizedScenario = scenarioText
         ? scenarioText
@@ -4244,17 +4319,21 @@ function isWeakOsintRepoSummary(text) {
         /lista estructurada/i,
         /solución estándar/i,
         /ofrece una solución/i,
+        /colección integral/i,
         /proporciona una lista/i,
         /en el ámbito de la ciberseguridad/i,
-        /evaluación de habilidades/i
+        /evaluación de habilidades/i,
+        /rutas de acceso general/i,
+        /general access paths/i,
+        /esta herramienta permite/i
     ];
     if (weakPatterns.some((pattern) => pattern.test(value))) return true;
     return false;
 }
 
 async function generateOsintRepoSummary(repo) {
-    const systemPrompt = "Eres un operador red team, Pentester Senior y analista OSINT para un grupo de WhatsApp. REGLA ABSOLUTA: Tu respuesta DEBE estar en español de México. TONO OBLIGATORIO: táctico, directo, de operador a operador; no suenes corporativo, académico ni de marketing. FORMATO ESTRICTO: 1. Título: '[Nombre Repo] | [Su ventaja táctica]'. 2. ¿Qué hace?: 2 líneas explicando su función técnica y por qué da ventaja operativa. 3. Arsenal: 3 viñetas técnicas con lo que incluye, cada una con emoji. 4. Escenario: 'Ideal para: [2 casos tácticos reales, ej. Footprinting, Enumeración, Bug Bounty, Surface Mapping]'. 5. Disclaimer ÉTICO OBLIGATORIO: advierte brevemente que usarlo sin autorización es ilegal. 6. Cero comillas.";
-    const userPrompt = "Analiza este repositorio de ciberseguridad y devuelve la reseña táctica en el formato estricto. Evita sonar corporativo o genérico; enfócate en reconocimiento, enumeración, pivotear hallazgos y valor operativo real.\n\nRepo: " + repo.full_name + "\nInfo: " + repo.description;
+    const systemPrompt = "Eres un operador red team, Pentester Senior y analista OSINT para un grupo de WhatsApp. REGLA ABSOLUTA: Tu respuesta DEBE estar en español de México. TONO OBLIGATORIO: táctico, directo, de operador a operador; no suenes corporativo, académico ni de marketing. NO inventes expansiones para siglas como RAG, OSINT, EDR, XSS o SSRF: déjalas tal cual. No metas el disclaimer dentro de Escenario. FORMATO ESTRICTO: 1. Título: '[Nombre Repo] | [Su ventaja táctica]'. 2. ¿Qué hace?: 2 líneas explicando su función técnica y por qué da ventaja operativa. 3. Arsenal: 3 viñetas técnicas concretas con lo que incluye, cada una con emoji. 4. Escenario: 'Ideal para: [2 casos tácticos reales, ej. Footprinting, Enumeración, Bug Bounty, Surface Mapping]'. 5. Disclaimer ÉTICO OBLIGATORIO: advierte brevemente que usarlo sin autorización es ilegal. 6. Cero comillas.";
+    const userPrompt = "Analiza este repositorio de ciberseguridad y devuelve la reseña táctica en el formato estricto. Evita sonar corporativo o genérico; enfócate en reconocimiento, enumeración, pivotear hallazgos y valor operativo real. No traduzcas ni inventes el significado de siglas técnicas. Si el repo es una colección de writeups, prompts o skills, dilo con honestidad sin venderlo como scanner o exploit framework.\n\nRepo: " + repo.full_name + "\nInfo: " + repo.description;
 
     for (let attempt = 0; attempt < 3; attempt++) {
         const rawSummary = await generateAIContent(systemPrompt, userPrompt, 350);
