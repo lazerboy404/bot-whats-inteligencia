@@ -54,6 +54,7 @@ let startupShowcaseSentRunId = 0;
 let lastSocketActivityAt = Date.now();
 let lastCommandHandledAt = 0;
 let proactiveStartupSweepApplied = false;
+let staleSocketStrikeCount = 0;
 const processedMessageIds = new Set();
 const incomingQueue = [];
 let isProcessingIncoming = false;
@@ -72,6 +73,8 @@ const BAILEYS_RETRY_REQUEST_DELAY_MS = Number(process.env.BAILEYS_RETRY_REQUEST_
 const SEND_ACTION_TIMEOUT_MS = Number(process.env.SEND_ACTION_TIMEOUT_MS || 20000);
 const BOT_HEALTHCHECK_INTERVAL_MS = Number(process.env.BOT_HEALTHCHECK_INTERVAL_MS || 60000);
 const BOT_STALE_SOCKET_MS = Number(process.env.BOT_STALE_SOCKET_MS || 600000);
+const BOT_ENABLE_WATCHDOG = !['0', 'false', 'no', 'off'].includes(String(process.env.BOT_ENABLE_WATCHDOG || 'true').toLowerCase());
+const BOT_WATCHDOG_STALE_STRIKES = Math.max(1, Number(process.env.BOT_WATCHDOG_STALE_STRIKES || 3));
 const BOT_SUSPEND_DETECTION_MS = Number(process.env.BOT_SUSPEND_DETECTION_MS || 60000);
 const BOT_SUSPEND_CHECK_INTERVAL_MS = Number(process.env.BOT_SUSPEND_CHECK_INTERVAL_MS || 5000);
 const BOT_PRESENCE_KEEPALIVE_MS = Number(process.env.BOT_PRESENCE_KEEPALIVE_MS || 60000);
@@ -6517,24 +6520,41 @@ function startKeepAlive() {
 
 function touchSocketActivity() {
     lastSocketActivityAt = Date.now();
+    staleSocketStrikeCount = 0;
 }
 
 function startHealthWatchdog() {
     if (healthWatchInterval) {
         return;
     }
+    if (!BOT_ENABLE_WATCHDOG) {
+        console.log('[WATCHDOG] Deshabilitado por configuración.');
+        return;
+    }
     if (EFFECTIVE_BOT_STALE_SOCKET_MS !== BOT_STALE_SOCKET_MS) {
         console.log(`[WATCHDOG] Ajustando stale socket efectivo de ${BOT_STALE_SOCKET_MS}ms a ${EFFECTIVE_BOT_STALE_SOCKET_MS}ms para no chocar con el keepalive.`);
     }
+    console.log(`[WATCHDOG] Activo con ${BOT_WATCHDOG_STALE_STRIKES} strike(s) antes de reconectar.`);
     healthWatchInterval = setInterval(() => {
         if (!activeSock || isStartingBot) {
             return;
         }
         const idleMs = Date.now() - lastSocketActivityAt;
         if (idleMs >= EFFECTIVE_BOT_STALE_SOCKET_MS) {
+            staleSocketStrikeCount += 1;
             const lastCommandAgo = lastCommandHandledAt ? `${Date.now() - lastCommandHandledAt}ms` : 'sin comandos previos';
+            if (staleSocketStrikeCount < BOT_WATCHDOG_STALE_STRIKES) {
+                console.log(`Watchdog detectÃ³ socket inactivo por ${idleMs}ms. Strike ${staleSocketStrikeCount}/${BOT_WATCHDOG_STALE_STRIKES}. Ãšltimo comando: ${lastCommandAgo}.`);
+                return;
+            }
             console.log(`Watchdog detectó socket inactivo por ${idleMs}ms. Último comando: ${lastCommandAgo}. Reiniciando conexión.`);
+            staleSocketStrikeCount = 0;
             scheduleReconnect('watchdog_stale_socket');
+            return;
+        }
+        if (staleSocketStrikeCount > 0) {
+            console.log(`[WATCHDOG] Actividad recuperada tras ${staleSocketStrikeCount} strike(s).`);
+            staleSocketStrikeCount = 0;
         }
     }, BOT_HEALTHCHECK_INTERVAL_MS);
 }
@@ -6548,6 +6568,7 @@ function stopConnectionIntervals() {
         clearInterval(presenceKeepAliveInterval);
         presenceKeepAliveInterval = null;
     }
+    staleSocketStrikeCount = 0;
     stopProactiveScheduler();
 }
 
