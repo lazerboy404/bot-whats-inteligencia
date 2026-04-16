@@ -5631,14 +5631,6 @@ async function buildLaunchDropContent(state) {
     if (!summary) return null;
 
     const imageUrl = await fetchGithubRepoImageUrl(repo);
-    const launchCardBuffer = imageUrl === GITHUB_DROP_FALLBACK_IMAGE_URL
-        ? await createKnowledgeRadarCardBuffer({
-            kind: 'launch',
-            title: repo.full_name,
-            subtitle: 'Release detectado en GitHub',
-            footer: `⭐ ${repo.stargazers_count} estrellas`
-        })
-        : null;
     const text = [
         `${CASTOR_EMOJI} *Radar Launch 🚀*`,
         '',
@@ -5654,17 +5646,12 @@ async function buildLaunchDropContent(state) {
         itemTitle: repo.full_name,
         bannerTitle: 'Radar Launch 🚀',
         summaryResult,
-        payload: launchCardBuffer
+        payload: imageUrl
             ? {
-                image: launchCardBuffer,
-                caption: text
-            }
-            : imageUrl
-                ? {
                 image: { url: imageUrl },
                 caption: text
             }
-                : { text },
+            : { text },
         textFallback: text,
         trackingUpdate: {
             launchTracking: [...launchTracking, repo.id].slice(-KNOWLEDGE_RADAR_TRACKING_LIMIT),
