@@ -61,7 +61,7 @@ const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const GITHUB_DROP_FALLBACK_IMAGE_URL = process.env.GITHUB_DROP_FALLBACK_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/github-drop-fallback.png';
 const CASTOR_SEAL_STICKER_URL = process.env.CASTOR_SEAL_STICKER_URL || '';
-const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.comandos', '.reglas', '.miid', '.setadmin', '.troncos', '.dinamica', '.grupoid', '.testart', '.test11', '.test6', '.launch', '.paper', '.benchamark', '.benchmark']);
+const CASTOR_VALID_COMMANDS = new Set(['.reportar', '.advertir', '.ban', '.unban', '.sticker', '.fantasmas', '.cerrar', '.abrir', '.ping', '.top', '.random', '.comandos', '.reglas', '.miid', '.setadmin', '.troncos', '.dinamica', '.grupoid', '.testart', '.test11', '.test6', '.launch']);
 const CASTOR_INVALID_COMMAND_EMOJI = '❌';
 const POSITIVE_REACTION_EMOJIS = new Set(['👍', '❤️', '👏', '🤯', '🔥', '💯', '🧠', '🤖', '🦫', '💡']);
 const BAILEYS_QUERY_TIMEOUT_MS = Number(process.env.BAILEYS_QUERY_TIMEOUT_MS || 60000);
@@ -444,7 +444,7 @@ const PROACTIVE_REACTIVATION_MESSAGES = [
     'Esto está más callado que servidor sin internet 🔇\n\n¿Nadie tiene un descubrimiento de IA que compartir?',
     'Últiiiima llamada para castores activos 📢\n\n¿Qué herramienta de IA han estado usando?'
 ];
-const KNOWLEDGE_DROP_CATEGORIES = ['github', 'osint', 'launch', 'paper', 'benchmark'];
+const KNOWLEDGE_DROP_CATEGORIES = ['github', 'osint', 'launch'];
 
 let lastGroupActivityAt = 0;
 let proactiveCheckInterval = null;
@@ -571,8 +571,6 @@ function getDefaultProactiveState() {
         githubTracking: [],
         githubSeenTracking: [],
         launchTracking: [],
-        paperTracking: [],
-        benchmarkTracking: [],
         knowledgeCategoryCursor: 0,
         osintTracking: [],
         randomTopicTracking: [],
@@ -591,13 +589,11 @@ function normalizeProactiveState(state) {
     return {
         ...base,
         ...state,
-        currentSource: ['dev', 'netsec', 'github', 'osint', 'launch', 'paper', 'benchmark'].includes(state.currentSource) ? state.currentSource : 'github',
+        currentSource: ['dev', 'netsec', 'github', 'osint', 'launch'].includes(state.currentSource) ? state.currentSource : 'github',
         articleTracking: normalizeNumericTrackingList(state.articleTracking, 50),
         githubTracking: normalizeNumericTrackingList(state.githubTracking, 50),
         githubSeenTracking: normalizeNumericTrackingList(state.githubSeenTracking, GITHUB_SEEN_TRACKING_LIMIT),
         launchTracking: normalizeNumericTrackingList(state.launchTracking, KNOWLEDGE_RADAR_TRACKING_LIMIT),
-        paperTracking: normalizeStringTrackingList(state.paperTracking, KNOWLEDGE_RADAR_TRACKING_LIMIT),
-        benchmarkTracking: normalizeStringTrackingList(state.benchmarkTracking, KNOWLEDGE_RADAR_TRACKING_LIMIT),
         knowledgeCategoryCursor: Math.abs(Number(state.knowledgeCategoryCursor) || 0) % KNOWLEDGE_DROP_CATEGORIES.length,
         osintTracking: normalizeNumericTrackingList(state.osintTracking, 50),
         randomTopicTracking: normalizeStringTrackingList(state.randomTopicTracking, RANDOM_TOPIC_TRACKING_LIMIT),
@@ -2345,10 +2341,6 @@ async function handleTestDropCommand(sock, msg, remoteJid, dropMode = 'github') 
         dropContent = await buildPreviewRotatingKnowledgeDropContent(state, 1);
     } else if (dropMode === 'launch') {
         dropContent = await buildLaunchDropContent(state);
-    } else if (dropMode === 'paper') {
-        dropContent = await buildPaperDropContent(state);
-    } else if (dropMode === 'benchmark') {
-        dropContent = await buildBenchmarkDropContent(state);
     } else if (dropMode === 'osint') {
         dropContent = await buildOsintDropContent(state);
     } else {
@@ -4985,7 +4977,7 @@ async function createKnowledgeRadarCardBuffer(options = {}) {
             badge: 'EVAL'
         }
     };
-    const palette = palettes[kind] || palettes.paper;
+    const palette = palettes[kind] || palettes.launch;
     const subtitle = String(options.subtitle || '').trim();
     const footer = String(options.footer || '').trim();
     const wrappedTitle = wrapTextForCard(title, 30, 4);
@@ -5388,6 +5380,240 @@ async function generateBenchmarkSummary(benchmark) {
     };
 }
 
+// Versiones amistosas para que Paper y Benchmark sean mÃ¡s legibles para gente curiosa,
+// no solo para quienes ya dominan research o evaluaciÃ³n tÃ©cnica.
+function normalizePaperSummaryText(text, paperTitle = '') {
+    const lines = cleanStructuredLines(text);
+    let title = '';
+    let finding = '';
+    let why = '';
+    const keys = [];
+    let section = '';
+
+    for (const line of lines) {
+        if (!title && !/^(?:Hallazgo|En corto|Puntos clave|Claves|Lo interesante|Por quÃ© importa|Porque importa)\s*:/i.test(line)) {
+            title = line;
+            continue;
+        }
+        if (/^(?:Hallazgo|En corto|Â¿QuÃ© propone\??|Resumen)\s*:/i.test(line)) {
+            finding = line.replace(/^(?:Hallazgo|En corto|Â¿QuÃ© propone\??|Resumen)\s*:\s*/i, '').trim();
+            section = 'finding';
+            continue;
+        }
+        if (/^(?:Puntos clave|Claves|Lo interesante)\s*:/i.test(line)) {
+            const content = line.replace(/^(?:Puntos clave|Claves|Lo interesante)\s*:\s*/i, '').trim();
+            if (content) keys.push(content);
+            section = 'keys';
+            continue;
+        }
+        if (/^(?:Por quÃ© importa|Porque importa)\s*:/i.test(line)) {
+            why = line.replace(/^(?:Por quÃ© importa|Porque importa)\s*:\s*/i, '').trim();
+            section = 'why';
+            continue;
+        }
+        if (/^[-â€¢]\s*/.test(line)) {
+            keys.push(line.replace(/^[-â€¢]\s*/u, '').trim());
+            section = 'keys';
+            continue;
+        }
+        if (section === 'finding') {
+            finding = finding ? `${finding} ${line}` : line;
+            continue;
+        }
+        if (section === 'keys') {
+            keys.push(line);
+            continue;
+        }
+        if (section === 'why') {
+            why = why ? `${why} ${line}` : line;
+        }
+    }
+
+    const cleanKeys = keys
+        .map((item) => item.replace(/\s+/g, ' ').trim())
+        .filter((item) => item.length >= 10)
+        .slice(0, 3);
+
+    if (!finding) {
+        return '';
+    }
+
+    return [
+        title || paperTitle || 'Paper reciente que vale radar',
+        '',
+        `En corto: ${finding.replace(/\s+/g, ' ').trim()}`,
+        '',
+        'Lo interesante:',
+        ...(cleanKeys.length > 0 ? cleanKeys.map((item) => `- ${item}`) : [
+            '- Aterriza una idea nueva sin perder de vista el uso real.',
+            '- Da una pista clara de hacia dÃ³nde se mueve la IA aplicada.',
+            '- Puede influir en cÃ³mo diseÃ±amos herramientas, flujos o producto.'
+        ]),
+        '',
+        `Por quÃ© importa: ${(why || 'Conviene seguirlo porque puede cambiar decisiones reales de producto, evaluaciÃ³n o arquitectura.').replace(/\s+/g, ' ').trim()}`
+    ].join('\n');
+}
+
+function isWeakPaperSummary(text) {
+    const value = String(text || '').trim();
+    if (!value) return true;
+    if (value.length < 140) return true;
+    if (!value.includes('En corto:')) return true;
+    if (!value.includes('Lo interesante:')) return true;
+    if (!value.includes('Por quÃ© importa:')) return true;
+    return false;
+}
+
+function buildPaperSummaryFallback(paper) {
+    return [
+        paper?.title || 'Paper reciente que vale radar',
+        '',
+        `En corto: ${paper?.summary || 'Este paper propone una idea nueva sobre IA y la aterriza de una forma que sÃ­ puede influir en producto o herramientas reales.'}`,
+        '',
+        'Lo interesante:',
+        '- No se queda en teorÃ­a; deja pistas de uso para gente que construye con IA.',
+        '- Ayuda a entender hacia dÃ³nde se estÃ¡ moviendo la investigaciÃ³n aplicada.',
+        '- Puede traducirse en mejores decisiones de producto, evaluaciÃ³n o automatizaciÃ³n.',
+        '',
+        'Por quÃ© importa: Vale seguirlo porque acerca investigaciÃ³n nueva a decisiones que sÃ­ pegan en el dÃ­a a dÃ­a.'
+    ].join('\n');
+}
+
+async function generatePaperSummary(paper) {
+    const systemPrompt = "Eres un divulgador tech que aterriza papers de IA para un grupo de WhatsApp. REGLA ABSOLUTA: responde solo en espaÃ±ol de MÃ©xico. OBJETIVO: explÃ­calo para gente curiosa que sigue IA, no para un equipo de research. Usa lenguaje claro, evita jerga innecesaria y si aparece una sigla tÃ©cnica explÃ­cala en palabras simples o sustitÃºyela por una idea entendible. FORMATO ESTRICTO: 1. TÃ­tulo con el nombre del paper. 2. En corto: 2 lÃ­neas explicando de quÃ© va en lenguaje humano. 3. Lo interesante: 3 viÃ±etas simples y claras. 4. Por quÃ© importa: 1 lÃ­nea conectÃ¡ndolo con producto, herramientas o uso real. Cero comillas.";
+    const userPrompt = `Resume este paper para que alguien del grupo lo entienda rÃ¡pido aunque no sea investigador.\n\nTÃ­tulo: ${paper.title}\nResumen: ${paper.summary}`;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const rawSummary = await generateAIContent(systemPrompt, userPrompt, 320);
+        const summary = sanitizeRichText(normalizePaperSummaryText(rawSummary, paper.title), 1700);
+        if (!isWeakPaperSummary(summary)) {
+            return { text: summary, source: 'groq', attempts: attempt + 1 };
+        }
+    }
+
+    return {
+        text: normalizePaperSummaryText(buildPaperSummaryFallback(paper), paper.title),
+        source: 'fallback',
+        attempts: 3
+    };
+}
+
+function normalizeBenchmarkSummaryText(text, benchmarkTitle = '') {
+    const lines = cleanStructuredLines(text);
+    let title = '';
+    let measured = '';
+    let why = '';
+    const quickRead = [];
+    let section = '';
+
+    for (const line of lines) {
+        if (!title && !/^(?:QuÃ© midiÃ³|Â¿QuÃ© midiÃ³\??|En corto|Lectura rÃ¡pida|Lo que deja ver|Por quÃ© importa|Porque importa)\s*:/i.test(line)) {
+            title = line;
+            continue;
+        }
+        if (/^(?:QuÃ© midiÃ³|Â¿QuÃ© midiÃ³\??|En corto|Lectura del benchmark)\s*:/i.test(line)) {
+            measured = line.replace(/^(?:QuÃ© midiÃ³|Â¿QuÃ© midiÃ³\??|En corto|Lectura del benchmark)\s*:\s*/i, '').trim();
+            section = 'measured';
+            continue;
+        }
+        if (/^(?:Lectura rÃ¡pida|Claves|Puntos clave|Lo que deja ver)\s*:/i.test(line)) {
+            const content = line.replace(/^(?:Lectura rÃ¡pida|Claves|Puntos clave|Lo que deja ver)\s*:\s*/i, '').trim();
+            if (content) quickRead.push(content);
+            section = 'quick';
+            continue;
+        }
+        if (/^(?:Por quÃ© importa|Porque importa)\s*:/i.test(line)) {
+            why = line.replace(/^(?:Por quÃ© importa|Porque importa)\s*:\s*/i, '').trim();
+            section = 'why';
+            continue;
+        }
+        if (/^[-â€¢]\s*/.test(line)) {
+            quickRead.push(line.replace(/^[-â€¢]\s*/u, '').trim());
+            section = 'quick';
+            continue;
+        }
+        if (section === 'measured') {
+            measured = measured ? `${measured} ${line}` : line;
+            continue;
+        }
+        if (section === 'quick') {
+            quickRead.push(line);
+            continue;
+        }
+        if (section === 'why') {
+            why = why ? `${why} ${line}` : line;
+        }
+    }
+
+    const cleanQuickRead = quickRead
+        .map((item) => item.replace(/\s+/g, ' ').trim())
+        .filter((item) => item.length >= 10)
+        .slice(0, 3);
+
+    if (!measured) {
+        return '';
+    }
+
+    return [
+        title || benchmarkTitle || 'Benchmark nuevo que vale radar',
+        '',
+        `En corto: ${measured.replace(/\s+/g, ' ').trim()}`,
+        '',
+        'Lo que deja ver:',
+        ...(cleanQuickRead.length > 0 ? cleanQuickRead.map((item) => `- ${item}`) : [
+            '- Da una comparaciÃ³n mÃ¡s aterrizada entre opciones reales.',
+            '- Ayuda a separar hype de resultados observables.',
+            '- Puede mover decisiones de producto, pruebas o despliegue.'
+        ]),
+        '',
+        `Por quÃ© importa: ${(why || 'Importa porque aterriza comparaciones que luego terminan impactando producto y decisiones de stack.').replace(/\s+/g, ' ').trim()}`
+    ].join('\n');
+}
+
+function isWeakBenchmarkSummary(text) {
+    const value = String(text || '').trim();
+    if (!value) return true;
+    if (value.length < 140) return true;
+    if (!value.includes('En corto:')) return true;
+    if (!value.includes('Lo que deja ver:')) return true;
+    if (!value.includes('Por quÃ© importa:')) return true;
+    return false;
+}
+
+function buildBenchmarkSummaryFallback(benchmark) {
+    return [
+        benchmark?.title || 'Benchmark nuevo que vale radar',
+        '',
+        `En corto: ${benchmark?.summary || 'Este benchmark compara opciones de IA para mostrar quÃ© tanto rinden en tareas reales y quÃ© tan confiables se ven fuera del marketing.'}`,
+        '',
+        'Lo que deja ver:',
+        '- Sirve para comparar con mÃ¡s calma y menos humo las opciones que suenan fuerte.',
+        '- Puede cambiar cÃ³mo eliges modelo, proveedor o estrategia de producto.',
+        '- Conviene seguirlo si quieres tomar decisiones con datos y no solo por tendencia.',
+        '',
+        'Por quÃ© importa: Este tipo de comparativas termina pegando en costos, elecciones de stack y expectativas reales del equipo.'
+    ].join('\n');
+}
+
+async function generateBenchmarkSummary(benchmark) {
+    const systemPrompt = "Eres un analista tech que aterriza benchmarks de IA para un grupo de WhatsApp. REGLA ABSOLUTA: responde solo en espaÃ±ol de MÃ©xico. OBJETIVO: explicarlo para gente que sigue IA pero no vive leyendo papers. Usa lenguaje claro, evita jerga innecesaria y no te pongas acadÃ©mico. FORMATO ESTRICTO: 1. TÃ­tulo con el nombre del benchmark o paper. 2. En corto: 2 lÃ­neas diciendo quÃ© comparÃ³ o evaluÃ³ en palabras simples. 3. Lo que deja ver: 3 viÃ±etas claras. 4. Por quÃ© importa: 1 lÃ­nea conectÃ¡ndolo con decisiones reales de producto, modelos o stack. Cero comillas.";
+    const userPrompt = `Resume este benchmark para que alguien del grupo entienda rÃ¡pido quÃ© comparÃ³ y por quÃ© deberÃ­a importarle.\n\nTÃ­tulo: ${benchmark.title}\nResumen: ${benchmark.summary}`;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const rawSummary = await generateAIContent(systemPrompt, userPrompt, 320);
+        const summary = sanitizeRichText(normalizeBenchmarkSummaryText(rawSummary, benchmark.title), 1700);
+        if (!isWeakBenchmarkSummary(summary)) {
+            return { text: summary, source: 'groq', attempts: attempt + 1 };
+        }
+    }
+
+    return {
+        text: normalizeBenchmarkSummaryText(buildBenchmarkSummaryFallback(benchmark), benchmark.title),
+        source: 'fallback',
+        attempts: 3
+    };
+}
+
 async function buildLaunchDropContent(state) {
     const repos = await fetchLatestLaunchRepos();
     if (repos.length === 0) return null;
@@ -5548,9 +5774,7 @@ async function buildRotatingKnowledgeDropContent(state, categoryOffset = 0) {
     const builders = {
         github: buildGithubDropContent,
         osint: buildOsintDropContent,
-        launch: buildLaunchDropContent,
-        paper: buildPaperDropContent,
-        benchmark: buildBenchmarkDropContent
+        launch: buildLaunchDropContent
     };
     const categoryCount = KNOWLEDGE_DROP_CATEGORIES.length;
     const baseCursor = (currentState.knowledgeCategoryCursor + Math.max(0, Number(categoryOffset) || 0)) % categoryCount;
@@ -6467,10 +6691,6 @@ async function processIncomingMessage(sock, msg, runId) {
         await handleTestDropCommand(sock, msg, remoteJid, 'schedule-following');
     } else if (command === '.launch') {
         await handleTestDropCommand(sock, msg, remoteJid, 'launch');
-    } else if (command === '.paper') {
-        await handleTestDropCommand(sock, msg, remoteJid, 'paper');
-    } else if (command === '.benchamark' || command === '.benchmark') {
-        await handleTestDropCommand(sock, msg, remoteJid, 'benchmark');
     } else if (command === '.comandos') {
         await handleCommandsListCommand(sock, msg, remoteJid);
     } else if (command === '.reglas') {
