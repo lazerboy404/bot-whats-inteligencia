@@ -3395,6 +3395,111 @@ function buildShortPromptDescription(title, prompt) {
     return `Un prompt para generar ${subject}, ${styleParts.join(', ')} y ${framing}${cueText}.`;
 }
 
+function isUsablePremiumShowcaseDescription(text, cues = []) {
+    const value = String(text || '').trim();
+    if (!value) return false;
+    if (isWeakShowcaseDescription(value)) return false;
+    if (!looksSpanishText(value)) return false;
+    if (!descriptionHasCue(value, cues)) return false;
+    return true;
+}
+
+async function generatePremiumShowcaseDescription(title, prompt) {
+    const systemPrompt = "Eres un curador visual para un grupo de WhatsApp sobre IA. REGLA ABSOLUTA: responde solo en español de México. Describe el resultado como una pieza visual llamativa, con vibra de render premium o coleccionable.";
+    const userPrompt = `Describe la imagen resultante de este prompt en español de México.
+
+REGLAS ESTRICTAS:
+- Máximo 18-26 palabras.
+- NO hagas meta-comentarios.
+- NO empieces con "Un prompt para", "Una imagen de", "La imagen muestra" ni "Render de".
+- Ve directo a lo visual.
+- Haz que suene más a pieza premium o de colección que a explicación técnica.
+- Si hay variables en mayúsculas, asume que es una plantilla y describe la atmósfera general.
+
+Toma como referencia este tono:
+Caja LEGO tipo colección en vista isométrica, con minifigura personalizada, accesorios temáticos y un render que parece juguete premium listo para vitrina.
+
+Título: ${title}
+Prompt: ${prompt}`;
+
+    try {
+        const aiResponse = await generateAIContent(systemPrompt, userPrompt, 170);
+        let sentence = cleanModelOutputText(aiResponse)
+            .replace(/^(Este prompt genera|Una imagen de|Un prompt para|Es un análisis de|Es una descripción de|La imagen muestra|Render de)\s+/i, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (sentence) {
+            sentence = sentence.charAt(0).toUpperCase() + sentence.slice(1);
+        }
+        const cues = extractPromptCues(prompt);
+        if (isUsablePremiumShowcaseDescription(sentence, cues)) {
+            return { text: sentence, source: 'ia_visual_premium_mx', reason: 'ok', rawLen: sentence.length };
+        }
+        return { text: '', source: 'none', reason: 'respuesta_invalida', rawLen: sentence ? sentence.length : 0 };
+    } catch (error) {
+        return { text: '', source: 'none', reason: 'error_api', rawLen: 0 };
+    }
+}
+
+function buildPremiumShowcaseDescription(title, prompt) {
+    const cleanTitle = String(title || '').replace(/[*_`#>\[\]]/g, '').trim();
+    const cleanPrompt = String(prompt || '')
+        .replace(/[`*_#>]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const source = `${cleanTitle} ${cleanPrompt}`.toLowerCase();
+
+    let subject = cleanTitle ? `Pieza visual inspirada en ${cleanTitle}` : 'Pieza visual tipo colección';
+    const subjectRules = [
+        { key: 'lego', label: 'Caja LEGO tipo colección' },
+        { key: 'minifigure', label: 'Caja LEGO tipo colección' },
+        { key: 'gundam', label: 'Figura tipo colección inspirada en Gundam' },
+        { key: 'patrick star', label: 'Figura coleccionable de Patrick Star' },
+        { key: 'emoji', label: 'Emoji convertido en pieza visual' },
+        { key: 'rug', label: 'Alfombra artesanal tipo pieza de diseño' },
+        { key: 'fish', label: 'Pez mecánico estilo pieza de exhibición' },
+        { key: 'car', label: 'Auto personalizado con look de colección' },
+        { key: 'portrait', label: 'Retrato con acabado de pieza premium' },
+        { key: 'icon', label: 'Ícono convertido en render de exhibición' },
+        { key: 'diorama', label: 'Diorama miniatura tipo pieza premium' }
+    ];
+    for (const rule of subjectRules) {
+        if (source.includes(rule.key)) {
+            subject = rule.label;
+            break;
+        }
+    }
+
+    let framing = 'con composición de vitrina';
+    if (source.includes('top view') || source.includes('from above') || source.includes('vista desde arriba')) {
+        framing = 'en vista desde arriba';
+    } else if (source.includes('close-up') || source.includes('macro')) {
+        framing = 'en primer plano';
+    } else if (source.includes('isometric')) {
+        framing = 'en vista isométrica';
+    }
+
+    const detailParts = [];
+    if (source.includes('steampunk')) detailParts.push('estética steampunk');
+    if (source.includes('voxel')) detailParts.push('acabado voxel 3D');
+    if (source.includes('cinematic')) detailParts.push('look cinematográfico');
+    if (source.includes('oil painting')) detailParts.push('acabado de pintura al óleo');
+    if (source.includes('realistic') || source.includes('realista')) detailParts.push('acabado realista');
+    if (source.includes('tuft') || source.includes('fluffy') || source.includes('rug')) detailParts.push('textura artesanal esponjosa');
+    if (source.includes('box')) detailParts.push('empaque tipo vitrina');
+    if (source.includes('accessories') || source.includes('accessor') || source.includes('items')) detailParts.push('accesorios temáticos');
+    if (source.includes('unboxed')) detailParts.push('versión suelta con look premium');
+    if (source.includes('figure') || source.includes('minifigure')) detailParts.push('figura protagonista bien definida');
+
+    const cues = extractPromptCues(cleanPrompt);
+    if (cues.length > 0) {
+        detailParts.push(`detalles como ${cues[0]}`);
+    }
+
+    const detailText = uniqStrings(detailParts).slice(0, 3).join(', ') || 'look de render premium';
+    return `${subject} ${framing}, ${detailText}.`;
+}
+
 async function fetchShowcaseData(repoDef) {
     try {
         const controller = new AbortController();
@@ -4126,19 +4231,20 @@ async function sendPromptShowcase(sock) {
                 finalPrompt = engPrompt.replace(/^"""|"""$/g, '').trim();
             }
 
-            const descriptionResult = await generateShowcaseDescription(finalTitle, finalPrompt);
+            const descriptionResult = await generatePremiumShowcaseDescription(finalTitle, finalPrompt);
             const descriptionAI = descriptionResult?.text || '';
             finalDescription = descriptionAI;
             const debugCues = extractPromptCues(finalPrompt);
             console.log(`[SHOWCASE-DESC] ${repoDef.id}: fuente=${descriptionAI ? 'ia' : 'sin_descripcion'} origen=${descriptionResult?.source || 'none'} motivo=${descriptionResult?.reason || 'unknown'} cues=${debugCues.length || 0} prompt_chars=${finalPrompt.length} desc_chars=${finalDescription.length} intento=${attempt + 1}/${maxAttempts}`);
-            if (finalDescription) {
+            if (isUsablePremiumShowcaseDescription(finalDescription, debugCues)) {
                 break;
             }
+            finalDescription = '';
             console.log(`[SHOWCASE] Omitido: sin descripcion IA valida para "${showcase.title}" (repo: ${repoDef.id})`);
         }
         if (!finalDescription || !showcase || selectedIndex < 0) {
             console.log(`[SHOWCASE] Usando fallback manual para descripción tras ${maxAttempts} intentos fallidos con la IA.`);
-            finalDescription = buildShortPromptDescription(finalTitle, finalPrompt);
+            finalDescription = buildPremiumShowcaseDescription(finalTitle, finalPrompt);
         }
 
         const isLongPrompt = finalPrompt.length > SHOWCASE_PROMPT_INLINE_MAX_LENGTH;
