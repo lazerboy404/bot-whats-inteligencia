@@ -93,6 +93,9 @@ const PROACTIVE_ARTICLE_EVENING_MINUTE = Number(process.env.PROACTIVE_ARTICLE_EV
 const GITHUB_SEEN_TRACKING_LIMIT = Number(process.env.GITHUB_SEEN_TRACKING_LIMIT || 500);
 const RANDOM_TOPIC_TRACKING_LIMIT = Number(process.env.RANDOM_TOPIC_TRACKING_LIMIT || 500);
 const RANDOM_TOPIC_PROMPT_HISTORY_LIMIT = Number(process.env.RANDOM_TOPIC_PROMPT_HISTORY_LIMIT || 30);
+const RANDOM_USER_ROTATION_LIMIT = Number(process.env.RANDOM_USER_ROTATION_LIMIT || 2048);
+const RANDOM_USER_FOLLOWUP_LIMIT = Number(process.env.RANDOM_USER_FOLLOWUP_LIMIT || 20);
+const RANDOM_USER_REPLY_WINDOW_MS = Number(process.env.RANDOM_USER_REPLY_WINDOW_MS || (24 * 60 * 60 * 1000));
 const PROACTIVE_JITTER_MS = Number(process.env.PROACTIVE_JITTER_MS || (5 * 1000));
 const PROACTIVE_SHOWCASE_INTERVAL_MS = Number(process.env.PROACTIVE_SHOWCASE_INTERVAL_MS || (60 * 1000));
 const PROACTIVE_SHOWCASE_PROMPT_GAP_MS = Number(process.env.PROACTIVE_SHOWCASE_PROMPT_GAP_MS || (2 * 60 * 1000));
@@ -481,6 +484,64 @@ function normalizeShowcaseTracking(value) {
     return tracking;
 }
 
+function normalizeRandomUserRotationByGroup(value) {
+    const normalized = {};
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return normalized;
+    }
+    for (const [groupJid, entry] of Object.entries(value)) {
+        if (!String(groupJid || '').endsWith('@g.us')) {
+            continue;
+        }
+        let pool = uniqStrings(normalizeStringTrackingList(entry?.pool, RANDOM_USER_ROTATION_LIMIT));
+        let remaining = uniqStrings(normalizeStringTrackingList(entry?.remaining, RANDOM_USER_ROTATION_LIMIT));
+        if (pool.length === 0 && remaining.length > 0) {
+            pool = [...remaining];
+        }
+        if (pool.length > 0) {
+            const poolSet = new Set(pool);
+            remaining = remaining.filter((jid) => poolSet.has(jid));
+        } else {
+            remaining = [];
+        }
+        if (pool.length > 0 || remaining.length > 0) {
+            normalized[groupJid] = { pool, remaining };
+        }
+    }
+    return normalized;
+}
+
+function normalizeRandomUserFollowUps(value) {
+    const now = Date.now();
+    const normalized = Array.isArray(value)
+        ? value
+            .map((item) => {
+                const groupJid = String(item?.groupJid || '').trim();
+                const targetJid = String(item?.targetJid || '').trim();
+                const topic = cleanRandomUserTopic(item?.topic || '');
+                const promptMessageId = String(item?.promptMessageId || '').trim();
+                const assignedAtMs = new Date(item?.assignedAt || '').getTime();
+                const expiresAtMs = new Date(item?.expiresAt || '').getTime();
+                if (!groupJid.endsWith('@g.us') || !targetJid || !topic) {
+                    return null;
+                }
+                if (!Number.isFinite(assignedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= now) {
+                    return null;
+                }
+                return {
+                    groupJid,
+                    targetJid,
+                    topic,
+                    promptMessageId,
+                    assignedAt: new Date(assignedAtMs).toISOString(),
+                    expiresAt: new Date(expiresAtMs).toISOString()
+                };
+            })
+            .filter(Boolean)
+        : [];
+    return normalized.slice(-RANDOM_USER_FOLLOWUP_LIMIT);
+}
+
 function getDefaultProactiveState() {
     return {
         currentSource: 'github',
@@ -488,6 +549,8 @@ function getDefaultProactiveState() {
         githubTracking: [],
         githubSeenTracking: [],
         randomTopicTracking: [],
+        randomUserRotationByGroup: {},
+        pendingRandomUserFollowUps: [],
         netsecTracking: [],
         showcaseTracking: getDefaultShowcaseTracking()
     };
@@ -506,6 +569,8 @@ function normalizeProactiveState(state) {
         githubTracking: normalizeNumericTrackingList(state.githubTracking, 50),
         githubSeenTracking: normalizeNumericTrackingList(state.githubSeenTracking, GITHUB_SEEN_TRACKING_LIMIT),
         randomTopicTracking: normalizeStringTrackingList(state.randomTopicTracking, RANDOM_TOPIC_TRACKING_LIMIT),
+        randomUserRotationByGroup: normalizeRandomUserRotationByGroup(state.randomUserRotationByGroup),
+        pendingRandomUserFollowUps: normalizeRandomUserFollowUps(state.pendingRandomUserFollowUps),
         netsecTracking: normalizeStringTrackingList(state.netsecTracking, 50),
         showcaseTracking: normalizeShowcaseTracking(state.showcaseTracking)
     };
@@ -2635,6 +2700,106 @@ Genera una dinámica verdaderamente nueva:`;
     return null;
 }
 
+function shuffleList(values = []) {
+    const shuffled = [...values];
+    for (let index = shuffled.length - 1; index > 0; index -= 1) {
+        const swapIndex = Math.floor(Math.random() * (index + 1));
+        [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+    }
+    return shuffled;
+}
+
+function buildRandomUserRotationEntry(existingEntry, candidateIds = []) {
+    const eligibleIds = uniqStrings(candidateIds);
+    if (eligibleIds.length === 0) {
+        return { pool: [], remaining: [] };
+    }
+    const eligibleSet = new Set(eligibleIds);
+    let pool = uniqStrings(normalizeStringTrackingList(existingEntry?.pool, RANDOM_USER_ROTATION_LIMIT))
+        .filter((jid) => eligibleSet.has(jid));
+    let remaining = uniqStrings(normalizeStringTrackingList(existingEntry?.remaining, RANDOM_USER_ROTATION_LIMIT))
+        .filter((jid) => eligibleSet.has(jid));
+
+    if (pool.length === 0 || remaining.length === 0) {
+        const shuffledCycle = shuffleList(eligibleIds);
+        return { pool: shuffledCycle, remaining: shuffledCycle };
+    }
+
+    const poolSet = new Set(pool);
+    const newcomers = eligibleIds.filter((jid) => !poolSet.has(jid));
+    if (newcomers.length > 0) {
+        const shuffledNewcomers = shuffleList(newcomers);
+        pool = [...pool, ...shuffledNewcomers];
+        remaining = [...remaining, ...shuffledNewcomers];
+    }
+
+    return { pool, remaining };
+}
+
+function setPendingRandomUserFollowUp(followUps, nextFollowUp) {
+    const activeFollowUps = normalizeRandomUserFollowUps(followUps)
+        .filter((item) => item.groupJid !== nextFollowUp.groupJid);
+    activeFollowUps.push(nextFollowUp);
+    return normalizeRandomUserFollowUps(activeFollowUps);
+}
+
+function removePendingRandomUserFollowUp(followUps, groupJid, targetJid) {
+    return normalizeRandomUserFollowUps(followUps)
+        .filter((item) => !(item.groupJid === groupJid && item.targetJid === targetJid));
+}
+
+async function generateRandomUserReplyPerspective(topic, responseText) {
+    const cleanTopic = cleanRandomUserTopic(topic || '');
+    const cleanResponse = sanitizeText(responseText || '', 700);
+    if (!cleanTopic || !cleanResponse) {
+        return '';
+    }
+    const systemPrompt = 'Eres Castor Bot en un grupo de WhatsApp sobre IA. REGLA ABSOLUTA: responde únicamente en español de México. Da un punto de vista breve, útil y amigable. Máximo 2 líneas. Sin comillas.';
+    const userPrompt = `La dinámica del día fue: ${cleanTopic}
+
+La persona respondió:
+${cleanResponse}
+
+Escribe una respuesta corta que reconozca su aporte y agregue un punto de vista útil para el grupo.`;
+    const result = await generateAIContent(systemPrompt, userPrompt, 120);
+    if (!result) {
+        return '';
+    }
+    const clean = sanitizeText(result.replace(/^["'`\s]+|["'`\s]+$/g, '').replace(/\s+/g, ' '), 220);
+    return clean.length >= 12 ? clean : '';
+}
+
+function buildRandomUserReplyFallback(responseText) {
+    const snippet = sanitizeText(responseText || '', 120).replace(/\s+/g, ' ').trim();
+    if (!snippet) {
+        return 'buen aporte. Lo aterrizaste a algo práctico y eso siempre le da más valor a la conversación.';
+    }
+    return 'buen aporte. Se nota que ya lo estás llevando a algo práctico y eso abre una conversación útil para todo el grupo.';
+}
+
+async function maybeHandlePendingRandomUserFollowUp(sock, msg, remoteJid, senderJid, trimmedText) {
+    if (!remoteJid.endsWith('@g.us') || !trimmedText || trimmedText.startsWith('.')) {
+        return false;
+    }
+    const state = getProactiveState();
+    const followUps = normalizeRandomUserFollowUps(state.pendingRandomUserFollowUps);
+    const pendingFollowUp = followUps.find((item) => item.groupJid === remoteJid && item.targetJid === senderJid);
+    if (!pendingFollowUp) {
+        return false;
+    }
+
+    const perspective = await generateRandomUserReplyPerspective(pendingFollowUp.topic, trimmedText)
+        || buildRandomUserReplyFallback(trimmedText);
+    const mentionNumber = sanitizeText(getNumberFromJid(senderJid) || '', 40) || 'usuario';
+    const replyText = `@${mentionNumber} ${perspective}`;
+
+    await sock.sendMessage(remoteJid, { text: replyText, mentions: [senderJid] }, { quoted: msg });
+    updateProactiveState({
+        pendingRandomUserFollowUps: removePendingRandomUserFollowUp(followUps, remoteJid, senderJid)
+    });
+    return true;
+}
+
 function normalizeShowcaseImageUrl(src, repoDef) {
     const cleanSrc = String(src || '').trim();
     if (!cleanSrc) return '';
@@ -4136,6 +4301,8 @@ async function sendRandomUserSelection(sock) {
     if (PROACTIVE_GROUP_JIDS.length === 0) return;
     const state = getProactiveState();
     const randomTopicTracking = normalizeStringTrackingList(state.randomTopicTracking, RANDOM_TOPIC_TRACKING_LIMIT);
+    const randomUserRotationByGroup = normalizeRandomUserRotationByGroup(state.randomUserRotationByGroup);
+    let pendingRandomUserFollowUps = normalizeRandomUserFollowUps(state.pendingRandomUserFollowUps);
     const usedTopicKeys = new Set(randomTopicTracking.map((topic) => normalizeRandomTopicKey(topic)));
     const topicsUsedThisRun = [];
     for (const groupJid of PROACTIVE_GROUP_JIDS) {
@@ -4150,8 +4317,16 @@ async function sendRandomUserSelection(sock) {
                 console.log(`[PROACTIVO] No hay candidatos en ${groupJid}.`);
                 continue;
             }
-            const selected = candidates[Math.floor(Math.random() * candidates.length)];
-            const displayName = getParticipantDisplayName(selected, selected.id);
+            const rotationEntry = buildRandomUserRotationEntry(
+                randomUserRotationByGroup[groupJid],
+                candidates.map((participant) => participant.id)
+            );
+            const nextSelectedJid = rotationEntry.remaining[0];
+            const selected = candidates.find((participant) => participant.id === nextSelectedJid);
+            if (!selected) {
+                console.log(`[PROACTIVO] No encontré participante rotado válido en ${groupJid}.`);
+                continue;
+            }
             const mentionLabel = getParticipantMentionLabel(selected, selected.id);
             const topic = await generateFreshRandomUserTopic(usedTopicKeys, [...randomTopicTracking, ...topicsUsedThisRun]);
             if (!topic) {
@@ -4164,7 +4339,17 @@ async function sendRandomUserSelection(sock) {
                 `@${mentionLabel} cuéntanos algo:`,
                 `👉 ${topic}`
             ].join('\n');
-            await sock.sendMessage(groupJid, { text, mentions: [selected.id] });
+            const sentMessage = await sock.sendMessage(groupJid, { text, mentions: [selected.id] });
+            rotationEntry.remaining = rotationEntry.remaining.slice(1);
+            randomUserRotationByGroup[groupJid] = rotationEntry;
+            pendingRandomUserFollowUps = setPendingRandomUserFollowUp(pendingRandomUserFollowUps, {
+                groupJid,
+                targetJid: selected.id,
+                topic,
+                promptMessageId: String(sentMessage?.key?.id || '').trim(),
+                assignedAt: new Date().toISOString(),
+                expiresAt: new Date(Date.now() + RANDOM_USER_REPLY_WINDOW_MS).toISOString()
+            });
             const topicKey = normalizeRandomTopicKey(topic);
             usedTopicKeys.add(topicKey);
             topicsUsedThisRun.push(topic);
@@ -4178,6 +4363,8 @@ async function sendRandomUserSelection(sock) {
     if (topicsUsedThisRun.length > 0) {
         proactiveUpdates.randomTopicTracking = [...randomTopicTracking, ...topicsUsedThisRun].slice(-RANDOM_TOPIC_TRACKING_LIMIT);
     }
+    proactiveUpdates.randomUserRotationByGroup = randomUserRotationByGroup;
+    proactiveUpdates.pendingRandomUserFollowUps = pendingRandomUserFollowUps;
     updateProactiveState(proactiveUpdates);
 }
 
@@ -4516,6 +4703,13 @@ async function processIncomingMessage(sock, msg, runId) {
             sock.sendMessage(remoteJid, { react: { text: CASTOR_INVALID_COMMAND_EMOJI, key: msg.key } }).catch(() => {});
         }, getRandomDelay(300, 900));
         return;
+    }
+
+    if (remoteJid.endsWith('@g.us') && trimmedText && !trimmedText.startsWith('.')) {
+        const handledPendingFollowUp = await maybeHandlePendingRandomUserFollowUp(sock, msg, remoteJid, senderJid, trimmedText);
+        if (handledPendingFollowUp) {
+            return;
+        }
     }
 
     if (!trimmedText || !trimmedText.startsWith('.')) {
