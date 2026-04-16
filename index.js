@@ -4109,11 +4109,147 @@ function buildOsintSummaryFallback(repo) {
     ].join('\n');
 }
 
+function formatOsintSummaryText(text, repoFullName = '') {
+    const source = cleanModelOutputText(text)
+        .replace(/\r/g, '')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    if (!source) return '';
+
+    const rawLines = source.split('\n').map((line) => String(line || '').trim()).filter(Boolean);
+    let title = '';
+    let whatDoes = '';
+    const arsenal = [];
+    let scenario = '';
+    let disclaimer = '';
+    let section = '';
+
+    for (const rawLine of rawLines) {
+        let line = rawLine
+            .replace(/\*/g, '')
+            .replace(/^•\s*/u, '- ')
+            .replace(/^[–—]\s*/u, '- ')
+            .trim();
+        if (!line) continue;
+
+        if (!title && line.includes('|')) {
+            const [rawName, ...rest] = line.split('|');
+            const repoName = String(rawName || repoFullName || '').trim().toUpperCase();
+            const repoPower = rest.join('|').trim();
+            title = repoPower ? `${repoName} | ${repoPower}` : repoName;
+            section = '';
+            continue;
+        }
+
+        if (/^¿Qué hace\??\s*:/i.test(line)) {
+            whatDoes = line.replace(/^¿Qué hace\??\s*:\s*/i, '').trim();
+            section = 'what';
+            continue;
+        }
+
+        if (/^Arsenal\s*:/i.test(line)) {
+            section = 'arsenal';
+            continue;
+        }
+
+        if (/^(Escenario|Ideal para)\s*:/i.test(line)) {
+            scenario = line.replace(/^(Escenario|Ideal para)\s*:\s*/i, '').trim();
+            section = 'scenario';
+            continue;
+        }
+
+        if (/^Disclaimer/i.test(line)) {
+            disclaimer = line.replace(/^Disclaimer(?:\s+ÉTICO OBLIGATORIO)?\s*:?\s*/i, '').trim();
+            section = 'disclaimer';
+            continue;
+        }
+
+        if (section === 'what') {
+            whatDoes = whatDoes ? `${whatDoes} ${line}` : line;
+            continue;
+        }
+
+        if (section === 'arsenal') {
+            arsenal.push(line.replace(/^-+\s*/, '').trim());
+            continue;
+        }
+
+        if (section === 'scenario') {
+            scenario = scenario ? `${scenario} ${line}` : line;
+            continue;
+        }
+
+        if (section === 'disclaimer') {
+            disclaimer = disclaimer ? `${disclaimer} ${line}` : line;
+            continue;
+        }
+    }
+
+    if (!title) {
+        title = `${String(repoFullName || '').toUpperCase()} | potencia táctica para tu reconocimiento`;
+    }
+    if (!whatDoes) {
+        return '';
+    }
+
+    const cleanedArsenal = arsenal
+        .map((item) => item.replace(/\s+/g, ' ').trim())
+        .filter(Boolean)
+        .slice(0, 3);
+    const normalizedScenario = scenario
+        ? scenario.replace(/^Ideal para:\s*/i, '').trim()
+        : 'Bug Bounty, Footprinting.';
+    const normalizedDisclaimer = disclaimer
+        ? disclaimer.replace(/\s+/g, ' ').trim()
+        : 'Úsalo solo con autorización; emplearlo contra sistemas ajenos es ilegal.';
+
+    return [
+        title,
+        '',
+        `¿Qué hace?: ${whatDoes.replace(/\s+/g, ' ').trim()}`,
+        '',
+        'Arsenal:',
+        ...(cleanedArsenal.length > 0 ? cleanedArsenal.map((item) => `- ${item}`) : [
+            '- Automatiza parte del reconocimiento y la recolección técnica.',
+            '- Sirve como base reutilizable para laboratorios, PoC o auditorías controladas.',
+            '- Puede apoyar procesos de análisis, mapeo de superficie o validación operativa.'
+        ]),
+        '',
+        `Escenario: Ideal para: ${normalizedScenario}`,
+        `Disclaimer: ${normalizedDisclaimer}`
+    ].join('\n');
+}
+
+function isWeakOsintRepoSummary(text) {
+    const value = String(text || '').trim();
+    if (!value) return true;
+    if (value.length < 120) return true;
+    if (!value.includes('¿Qué hace?:')) return true;
+    if (!value.includes('Arsenal:')) return true;
+    if (!value.includes('Escenario:')) return true;
+    if (!value.includes('Disclaimer:')) return true;
+    if (!/(?:^|\n)-\s+/m.test(value)) return true;
+    return false;
+}
+
 async function generateOsintRepoSummary(repo) {
     const systemPrompt = "Eres un Pentester Senior y experto en OSINT para un grupo de WhatsApp. REGLA ABSOLUTA: Tu respuesta DEBE estar en español de México. FORMATO ESTRICTO: 1. Título: '[Nombre Repo] | [Su objetivo letal]'. 2. ¿Qué hace?: 2 líneas explicando su función técnica. 3. Arsenal: 3 viñetas técnicas con lo que incluye (usa emojis). 4. Escenario: 'Ideal para: [2 casos tácticos, ej. Bug Bounty, Footprinting]'. 5. Disclaimer ÉTICO OBLIGATORIO: Advierte brevemente que su uso sin autorización es ilegal. 6. Cero comillas.";
     const userPrompt = "Analiza este repositorio de ciberseguridad y devuelve la reseña técnica en el formato estricto:\n\nRepo: " + repo.full_name + "\nInfo: " + repo.description;
-    const summary = sanitizeText(await generateAIContent(systemPrompt, userPrompt, 350), 2000);
-    return summary || buildOsintSummaryFallback(repo);
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const rawSummary = await generateAIContent(systemPrompt, userPrompt, 350);
+        const summary = sanitizeText(formatOsintSummaryText(rawSummary, repo.full_name), 1800);
+        if (!isWeakOsintRepoSummary(summary)) {
+            return { text: summary, source: 'groq', attempts: attempt + 1 };
+        }
+    }
+
+    return {
+        text: formatOsintSummaryText(buildOsintSummaryFallback(repo), repo.full_name),
+        source: 'fallback',
+        attempts: 3
+    };
 }
 
 async function fetchTopOsintRepos() {
@@ -4128,6 +4264,7 @@ async function fetchTopOsintRepos() {
                 description: repo?.description == null ? 'Herramienta táctica sin descripción' : String(repo.description).trim() || 'Herramienta táctica sin descripción',
                 html_url: String(repo?.html_url || '').trim(),
                 stargazers_count: Number(repo?.stargazers_count || 0),
+                default_branch: String(repo?.default_branch || 'main').trim() || 'main',
                 updated_at: String(repo?.updated_at || '').trim()
             }))
             .filter((repo) => Number.isInteger(repo.id) && repo.full_name && repo.html_url);
@@ -4201,15 +4338,17 @@ async function buildOsintDropContent(state) {
     const repo = repos.find((item) => !osintTracking.includes(item.id));
     if (!repo) return null;
 
-    const summary = await generateOsintRepoSummary(repo);
+    const summaryResult = await generateOsintRepoSummary(repo);
+    const summary = summaryResult?.text || '';
     if (!summary) return null;
 
+    const imageUrl = await fetchGithubRepoImageUrl(repo);
     const text = [
-        `${CASTOR_EMOJI} *Arsenal Cyber ðŸ´â€â˜ ï¸*`,
+        `${CASTOR_EMOJI} *Arsenal Cyber 🏴‍☠️*`,
         '',
         summary,
         '',
-        `â­ Estrellas: ${repo.stargazers_count}`,
+        `⭐ Estrellas: ${repo.stargazers_count}`,
         repo.html_url
     ].join('\n');
 
@@ -4217,12 +4356,14 @@ async function buildOsintDropContent(state) {
         source: 'osint',
         itemId: repo.id,
         itemTitle: repo.full_name,
-        bannerTitle: 'Arsenal Cyber ðŸ´â€â˜ ï¸',
-        summaryResult: {
-            source: 'groq',
-            attempts: 1
-        },
-        payload: { text },
+        bannerTitle: 'Arsenal Cyber 🏴‍☠️',
+        summaryResult,
+        payload: imageUrl
+            ? {
+                image: { url: imageUrl },
+                caption: text
+            }
+            : { text },
         textFallback: text,
         trackingUpdate: {
             osintTracking: [...osintTracking, repo.id].slice(-50),
