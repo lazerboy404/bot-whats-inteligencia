@@ -878,6 +878,16 @@ function sanitizeText(value, maxLength = 3500) {
     return `${plain.slice(0, maxLength)}...`;
 }
 
+function sanitizeRichText(value, maxLength = 3500) {
+    const plain = String(value ?? '')
+        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+        .trim();
+    if (plain.length <= maxLength) {
+        return plain;
+    }
+    return `${plain.slice(0, maxLength)}...`;
+}
+
 function hasGroupInviteLink(text) {
     return GROUP_INVITE_REGEX.test(String(text || ''));
 }
@@ -4181,7 +4191,7 @@ function formatOsintSummaryText(text, repoFullName = '') {
 
         if (!title && line.includes('|')) {
             const [rawName, ...rest] = line.split('|');
-            const repoName = String(rawName || repoFullName || '').trim().toUpperCase();
+            const repoName = String(repoFullName || rawName || '').trim().toUpperCase();
             const repoPower = rest.join('|').trim();
             title = repoPower ? `${repoName} | ${repoPower}` : repoName;
             section = '';
@@ -4277,6 +4287,8 @@ function formatOsintSummaryText(text, repoFullName = '') {
         }
     }
     scenarioText = scenarioText
+        .replace(/^(Ideal para:\s*)+/i, '')
+        .replace(/^(Ideal para\s+)+/i, '')
         .replace(/\s+-\s+/g, ', ')
         .replace(/,+/g, ',')
         .replace(/\s+,/g, ',')
@@ -4337,7 +4349,7 @@ async function generateOsintRepoSummary(repo) {
 
     for (let attempt = 0; attempt < 3; attempt++) {
         const rawSummary = await generateAIContent(systemPrompt, userPrompt, 350);
-        const summary = sanitizeText(formatOsintSummaryText(rawSummary, repo.full_name), 1800);
+        const summary = sanitizeRichText(formatOsintSummaryText(rawSummary, repo.full_name), 1800);
         if (!isWeakOsintRepoSummary(summary)) {
             return { text: summary, source: 'groq', attempts: attempt + 1 };
         }
@@ -4468,42 +4480,6 @@ async function buildOsintDropContent(state) {
             lastOsintSentAt: new Date().toISOString()
         }
     };
-}
-
-async function sendOsintDrop(sock) {
-    if (PROACTIVE_GROUP_JIDS.length === 0) return;
-
-    const dropContent = await buildOsintDropContent(getProactiveState());
-    if (!dropContent) return;
-
-
-    const message = [
-        `${CASTOR_EMOJI} *Arsenal Cyber 🏴‍☠️*`,
-        '',
-        summary,
-        '',
-        `⭐ Estrellas: ${repo.stargazers_count}`,
-        repo.html_url
-    ].join('\n');
-
-    for (const groupJid of PROACTIVE_GROUP_JIDS) {
-        try {
-            await sock.sendMessage(groupJid, dropContent.payload);
-        } catch (groupError) {
-            console.error(`[OSINT-DROP] Error enviando a ${groupJid}:`, groupError?.message || groupError);
-        }
-
-        if (PROACTIVE_GROUP_JIDS.length > 1) {
-            await new Promise((resolve) => setTimeout(resolve, 3000));
-        }
-    }
-
-    updateProactiveState({
-        osintTracking: [...osintTracking, repo.id].slice(-50),
-        currentSource: 'osint',
-        lastOsintSentAt: new Date().toISOString()
-    });
-    console.log(`[OSINT-DROP] Enviado: "${repo.full_name}" (${repo.id})`);
 }
 
 function decodeHtmlEntities(value) {
