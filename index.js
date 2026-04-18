@@ -1082,7 +1082,7 @@ function parseTargetFromTextOrMention(msg, text) {
 
     const arg = sanitizeText(text).split(/\s+/).slice(1).find(Boolean);
     if (!arg) return null;
-    if (arg.includes('@')) {
+    if (/@(s\.whatsapp\.net|g\.us)$/i.test(arg)) {
         return arg;
     }
     const digits = cleanDigits(arg);
@@ -1097,7 +1097,7 @@ function getModerationUsageText(command) {
     const baseLines = [
         `Usa ${normalized} de cualquiera de estas formas:`,
         `1. Responde al mensaje del usuario y escribe ${normalized}`,
-        `2. Escribe ${normalized} @usuario`,
+        `2. Escribe ${normalized} @nombre`,
         `3. Escribe ${normalized} 521XXXXXXXXXX`
     ];
     if (normalized === '.ban' || normalized === '.advertir') {
@@ -1585,6 +1585,100 @@ async function getPrivateModerationTargetLabel(sock, groupJid) {
     }
 }
 
+function normalizeParticipantSearchText(value) {
+    return sanitizeRichText(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+}
+
+function extractModerationSearchQuery(text) {
+    const raw = sanitizeRichText(text || '').trim();
+    if (!raw) return '';
+    const parts = raw.split(/\s+/).slice(1);
+    if (parts.length === 0) return '';
+    const joined = parts.join(' ').trim();
+    if (!joined) return '';
+    if (/@(s\.whatsapp\.net|g\.us)$/i.test(joined)) return '';
+    if (cleanDigits(joined).length >= 8) return '';
+    return joined.replace(/^@+/, '').trim();
+}
+
+function getParticipantLookupLabel(participant) {
+    const visibleName = sanitizeText(participant?.notify || participant?.name || participant?.pushName || '', 80);
+    const number = getNumberFromJid(participant?.id || '') || 'usuario';
+    return visibleName ? `${visibleName} (@${number})` : `@${number}`;
+}
+
+async function resolveTargetByGroupParticipantName(sock, groupJid, text) {
+    const query = extractModerationSearchQuery(text);
+    if (!query || !groupJid) {
+        return { targetJid: null, status: 'skip', matches: [] };
+    }
+
+    let metadata;
+    try {
+        metadata = await sock.groupMetadata(groupJid);
+    } catch (error) {
+        return { targetJid: null, status: 'group_error', matches: [] };
+    }
+
+    const normalizedQuery = normalizeParticipantSearchText(query);
+    if (!normalizedQuery) {
+        return { targetJid: null, status: 'skip', matches: [] };
+    }
+
+    const candidates = (metadata.participants || []).map((participant) => {
+        const number = getNumberFromJid(participant.id || '');
+        const normalizedNumber = normalizePhoneForCompare(number);
+        const labels = [
+            participant?.notify,
+            participant?.name,
+            participant?.pushName,
+            number
+        ]
+            .map((value) => normalizeParticipantSearchText(value))
+            .filter(Boolean);
+
+        let score = 0;
+        for (const label of labels) {
+            if (label === normalizedQuery) {
+                score = Math.max(score, 100);
+            } else if (label.startsWith(normalizedQuery)) {
+                score = Math.max(score, 80);
+            } else if (label.includes(normalizedQuery)) {
+                score = Math.max(score, 60);
+            }
+        }
+
+        if (normalizedNumber && normalizedNumber === normalizePhoneForCompare(query)) {
+            score = Math.max(score, 100);
+        }
+
+        return {
+            id: participant.id,
+            score,
+            label: getParticipantLookupLabel(participant)
+        };
+    }).filter((participant) => participant.score > 0);
+
+    if (candidates.length === 0) {
+        return { targetJid: null, status: 'not_found', matches: [] };
+    }
+
+    candidates.sort((a, b) => b.score - a.score || a.label.localeCompare(b.label));
+    const bestScore = candidates[0].score;
+    const bestMatches = candidates.filter((candidate) => candidate.score === bestScore);
+
+    if (bestMatches.length === 1) {
+        return { targetJid: bestMatches[0].id, status: 'matched', matches: bestMatches };
+    }
+
+    return { targetJid: null, status: 'ambiguous', matches: bestMatches.slice(0, 5) };
+}
+
 function extractCandidateNumber(value) {
     const raw = String(value || '');
     if (!raw) {
@@ -1895,13 +1989,25 @@ async function handleWarnCommand(sock, msg, text, remoteJid) {
         return;
     }
 
-    const resolved = await resolveTargetForModeration(msg, text);
+    let resolved = await resolveTargetForModeration(msg, text);
+    const currentGroup = resolveModerationGroupJid(remoteJid, resolved.groupFromReport);
+    if (!resolved.targetJid && currentGroup) {
+        const searchResult = await resolveTargetByGroupParticipantName(sock, currentGroup, text);
+        if (searchResult.status === 'matched') {
+            resolved = { ...resolved, targetJid: searchResult.targetJid, source: 'nombre' };
+        } else if (searchResult.status === 'ambiguous') {
+            const options = searchResult.matches.map((match, index) => `${index + 1}. ${match.label}`).join('\n');
+            await sock.sendMessage(remoteJid, { text: `Encontré varios usuarios parecidos:\n${options}\n\nPrueba con el número o responde al mensaje correcto.` }, { quoted: msg });
+            return;
+        } else if (searchResult.status === 'not_found') {
+            await sock.sendMessage(remoteJid, { text: 'No encontré a nadie con ese nombre en el grupo objetivo. Prueba con el número o respondiendo al mensaje correcto.' }, { quoted: msg });
+            return;
+        }
+    }
     if (!resolved.targetJid) {
         await sock.sendMessage(remoteJid, { text: getModerationUsageText('.advertir') }, { quoted: msg });
         return;
     }
-
-    const currentGroup = resolveModerationGroupJid(remoteJid, resolved.groupFromReport);
     if (currentGroup && await isGroupAdmin(sock, currentGroup, resolved.targetJid)) {
         await sock.sendMessage(remoteJid, { text: 'No puedes advertir a un administrador del grupo.' }, { quoted: msg });
         return;
@@ -1969,13 +2075,25 @@ async function handleBanCommand(sock, msg, text, remoteJid) {
         return;
     }
 
-    const resolved = await resolveTargetForModeration(msg, text);
+    let resolved = await resolveTargetForModeration(msg, text);
+    const currentGroup = resolveModerationGroupJid(remoteJid, resolved.groupFromReport);
+    if (!resolved.targetJid && currentGroup) {
+        const searchResult = await resolveTargetByGroupParticipantName(sock, currentGroup, text);
+        if (searchResult.status === 'matched') {
+            resolved = { ...resolved, targetJid: searchResult.targetJid, source: 'nombre' };
+        } else if (searchResult.status === 'ambiguous') {
+            const options = searchResult.matches.map((match, index) => `${index + 1}. ${match.label}`).join('\n');
+            await sock.sendMessage(remoteJid, { text: `Encontré varios usuarios parecidos:\n${options}\n\nPrueba con el número o responde al mensaje correcto.` }, { quoted: msg });
+            return;
+        } else if (searchResult.status === 'not_found') {
+            await sock.sendMessage(remoteJid, { text: 'No encontré a nadie con ese nombre en el grupo objetivo. Prueba con el número o respondiendo al mensaje correcto.' }, { quoted: msg });
+            return;
+        }
+    }
     if (!resolved.targetJid) {
         await sock.sendMessage(remoteJid, { text: getModerationUsageText('.ban') }, { quoted: msg });
         return;
     }
-
-    const currentGroup = resolveModerationGroupJid(remoteJid, resolved.groupFromReport);
     if (!currentGroup) {
         await sock.sendMessage(remoteJid, { text: 'Para usar .ban por privado necesito tener claro el grupo objetivo. Si solo manejas un grupo configurado, Castor lo tomará automáticamente; si no, responde al reporte privado del bot.' }, { quoted: msg });
         return;
