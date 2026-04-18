@@ -2485,9 +2485,27 @@ async function handleReactionForTroncos(sock, msg) {
     if (alreadyReacted) return;
 
     record.reactors.push(reactorJid);
-    await upsertModRecord(authorJid, { $inc: { troncos: 1 } });
+    const updatedRecord = await upsertModRecord(authorJid, { $inc: { troncos: 1 } });
+    const totalTroncos = Number(updatedRecord?.troncos || 0);
 
     upsertMessageReactionRecord(messageId, record);
+
+    const originalMessageKey = {
+        remoteJid,
+        id: reactedMessageKey.id,
+        fromMe: false,
+        participant: authorJid
+    };
+    sock.sendMessage(remoteJid, { react: { text: '🪵', key: originalMessageKey } }).catch(() => {});
+
+    if (totalTroncos > 0 && totalTroncos % 5 === 0) {
+        const authorNumber = getNumberFromJid(authorJid);
+        const mention = authorNumber ? `@${authorNumber}` : 'alguien';
+        await sock.sendMessage(remoteJid, {
+            text: `🪵 ${mention} llegó a ${totalTroncos} tronco${totalTroncos !== 1 ? 's' : ''}.`,
+            mentions: authorJid ? [authorJid] : []
+        });
+    }
 }
 
 async function handleTroncosCommand(sock, msg, remoteJid) {
@@ -2555,6 +2573,38 @@ async function handleDinamicaCommand(sock, msg, remoteJid) {
         '• Reaccionarte a ti mismo no cuenta.',
         '• Quitar y poner la reacción no suma más.',
         '• Cada persona solo cuenta una vez por mensaje.',
+        '',
+        '📊 Usa *.top* para ver el ranking y *.troncos* para ver los tuyos.',
+        '',
+        '¡A construir el dique! 🦫'
+    ].join('\n');
+    await sock.sendMessage(remoteJid, { text: dinamicaText }, { quoted: msg });
+}
+
+async function handleDinamicaCommand(sock, msg, remoteJid) {
+    const dinamicaText = [
+        '🪵 *¿Cómo ganar Troncos?*',
+        '',
+        'Los troncos son la moneda del estanque. Se ganan cuando tus mensajes reciben reacciones de otros castores.',
+        '',
+        '🎯 *Reglas:*',
+        '',
+        '1️⃣ Comparte un aporte de calidad en el grupo.',
+        '',
+        '2️⃣ Otros miembros deben reaccionar con alguno de estos emojis:',
+        '👍 ❤️ 👏 🤯 🔥 💯 🧠 🤖 🦫 💡',
+        '',
+        '3️⃣ Cada *reacción positiva* de una persona distinta vale *1 tronco* 🪵',
+        '',
+        '4️⃣ Ejemplo: *1 reacción = 1 tronco*, *2 reacciones = 2 troncos* y así sucesivamente.',
+        '',
+        '5️⃣ Cada vez que ganes un tronco, Castor reaccionará con 🪵 a ese mensaje.',
+        '',
+        '⚠️ *Importante:*',
+        '• Reaccionarte a ti mismo no cuenta.',
+        '• Quitar y poner la reacción no suma más.',
+        '• Cada persona solo cuenta una vez por mensaje.',
+        '• Castor avisa al grupo solo cuando llegas a 5, 10, 15 troncos y así sucesivamente.',
         '',
         '📊 Usa *.top* para ver el ranking y *.troncos* para ver los tuyos.',
         '',
