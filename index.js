@@ -2485,29 +2485,7 @@ async function handleReactionForTroncos(sock, msg) {
     if (alreadyReacted) return;
 
     record.reactors.push(reactorJid);
-    const uniqueCount = record.reactors.length;
-
-    if (uniqueCount >= 5 && !record.milestone5) {
-        record.milestone5 = true;
-        await upsertModRecord(authorJid, { $inc: { troncos: 1 } });
-        const authorNumber = getNumberFromJid(authorJid);
-        const mention = authorNumber ? `@${authorNumber}` : 'alguien';
-        await sock.sendMessage(remoteJid, {
-            text: `\ud83e\udeb5 \u00a1${mention} gan\u00f3 1 tronco! Su mensaje alcanz\u00f3 5 reacciones. \u00a1Sigue construyendo el dique!`,
-            mentions: authorJid ? [authorJid] : []
-        });
-    }
-
-    if (uniqueCount >= 10 && !record.milestone10) {
-        record.milestone10 = true;
-        await upsertModRecord(authorJid, { $inc: { troncos: 1 } });
-        const authorNumber = getNumberFromJid(authorJid);
-        const mention = authorNumber ? `@${authorNumber}` : 'alguien';
-        await sock.sendMessage(remoteJid, {
-            text: `\ud83e\udeb5\ud83e\udeb5 \u00a1${mention} gan\u00f3 1 tronco extra! Su mensaje alcanz\u00f3 10 reacciones. \u00a1Eres la estrella del estanque!`,
-            mentions: authorJid ? [authorJid] : []
-        });
-    }
+    await upsertModRecord(authorJid, { $inc: { troncos: 1 } });
 
     upsertMessageReactionRecord(messageId, record);
 }
@@ -2543,6 +2521,35 @@ async function handleDinamicaCommand(sock, msg, remoteJid) {
         '3️⃣ Cuando tu mensaje alcance *5 reacciones* de personas distintas, ganas *1 tronco* 🪵',
         '',
         '4️⃣ Si ese mismo mensaje llega a *10 reacciones*, ganas *1 tronco extra* 🪵🪵',
+        '',
+        '⚠️ *Importante:*',
+        '• Reaccionarte a ti mismo no cuenta.',
+        '• Quitar y poner la reacción no suma más.',
+        '• Cada persona solo cuenta una vez por mensaje.',
+        '',
+        '📊 Usa *.top* para ver el ranking y *.troncos* para ver los tuyos.',
+        '',
+        '¡A construir el dique! 🦫'
+    ].join('\n');
+    await sock.sendMessage(remoteJid, { text: dinamicaText }, { quoted: msg });
+}
+
+async function handleDinamicaCommand(sock, msg, remoteJid) {
+    const dinamicaText = [
+        '🪵 *¿Cómo ganar Troncos?*',
+        '',
+        'Los troncos son la moneda del estanque. Se ganan cuando tus mensajes reciben reacciones de otros castores.',
+        '',
+        '🎯 *Reglas:*',
+        '',
+        '1️⃣ Comparte un aporte de calidad en el grupo.',
+        '',
+        '2️⃣ Otros miembros deben reaccionar con alguno de estos emojis:',
+        '👍 ❤️ 👏 🤯 🔥 💯 🧠 🤖 🦫 💡',
+        '',
+        '3️⃣ Cada *reacción positiva* de una persona distinta vale *1 tronco* 🪵',
+        '',
+        '4️⃣ Ejemplo: *1 reacción = 1 tronco*, *2 reacciones = 2 troncos* y así sucesivamente.',
         '',
         '⚠️ *Importante:*',
         '• Reaccionarte a ti mismo no cuenta.',
