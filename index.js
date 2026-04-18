@@ -1548,9 +1548,41 @@ async function senderIsAuthorizedAdmin(sock, msg, remoteJid) {
         return true;
     }
     if (!remoteJid.endsWith('@g.us')) {
-        return false;
+        const savedConfig = await getSavedAdminConfig();
+        if (!savedConfig?.adminPrivateJid && !savedConfig?.adminSenderJid) {
+            return false;
+        }
+        return savedConfig.adminPrivateJid === remoteJid
+            || savedConfig.adminPrivateJid === senderJid
+            || savedConfig.adminSenderJid === remoteJid
+            || savedConfig.adminSenderJid === senderJid;
     }
     return isGroupAdmin(sock, remoteJid, senderJid);
+}
+
+function resolveModerationGroupJid(remoteJid, groupFromReport = '') {
+    if (String(remoteJid || '').endsWith('@g.us')) {
+        return remoteJid;
+    }
+    if (String(groupFromReport || '').endsWith('@g.us')) {
+        return groupFromReport;
+    }
+    if (PROACTIVE_GROUP_JIDS.length === 1) {
+        return PROACTIVE_GROUP_JIDS[0];
+    }
+    return '';
+}
+
+async function getPrivateModerationTargetLabel(sock, groupJid) {
+    if (!groupJid) {
+        return 'grupo objetivo';
+    }
+    try {
+        const metadata = await sock.groupMetadata(groupJid);
+        return metadata?.subject ? `grupo "${sanitizeText(metadata.subject, 120)}"` : 'grupo objetivo';
+    } catch (error) {
+        return 'grupo objetivo';
+    }
 }
 
 function extractCandidateNumber(value) {
@@ -1869,7 +1901,7 @@ async function handleWarnCommand(sock, msg, text, remoteJid) {
         return;
     }
 
-    const currentGroup = remoteJid.endsWith('@g.us') ? remoteJid : resolved.groupFromReport;
+    const currentGroup = resolveModerationGroupJid(remoteJid, resolved.groupFromReport);
     if (currentGroup && await isGroupAdmin(sock, currentGroup, resolved.targetJid)) {
         await sock.sendMessage(remoteJid, { text: 'No puedes advertir a un administrador del grupo.' }, { quoted: msg });
         return;
@@ -1943,9 +1975,9 @@ async function handleBanCommand(sock, msg, text, remoteJid) {
         return;
     }
 
-    const currentGroup = remoteJid.endsWith('@g.us') ? remoteJid : resolved.groupFromReport;
+    const currentGroup = resolveModerationGroupJid(remoteJid, resolved.groupFromReport);
     if (!currentGroup) {
-        await sock.sendMessage(remoteJid, { text: 'Para usar .ban necesito conocer el grupo de origen.' }, { quoted: msg });
+        await sock.sendMessage(remoteJid, { text: 'Para usar .ban por privado necesito tener claro el grupo objetivo. Si solo manejas un grupo configurado, Castor lo tomará automáticamente; si no, responde al reporte privado del bot.' }, { quoted: msg });
         return;
     }
     if (await isGroupAdmin(sock, currentGroup, resolved.targetJid)) {
@@ -1968,9 +2000,12 @@ async function handleBanCommand(sock, msg, text, remoteJid) {
     }
 
     const mention = `@${getNumberFromJid(resolved.targetJid) || 'usuario'}`;
+    const targetLabel = remoteJid.endsWith('@g.us')
+        ? 'del grupo'
+        : `de ${await getPrivateModerationTargetLabel(sock, currentGroup)}`;
     const resultText = removed
-        ? `⛔ ${mention} fue baneado y eliminado del grupo.`
-        : `⛔ ${mention} quedó marcado como baneado, pero no pude eliminarlo del grupo.`;
+        ? `⛔ ${mention} fue baneado y eliminado ${targetLabel}.`
+        : `⛔ ${mention} quedó marcado como baneado, pero no pude eliminarlo ${targetLabel}.`;
     await sock.sendMessage(remoteJid, {
         text: resultText,
         mentions: [resolved.targetJid]
