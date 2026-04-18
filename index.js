@@ -1092,6 +1092,21 @@ function parseTargetFromTextOrMention(msg, text) {
     return null;
 }
 
+function getModerationUsageText(command) {
+    const normalized = String(command || '').trim().toLowerCase();
+    const baseLines = [
+        `Usa ${normalized} de cualquiera de estas formas:`,
+        `1. Responde al mensaje del usuario y escribe ${normalized}`,
+        `2. Escribe ${normalized} @usuario`,
+        `3. Escribe ${normalized} 521XXXXXXXXXX`
+    ];
+    if (normalized === '.ban' || normalized === '.advertir') {
+        baseLines.splice(3, 0, `3. Responde al reporte privado del bot`);
+        baseLines[4] = `4. Escribe ${normalized} 521XXXXXXXXXX`;
+    }
+    return baseLines.join('\n');
+}
+
 function parseTargetFromReportText(text) {
     const match = String(text || '').match(/ID infractor:\s*([^\s]+)/i);
     if (match?.[1]) return match[1];
@@ -1850,7 +1865,7 @@ async function handleWarnCommand(sock, msg, text, remoteJid) {
 
     const resolved = await resolveTargetForModeration(msg, text);
     if (!resolved.targetJid) {
-        await sock.sendMessage(remoteJid, { text: 'Usa .advertir con mención, ID o respondiendo al reporte.' }, { quoted: msg });
+        await sock.sendMessage(remoteJid, { text: getModerationUsageText('.advertir') }, { quoted: msg });
         return;
     }
 
@@ -1896,7 +1911,7 @@ async function handleUnbanCommand(sock, msg, text, remoteJid) {
 
     const resolved = await resolveTargetForModeration(msg, text);
     if (!resolved.targetJid) {
-        await sock.sendMessage(remoteJid, { text: 'Usa .unban con mención, ID o respondiendo al reporte.' }, { quoted: msg });
+        await sock.sendMessage(remoteJid, { text: getModerationUsageText('.unban') }, { quoted: msg });
         return;
     }
 
@@ -1924,7 +1939,7 @@ async function handleBanCommand(sock, msg, text, remoteJid) {
 
     const resolved = await resolveTargetForModeration(msg, text);
     if (!resolved.targetJid) {
-        await sock.sendMessage(remoteJid, { text: 'Usa .ban con mención, ID o respondiendo al reporte.' }, { quoted: msg });
+        await sock.sendMessage(remoteJid, { text: getModerationUsageText('.ban') }, { quoted: msg });
         return;
     }
 
