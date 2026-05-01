@@ -133,6 +133,7 @@ const SHOWCASE_REPOS = [
 ];
 const SHOWCASE_PROMPT_INLINE_MAX_LENGTH = 500;
 const SHOWCASE_MAX_IMAGES_PER_DROP = Math.max(1, Number(process.env.SHOWCASE_MAX_IMAGES_PER_DROP || 1));
+const SHOWCASE_SLOT_LOCK_MS = Number(process.env.SHOWCASE_SLOT_LOCK_MS || (30 * 60 * 1000));
 const FLAG_BY_DIAL_CODE = {
     '1': '🇺🇸',
     '34': '🇪🇸',
@@ -585,6 +586,8 @@ function getDefaultProactiveState() {
         randomUserRotationByGroup: {},
         pendingRandomUserFollowUps: [],
         netsecTracking: [],
+        showcaseLockSlot: '',
+        showcaseLockExpiresAt: '',
         showcaseTracking: getDefaultShowcaseTracking()
     };
 }
@@ -608,6 +611,8 @@ function normalizeProactiveState(state) {
         randomUserRotationByGroup: normalizeRandomUserRotationByGroup(state.randomUserRotationByGroup),
         pendingRandomUserFollowUps: normalizeRandomUserFollowUps(state.pendingRandomUserFollowUps),
         netsecTracking: normalizeStringTrackingList(state.netsecTracking, 50),
+        showcaseLockSlot: typeof state.showcaseLockSlot === 'string' ? state.showcaseLockSlot : '',
+        showcaseLockExpiresAt: typeof state.showcaseLockExpiresAt === 'string' ? state.showcaseLockExpiresAt : '',
         showcaseTracking: normalizeShowcaseTracking(state.showcaseTracking)
     };
 }
@@ -1422,6 +1427,36 @@ function getStartupDailyScheduleUpdates(state, mexicoNow) {
     }
 
     return updates;
+}
+
+function getShowcaseSlotKey(todayKey, slotName) {
+    return `${todayKey}:${slotName}`;
+}
+
+function hasActiveShowcaseSlotLock(state, slotKey, nowMs = Date.now()) {
+    const currentState = normalizeProactiveState(state);
+    if (!currentState.showcaseLockSlot || currentState.showcaseLockSlot !== slotKey) {
+        return false;
+    }
+    const expiresAtMs = new Date(currentState.showcaseLockExpiresAt || '').getTime();
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs) {
+        updateProactiveState({ showcaseLockSlot: '', showcaseLockExpiresAt: '' });
+        return false;
+    }
+    return true;
+}
+
+function claimShowcaseSlotLock(slotKey, nowMs = Date.now()) {
+    updateProactiveState({
+        showcaseLockSlot: slotKey,
+        showcaseLockExpiresAt: new Date(nowMs + SHOWCASE_SLOT_LOCK_MS).toISOString()
+    });
+}
+
+function releaseShowcaseSlotLock(slotKey) {
+    const currentState = getProactiveState();
+    if (currentState.showcaseLockSlot !== slotKey) return;
+    updateProactiveState({ showcaseLockSlot: '', showcaseLockExpiresAt: '' });
 }
 
 async function sendPrivateAdminMessage(sock, text) {
@@ -6616,6 +6651,8 @@ function startProactiveScheduler(sock) {
             const mexicoHour = mexicoNow.getHours();
             const mexicoMinute = mexicoNow.getMinutes();
             const todayKey = getMexicoDateKey(mexicoNow);
+            const morningShowcaseSlotKey = getShowcaseSlotKey(todayKey, 'showcase-morning');
+            const afternoonShowcaseSlotKey = getShowcaseSlotKey(todayKey, 'showcase-afternoon');
             if (lastGroupActivityAt > 0) {
                 const savedTs = currentState.lastGroupActivityAt ? new Date(currentState.lastGroupActivityAt).getTime() : 0;
                 if (lastGroupActivityAt > savedTs) {
@@ -6623,28 +6660,52 @@ function startProactiveScheduler(sock) {
                 }
             }
             if (currentState.lastShowcaseDailyDateMorning !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_SHOWCASE_DAILY_HOUR, PROACTIVE_SHOWCASE_DAILY_MINUTE)) {
+                if (hasActiveShowcaseSlotLock(currentState, morningShowcaseSlotKey, now)) {
+                    console.log('[PROACTIVO] Showcase matutino omitido temporalmente: ya existe un envío en curso o recién ejecutado para este slot.');
+                    return;
+                }
+                claimShowcaseSlotLock(morningShowcaseSlotKey, now);
                 const jitter = getRandomDelay(0, EFFECTIVE_PROACTIVE_JITTER_MS);
                 await new Promise((resolve) => setTimeout(resolve, jitter));
                 if (activeSock === sock) {
                     const sent = await sendPromptShowcase(sock);
                     if (sent) {
-                        updateProactiveState({ lastShowcaseDailyDateMorning: todayKey });
+                        updateProactiveState({
+                            lastShowcaseDailyDateMorning: todayKey,
+                            showcaseLockSlot: '',
+                            showcaseLockExpiresAt: ''
+                        });
                     } else {
+                        releaseShowcaseSlotLock(morningShowcaseSlotKey);
                         console.log('[PROACTIVO] Showcase matutino no se marcó porque no hubo envío real.');
                     }
+                } else {
+                    releaseShowcaseSlotLock(morningShowcaseSlotKey);
                 }
                 return;
             }
             if (currentState.lastShowcaseDailyDateAfternoon !== todayKey && hasReachedMexicoTime(mexicoNow, PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR, PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE)) {
+                if (hasActiveShowcaseSlotLock(currentState, afternoonShowcaseSlotKey, now)) {
+                    console.log('[PROACTIVO] Showcase vespertino omitido temporalmente: ya existe un envío en curso o recién ejecutado para este slot.');
+                    return;
+                }
+                claimShowcaseSlotLock(afternoonShowcaseSlotKey, now);
                 const jitter = getRandomDelay(0, EFFECTIVE_PROACTIVE_JITTER_MS);
                 await new Promise((resolve) => setTimeout(resolve, jitter));
                 if (activeSock === sock) {
                     const sent = await sendPromptShowcase(sock);
                     if (sent) {
-                        updateProactiveState({ lastShowcaseDailyDateAfternoon: todayKey });
+                        updateProactiveState({
+                            lastShowcaseDailyDateAfternoon: todayKey,
+                            showcaseLockSlot: '',
+                            showcaseLockExpiresAt: ''
+                        });
                     } else {
+                        releaseShowcaseSlotLock(afternoonShowcaseSlotKey);
                         console.log('[PROACTIVO] Showcase vespertino no se marcó porque no hubo envío real.');
                     }
+                } else {
+                    releaseShowcaseSlotLock(afternoonShowcaseSlotKey);
                 }
                 return;
             }
@@ -7240,19 +7301,35 @@ async function startBot() {
                 if (PROACTIVE_SEND_SHOWCASE_ON_START && startupShowcaseSentRunId !== runId) {
                     const startupState = getProactiveState();
                     const startupTodayKey = getMexicoDateKey(getMexicoNow());
+                    const startupShowcaseSlotKey = getShowcaseSlotKey(startupTodayKey, 'showcase-morning');
                     const showcaseHandledToday = startupState.lastShowcaseDailyDateMorning === startupTodayKey
                         || startupState.lastShowcaseDailyDateAfternoon === startupTodayKey;
                     if (showcaseHandledToday) {
                         console.log('[PROACTIVO] Showcase inmediato omitido para evitar duplicados tras reinicio.');
+                    } else if (hasActiveShowcaseSlotLock(startupState, startupShowcaseSlotKey)) {
+                        console.log('[PROACTIVO] Showcase inmediato omitido porque el slot matutino sigue bloqueado por un intento reciente.');
                     } else {
                         startupShowcaseSentRunId = runId;
+                        claimShowcaseSlotLock(startupShowcaseSlotKey);
                         setTimeout(async () => {
-                            if (runId !== botRunId || activeSock !== sock) return;
+                            if (runId !== botRunId || activeSock !== sock) {
+                                releaseShowcaseSlotLock(startupShowcaseSlotKey);
+                                return;
+                            }
                             try {
                                 console.log('[PROACTIVO] Envío inmediato de showcase por reinicio.');
-                                await sendPromptShowcase(sock);
-                                updateProactiveState({ lastShowcaseDailyDateMorning: startupTodayKey });
+                                const sent = await sendPromptShowcase(sock);
+                                if (sent) {
+                                    updateProactiveState({
+                                        lastShowcaseDailyDateMorning: startupTodayKey,
+                                        showcaseLockSlot: '',
+                                        showcaseLockExpiresAt: ''
+                                    });
+                                } else {
+                                    releaseShowcaseSlotLock(startupShowcaseSlotKey);
+                                }
                             } catch (error) {
+                                releaseShowcaseSlotLock(startupShowcaseSlotKey);
                                 console.error('[PROACTIVO] Error en showcase inmediato por reinicio:', error?.message || error);
                             }
                         }, 3000);
