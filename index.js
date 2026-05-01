@@ -132,6 +132,7 @@ const SHOWCASE_REPOS = [
     }
 ];
 const SHOWCASE_PROMPT_INLINE_MAX_LENGTH = 500;
+const SHOWCASE_MAX_IMAGES_PER_DROP = Math.max(1, Number(process.env.SHOWCASE_MAX_IMAGES_PER_DROP || 1));
 const FLAG_BY_DIAL_CODE = {
     '1': '🇺🇸',
     '34': '🇪🇸',
@@ -6216,11 +6217,17 @@ async function sendPromptShowcase(sock) {
         captionLines.push('', '💡 ¡Prueba este prompt en tu IA favorita y comparte el resultado! 👇');
         const captionText = captionLines.join('\n');
         
+        const showcaseImageUrls = [...new Set((showcase.imageUrls || []).filter((url) => typeof url === 'string' && url.trim()))];
+        const limitedImageUrls = showcaseImageUrls.slice(0, SHOWCASE_MAX_IMAGES_PER_DROP);
+        if (showcaseImageUrls.length > limitedImageUrls.length) {
+            console.log(`[SHOWCASE] Limitando imágenes para "${finalTitle}" de ${showcaseImageUrls.length} a ${limitedImageUrls.length}.`);
+        }
+
         let imageLabels = [];
         let deliveredGroups = 0;
-        if (showcase.imageUrls.length > 1) {
+        if (limitedImageUrls.length > 1) {
             try {
-                const fileNames = showcase.imageUrls.map(u => u.substring(u.lastIndexOf('/') + 1));
+                const fileNames = limitedImageUrls.map(u => u.substring(u.lastIndexOf('/') + 1));
                 const labelingPrompt = `Analiza el caso y genera etiquetas para sus imágenes.
 Título: ${finalTitle}
 Prompt: ${finalPrompt}
@@ -6229,12 +6236,12 @@ Nombres de archivo: ${fileNames.join(', ')}
 Si es una transformación de una imagen a otra, responde con cosas parecidas a "🖼️ Imagen de Referencia (Input)" y "✨ Imagen Final (Output)".
 Si es una comparación entre modelos de IA (ej. Gemini vs GPT-4o, donde cada imagen es de un modelo distinto), usa el nombre de los modelos (ej. "🤖 Gemini" y "🤖 GPT-4o") inferidos de los nombres de archivo.
 
-REGLA ESTRICTA: Devuelve ÚNICAMENTE un arreglo en formato JSON válido con exactamente ${showcase.imageUrls.length} strings. Ejemplo de salida: ["etiqueta 1", "etiqueta 2"]`;
+REGLA ESTRICTA: Devuelve ÚNICAMENTE un arreglo en formato JSON válido con exactamente ${limitedImageUrls.length} strings. Ejemplo de salida: ["etiqueta 1", "etiqueta 2"]`;
                 
                 const labelsResult = await generateAIContent("Eres un experto clasificador de datos que devuelve puramente JSON.", labelingPrompt, 200);
                 if (labelsResult) {
                     const parsed = JSON.parse(labelsResult.replace(/```json|```/g, '').trim());
-                    imageLabels = normalizeImageLabels(parsed, showcase.imageUrls.length);
+                    imageLabels = normalizeImageLabels(parsed, limitedImageUrls.length);
                 }
             } catch (e) {
                 console.error('[SHOWCASE-LABELS] Parsing falló:', e?.message);
@@ -6242,42 +6249,42 @@ REGLA ESTRICTA: Devuelve ÚNICAMENTE un arreglo en formato JSON válido con exac
         }
 
         // Prioriza detección determinística para comparaciones entre IAs.
-        if (showcase.imageUrls.length > 1) {
-            const modelComparisonLabels = buildModelComparisonLabels(showcase.imageUrls);
-            if (modelComparisonLabels.length === showcase.imageUrls.length) {
+        if (limitedImageUrls.length > 1) {
+            const modelComparisonLabels = buildModelComparisonLabels(limitedImageUrls);
+            if (modelComparisonLabels.length === limitedImageUrls.length) {
                 imageLabels = modelComparisonLabels;
             }
         }
 
-        if (showcase.imageUrls.length > 1 && imageLabels.length === 0) {
-            imageLabels = buildDefaultImageLabels(showcase.imageUrls);
+        if (limitedImageUrls.length > 1 && imageLabels.length === 0) {
+            imageLabels = buildDefaultImageLabels(limitedImageUrls);
         }
         
         for (const groupJid of PROACTIVE_GROUP_JIDS) {
             try {
-                if (showcase.imageUrls.length > 1) {
+                if (limitedImageUrls.length > 1) {
                     // Enviar texto principal separado si hay múltiples imágenes
                     await sock.sendMessage(groupJid, { text: captionText });
                     deliveredGroups += 1;
                     
                     // Enviar imágenes en orden
-                    for (let i = 0; i < showcase.imageUrls.length; i++) {
+                    for (let i = 0; i < limitedImageUrls.length; i++) {
                         let imgCaption = imageLabels[i];
                         
                         try {
                             await sock.sendMessage(groupJid, {
-                                image: { url: showcase.imageUrls[i] },
+                                image: { url: limitedImageUrls[i] },
                                 caption: imgCaption
                             });
                         } catch (imgError) {
                             console.error(`[SHOWCASE] Error enviando múltiple imagen ${i} a ${groupJid}:`, imgError?.message);
                         }
                     }
-                } else {
+                } else if (limitedImageUrls.length > 0) {
                     // Si hay solo una imagen, enviamos todo junto como caption
                     try {
                         await sock.sendMessage(groupJid, {
-                            image: { url: showcase.imageUrls[0] },
+                            image: { url: limitedImageUrls[0] },
                             caption: captionText
                         });
                         deliveredGroups += 1;
@@ -6286,6 +6293,9 @@ REGLA ESTRICTA: Devuelve ÚNICAMENTE un arreglo en formato JSON válido con exac
                         await sock.sendMessage(groupJid, { text: captionText });
                         deliveredGroups += 1;
                     }
+                } else {
+                    await sock.sendMessage(groupJid, { text: captionText });
+                    deliveredGroups += 1;
                 }
                 
                 if (isLongPrompt) {
