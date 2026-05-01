@@ -132,7 +132,7 @@ const SHOWCASE_REPOS = [
     }
 ];
 const SHOWCASE_PROMPT_INLINE_MAX_LENGTH = 500;
-const SHOWCASE_MAX_IMAGES_PER_DROP = Math.max(1, Number(process.env.SHOWCASE_MAX_IMAGES_PER_DROP || 1));
+const SHOWCASE_MAX_IMAGES_PER_DROP = Math.max(1, Number(process.env.SHOWCASE_MAX_IMAGES_PER_DROP || 4));
 const SHOWCASE_SLOT_LOCK_MS = Number(process.env.SHOWCASE_SLOT_LOCK_MS || (30 * 60 * 1000));
 const FLAG_BY_DIAL_CODE = {
     '1': '🇺🇸',
