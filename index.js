@@ -101,7 +101,7 @@ const RANDOM_TOPIC_PROMPT_HISTORY_LIMIT = Number(process.env.RANDOM_TOPIC_PROMPT
 const RANDOM_USER_ROTATION_LIMIT = Number(process.env.RANDOM_USER_ROTATION_LIMIT || 2048);
 const RANDOM_USER_FOLLOWUP_LIMIT = Number(process.env.RANDOM_USER_FOLLOWUP_LIMIT || 20);
 const RANDOM_USER_REPLY_WINDOW_MS = Number(process.env.RANDOM_USER_REPLY_WINDOW_MS || (24 * 60 * 60 * 1000));
-const RANDOM_USER_DUEL_CHANCE = Math.min(1, Math.max(0, Number(process.env.RANDOM_USER_DUEL_CHANCE || (1 / 3))));
+const RANDOM_USER_DUEL_CHANCE = Math.min(1, Math.max(0, Number(process.env.RANDOM_USER_DUEL_CHANCE || 0.5)));
 const PROACTIVE_JITTER_MS = Number(process.env.PROACTIVE_JITTER_MS || (5 * 1000));
 const PROACTIVE_STARTUP_RECOVERY_WINDOW_MS = Number(process.env.PROACTIVE_STARTUP_RECOVERY_WINDOW_MS || (30 * 60 * 1000));
 const EFFECTIVE_BOT_STALE_SOCKET_MS = Math.max(BOT_STALE_SOCKET_MS, BOT_PRESENCE_KEEPALIVE_MS + (BOT_HEALTHCHECK_INTERVAL_MS * 2));
@@ -536,6 +536,22 @@ function normalizeRandomUserRotationByGroup(value) {
     return normalized;
 }
 
+function normalizeRandomUserNextModeByGroup(value) {
+    const normalized = {};
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return normalized;
+    }
+    for (const [groupJid, nextMode] of Object.entries(value)) {
+        if (!String(groupJid || '').endsWith('@g.us')) {
+            continue;
+        }
+        if (nextMode === 'single' || nextMode === 'duel') {
+            normalized[groupJid] = nextMode;
+        }
+    }
+    return normalized;
+}
+
 function normalizeRandomUserFollowUps(value) {
     const now = Date.now();
     const normalized = Array.isArray(value)
@@ -583,6 +599,7 @@ function getDefaultProactiveState() {
         knowledgeCategoryCursor: 0,
         osintTracking: [],
         randomTopicTracking: [],
+        randomUserNextModeByGroup: {},
         randomUserRotationByGroup: {},
         pendingRandomUserFollowUps: [],
         netsecTracking: [],
@@ -608,6 +625,7 @@ function normalizeProactiveState(state) {
         knowledgeCategoryCursor: Math.abs(Number(state.knowledgeCategoryCursor) || 0) % KNOWLEDGE_DROP_CATEGORIES.length,
         osintTracking: normalizeNumericTrackingList(state.osintTracking, 50),
         randomTopicTracking: normalizeStringTrackingList(state.randomTopicTracking, RANDOM_TOPIC_TRACKING_LIMIT),
+        randomUserNextModeByGroup: normalizeRandomUserNextModeByGroup(state.randomUserNextModeByGroup),
         randomUserRotationByGroup: normalizeRandomUserRotationByGroup(state.randomUserRotationByGroup),
         pendingRandomUserFollowUps: normalizeRandomUserFollowUps(state.pendingRandomUserFollowUps),
         netsecTracking: normalizeStringTrackingList(state.netsecTracking, 50),
@@ -1808,14 +1826,7 @@ async function sendWelcome(sock, groupJid, participantJid) {
     ].join('\n');
     const commandsInfoText = getUserCommandsText();
 
-    let profileUrl = null;
-    try {
-        profileUrl = await sock.profilePictureUrl(participantJid, 'image');
-    } catch (error) {
-        profileUrl = null;
-    }
-
-    const imageUrl = profileUrl || CASTOR_DEFAULT_IMAGE_URL;
+    const imageUrl = await resolveWelcomeImageUrl(sock, [participantJid]);
 
     try {
         await sock.sendMessage(groupJid, {
@@ -1839,6 +1850,30 @@ async function sendWelcome(sock, groupJid, participantJid) {
             });
         }
     }
+}
+
+async function resolveParticipantProfileImageUrl(sock, participantJid) {
+    for (const pictureType of ['image', 'preview']) {
+        try {
+            const profileUrl = await sock.profilePictureUrl(participantJid, pictureType);
+            if (profileUrl) {
+                return profileUrl;
+            }
+        } catch (error) {
+        }
+    }
+    return '';
+}
+
+async function resolveWelcomeImageUrl(sock, participantJids = []) {
+    const uniqueParticipants = uniqStrings(participantJids).filter(Boolean);
+    if (uniqueParticipants.length === 1) {
+        const profileUrl = await resolveParticipantProfileImageUrl(sock, uniqueParticipants[0]);
+        if (profileUrl) {
+            return profileUrl;
+        }
+    }
+    return CASTOR_DEFAULT_IMAGE_URL;
 }
 
 async function sendBatchedWelcome(sock, groupJid, participantJids) {
@@ -1878,7 +1913,7 @@ async function sendBatchedWelcome(sock, groupJid, participantJids) {
         '🔗 Link del grupo: https://chat.whatsapp.com/IIiwVeYGLUV8gbGXU4SfEz'
     ].join('\n');
 
-    const imageUrl = CASTOR_DEFAULT_IMAGE_URL;
+    const imageUrl = await resolveWelcomeImageUrl(sock, mentionsArray);
 
     try {
         await sock.sendMessage(groupJid, {
@@ -3159,17 +3194,15 @@ function buildRandomUserRotationEntry(existingEntry, candidateIds = []) {
     return { pool, remaining };
 }
 
-function shouldUseRandomUserDuelMode(groupJid, todayKey, remainingCount) {
-    if (remainingCount < 2 || RANDOM_USER_DUEL_CHANCE <= 0) {
-        return false;
+function getRandomUserSelectionMode(groupJid, remainingCount, randomUserNextModeByGroup = {}) {
+    if (RANDOM_USER_DUEL_CHANCE <= 0 || remainingCount < 2) {
+        return 'single';
     }
-    const normalizedSeed = normalizeRandomTopicKey(`${groupJid} ${todayKey}`);
-    let hash = 0;
-    for (const char of normalizedSeed) {
-        hash = ((hash * 31) + char.charCodeAt(0)) % 1000;
+    if (RANDOM_USER_DUEL_CHANCE >= 1) {
+        return 'duel';
     }
-    const threshold = Math.round(RANDOM_USER_DUEL_CHANCE * 1000);
-    return hash < threshold;
+    const nextMode = randomUserNextModeByGroup?.[groupJid];
+    return nextMode === 'duel' ? 'duel' : 'single';
 }
 
 function setPendingRandomUserFollowUp(followUps, nextFollowUp) {
@@ -6498,8 +6531,8 @@ async function sendRandomUserSelection(sock) {
 async function sendRandomUserSelection(sock) {
     if (PROACTIVE_GROUP_JIDS.length === 0) return false;
     const state = getProactiveState();
-    const todayKey = getMexicoDateKey(getMexicoNow());
     const randomTopicTracking = normalizeStringTrackingList(state.randomTopicTracking, RANDOM_TOPIC_TRACKING_LIMIT);
+    const randomUserNextModeByGroup = normalizeRandomUserNextModeByGroup(state.randomUserNextModeByGroup);
     const randomUserRotationByGroup = normalizeRandomUserRotationByGroup(state.randomUserRotationByGroup);
     let pendingRandomUserFollowUps = normalizeRandomUserFollowUps(state.pendingRandomUserFollowUps);
     const usedTopicKeys = new Set(randomTopicTracking.map((topic) => normalizeRandomTopicKey(topic)));
@@ -6523,7 +6556,8 @@ async function sendRandomUserSelection(sock) {
                 randomUserRotationByGroup[groupJid],
                 candidates.map((participant) => participant.id)
             );
-            const useDuelMode = shouldUseRandomUserDuelMode(groupJid, todayKey, rotationEntry.remaining.length);
+            const selectionMode = getRandomUserSelectionMode(groupJid, rotationEntry.remaining.length, randomUserNextModeByGroup);
+            const useDuelMode = selectionMode === 'duel';
             const requestedCount = useDuelMode ? 2 : 1;
             const selectedParticipants = rotationEntry.remaining
                 .slice(0, requestedCount)
@@ -6566,6 +6600,9 @@ async function sendRandomUserSelection(sock) {
 
             rotationEntry.remaining = rotationEntry.remaining.slice(selectedParticipants.length);
             randomUserRotationByGroup[groupJid] = rotationEntry;
+            if (RANDOM_USER_DUEL_CHANCE > 0 && RANDOM_USER_DUEL_CHANCE < 1) {
+                randomUserNextModeByGroup[groupJid] = useDuelMode ? 'single' : 'duel';
+            }
 
             const nowIso = new Date().toISOString();
             const expiresAt = new Date(Date.now() + RANDOM_USER_REPLY_WINDOW_MS).toISOString();
@@ -6605,6 +6642,7 @@ async function sendRandomUserSelection(sock) {
     if (topicsUsedThisRun.length > 0) {
         proactiveUpdates.randomTopicTracking = [...randomTopicTracking, ...topicsUsedThisRun].slice(-RANDOM_TOPIC_TRACKING_LIMIT);
     }
+    proactiveUpdates.randomUserNextModeByGroup = randomUserNextModeByGroup;
     proactiveUpdates.randomUserRotationByGroup = randomUserRotationByGroup;
     proactiveUpdates.pendingRandomUserFollowUps = pendingRandomUserFollowUps;
     updateProactiveState(proactiveUpdates);
