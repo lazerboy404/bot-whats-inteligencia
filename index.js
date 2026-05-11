@@ -1054,9 +1054,16 @@ function extractTextFromMessage(message) {
 function getContextInfoFromMessage(message) {
     const body = getMainMessageObject(message);
     if (!body) return null;
-    const type = Object.keys(body)[0];
-    if (!type) return null;
-    return body[type]?.contextInfo || null;
+    const directContextInfo = body.messageContextInfo;
+    if (directContextInfo?.quotedMessage || directContextInfo?.stanzaId || directContextInfo?.participant || (directContextInfo?.mentionedJid || []).length > 0) {
+        return directContextInfo;
+    }
+    for (const value of Object.values(body)) {
+        if (value?.contextInfo) {
+            return value.contextInfo;
+        }
+    }
+    return null;
 }
 
 function getQuotedPayload(message) {
