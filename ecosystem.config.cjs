@@ -1,3 +1,8 @@
+try {
+  require('dotenv').config({ path: '/root/bot-whats-inteligencia/.env' });
+} catch (error) {
+}
+
 module.exports = {
   apps: [
     {
@@ -33,6 +38,7 @@ module.exports = {
         BAILEYS_RETRY_REQUEST_DELAY_MS: '5000',
         SEND_ACTION_TIMEOUT_MS: '20000',
         PROACTIVE_ENABLED: 'true',
+        PROACTIVE_GROUP_JID: process.env.PROACTIVE_GROUP_JID || '',
         PROACTIVE_PROMPT_INTERVAL_MS: '86400000',
         PROACTIVE_RANDOM_USER_INTERVAL_MS: '86400000',
         PROACTIVE_INACTIVITY_THRESHOLD_MS: '64800000',
