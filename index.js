@@ -1621,13 +1621,29 @@ async function senderIsAuthorizedAdmin(sock, msg, remoteJid) {
     }
     if (!remoteJid.endsWith('@g.us')) {
         const savedConfig = await getSavedAdminConfig();
-        if (!savedConfig?.adminPrivateJid && !savedConfig?.adminSenderJid) {
-            return false;
+        const configuredAdminJids = new Set([
+            ...(await getSavedAdminJidCandidates()),
+            ...getAdminJidCandidates()
+        ].filter(Boolean));
+        const candidateJids = [remoteJid, senderJid].filter(Boolean);
+        if (candidateJids.some((jid) => configuredAdminJids.has(jid))) {
+            return true;
         }
-        return savedConfig.adminPrivateJid === remoteJid
-            || savedConfig.adminPrivateJid === senderJid
-            || savedConfig.adminSenderJid === remoteJid
-            || savedConfig.adminSenderJid === senderJid;
+        const configuredAdminNumbers = new Set(
+            [...configuredAdminJids]
+                .map((jid) => normalizePhoneForCompare(getNumberFromJid(jid)))
+                .filter(Boolean)
+        );
+        const candidateNumbers = candidateJids
+            .map((jid) => normalizePhoneForCompare(getNumberFromJid(jid)))
+            .filter(Boolean);
+        if (candidateNumbers.some((number) => configuredAdminNumbers.has(number))) {
+            return true;
+        }
+        return savedConfig?.adminPrivateJid === remoteJid
+            || savedConfig?.adminPrivateJid === senderJid
+            || savedConfig?.adminSenderJid === remoteJid
+            || savedConfig?.adminSenderJid === senderJid;
     }
     return isGroupAdmin(sock, remoteJid, senderJid);
 }
