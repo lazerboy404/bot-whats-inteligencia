@@ -1355,6 +1355,51 @@ async function getModRecord(userId) {
     return store.modRecords?.[userId] ? { ...store.modRecords[userId] } : null;
 }
 
+function getParticipantNameIndex() {
+    const store = ensureLocalStoreLoaded();
+    if (!store.participantNameIndex || typeof store.participantNameIndex !== 'object') {
+        store.participantNameIndex = {};
+    }
+    return store.participantNameIndex;
+}
+
+function rememberParticipantName(userIds, rawName) {
+    const displayName = sanitizeRichText(rawName || '', 120);
+    if (!displayName) {
+        return;
+    }
+    const normalizedName = normalizeParticipantSearchText(displayName);
+    if (!normalizedName) {
+        return;
+    }
+    const nameIndex = getParticipantNameIndex();
+    let changed = false;
+    for (const userId of uniqStrings(userIds).filter(Boolean)) {
+        const current = nameIndex[userId] || {};
+        if (current.name === displayName) {
+            continue;
+        }
+        nameIndex[userId] = {
+            name: displayName,
+            normalizedName,
+            updatedAt: new Date().toISOString()
+        };
+        changed = true;
+    }
+    if (changed) {
+        saveLocalStore();
+    }
+}
+
+function getCachedParticipantNames(participant) {
+    const nameIndex = getParticipantNameIndex();
+    return uniqStrings([
+        nameIndex[participant?.id || '']?.name || '',
+        nameIndex[participant?.jid || '']?.name || '',
+        nameIndex[participant?.lid || '']?.name || ''
+    ]).filter(Boolean);
+}
+
 function getMessageReactionRecord(messageId) {
     const store = ensureLocalStoreLoaded();
     if (!store.messageReactions) {
@@ -1713,7 +1758,8 @@ function extractModerationSearchQuery(text) {
 }
 
 function getParticipantLookupLabel(participant) {
-    const visibleName = sanitizeText(participant?.notify || participant?.name || participant?.pushName || '', 80);
+    const cachedName = getCachedParticipantNames(participant)[0] || '';
+    const visibleName = sanitizeText(participant?.notify || participant?.name || participant?.pushName || cachedName || '', 80);
     const number = getNumberFromJid(participant?.id || '') || 'usuario';
     return visibleName ? `${visibleName} (@${number})` : `@${number}`;
 }
@@ -1739,10 +1785,12 @@ async function resolveTargetByGroupParticipantName(sock, groupJid, text) {
     const candidates = (metadata.participants || []).map((participant) => {
         const number = getNumberFromJid(participant.id || '');
         const normalizedNumber = normalizePhoneForCompare(number);
+        const cachedNames = getCachedParticipantNames(participant);
         const labels = [
             participant?.notify,
             participant?.name,
             participant?.pushName,
+            ...cachedNames,
             number
         ]
             .map((value) => normalizeParticipantSearchText(value))
@@ -7140,6 +7188,10 @@ async function processIncomingMessage(sock, msg, runId) {
         return;
     }
     const senderJid = msg.key.participant || msg.key.remoteJid;
+    const senderDisplayName = sanitizeRichText(msg.pushName || msg.verifiedBizName || '', 120);
+    if (senderDisplayName) {
+        rememberParticipantName([senderJid], senderDisplayName);
+    }
     const text = extractTextFromMessage(msg.message);
     let senderIsAdmin = false;
     if (remoteJid.endsWith('@g.us')) {
