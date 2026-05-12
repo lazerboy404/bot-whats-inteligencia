@@ -1648,6 +1648,24 @@ async function senderIsAuthorizedAdmin(sock, msg, remoteJid) {
     return isGroupAdmin(sock, remoteJid, senderJid);
 }
 
+async function senderCanModerateGroup(sock, msg, remoteJid, groupJid = '') {
+    if (await senderIsAuthorizedAdmin(sock, msg, remoteJid)) {
+        return true;
+    }
+    if (remoteJid.endsWith('@g.us')) {
+        return false;
+    }
+    if (!String(groupJid || '').endsWith('@g.us')) {
+        return false;
+    }
+    const senderJid = msg.key.participant || msg.key.remoteJid;
+    try {
+        return await isGroupAdmin(sock, groupJid, senderJid);
+    } catch (error) {
+        return false;
+    }
+}
+
 function resolveModerationGroupJid(remoteJid, groupFromReport = '') {
     if (String(remoteJid || '').endsWith('@g.us')) {
         return remoteJid;
@@ -2084,7 +2102,9 @@ async function resolveTargetForModeration(msg, text) {
 }
 
 async function handleWarnCommand(sock, msg, text, remoteJid) {
-    const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
+    const preResolved = await resolveTargetForModeration(msg, text);
+    const authGroup = resolveModerationGroupJid(remoteJid, preResolved.groupFromReport);
+    const isAuthorized = await senderCanModerateGroup(sock, msg, remoteJid, authGroup);
     if (!isAuthorized) {
         await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
         return;
@@ -2094,8 +2114,8 @@ async function handleWarnCommand(sock, msg, text, remoteJid) {
         return;
     }
 
-    let resolved = await resolveTargetForModeration(msg, text);
-    const currentGroup = resolveModerationGroupJid(remoteJid, resolved.groupFromReport);
+    let resolved = preResolved;
+    const currentGroup = authGroup;
     if (!resolved.targetJid && currentGroup) {
         const searchResult = await resolveTargetByGroupParticipantName(sock, currentGroup, text);
         if (searchResult.status === 'matched') {
@@ -2142,7 +2162,9 @@ async function handleWarnCommand(sock, msg, text, remoteJid) {
 }
 
 async function handleUnbanCommand(sock, msg, text, remoteJid) {
-    const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
+    const resolved = await resolveTargetForModeration(msg, text);
+    const currentGroup = resolveModerationGroupJid(remoteJid, resolved.groupFromReport);
+    const isAuthorized = await senderCanModerateGroup(sock, msg, remoteJid, currentGroup);
     if (!isAuthorized) {
         await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
         return;
@@ -2152,7 +2174,6 @@ async function handleUnbanCommand(sock, msg, text, remoteJid) {
         return;
     }
 
-    const resolved = await resolveTargetForModeration(msg, text);
     if (!resolved.targetJid) {
         await sock.sendMessage(remoteJid, { text: getModerationUsageText('.unban') }, { quoted: msg });
         return;
@@ -2170,7 +2191,9 @@ async function handleUnbanCommand(sock, msg, text, remoteJid) {
 }
 
 async function handleBanCommand(sock, msg, text, remoteJid) {
-    const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
+    let resolved = await resolveTargetForModeration(msg, text);
+    const currentGroup = resolveModerationGroupJid(remoteJid, resolved.groupFromReport);
+    const isAuthorized = await senderCanModerateGroup(sock, msg, remoteJid, currentGroup);
     if (!isAuthorized) {
         await sock.sendMessage(remoteJid, { text: 'Acceso denegado. Solo administradores.' }, { quoted: msg });
         return;
@@ -2180,8 +2203,6 @@ async function handleBanCommand(sock, msg, text, remoteJid) {
         return;
     }
 
-    let resolved = await resolveTargetForModeration(msg, text);
-    const currentGroup = resolveModerationGroupJid(remoteJid, resolved.groupFromReport);
     if (!resolved.targetJid && currentGroup) {
         const searchResult = await resolveTargetByGroupParticipantName(sock, currentGroup, text);
         if (searchResult.status === 'matched') {
