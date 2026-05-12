@@ -21,7 +21,7 @@ const reportCooldownByUser = new Map();
 const reportReferenceMap = new Map();
 let isStorageReady = false;
 let localStoreCache = null;
-const GROUP_INVITE_REGEX = /(chat\.whatsapp\.com\/[a-zA-Z0-9]{20,}|wa\.me\/joinlink\/)/i;
+const GROUP_INVITE_REGEX = /(?:https?:\/\/)?(?:www\.)?(?:chat\.whatsapp\.com\/[a-zA-Z0-9_-]{20,}|wa\.me\/joinlink\/[a-zA-Z0-9_-]+|whatsapp\.com\/invite\/[a-zA-Z0-9_-]+|whatsapp\.com\/channel\/[a-zA-Z0-9_-]+)/i;
 let keepAliveInterval = null;
 let healthWatchInterval = null;
 let antiSleepInterval = null;
@@ -938,6 +938,32 @@ function sanitizeRichText(value, maxLength = 3500) {
 
 function hasGroupInviteLink(text) {
     return GROUP_INVITE_REGEX.test(String(text || ''));
+}
+
+function extractInviteDetectionTexts(message) {
+    const body = getMainMessageObject(message);
+    if (!body) return [];
+    const candidates = [
+        body.conversation,
+        body.extendedTextMessage?.text,
+        body.extendedTextMessage?.matchedText,
+        body.extendedTextMessage?.canonicalUrl,
+        body.imageMessage?.caption,
+        body.videoMessage?.caption,
+        body.documentMessage?.caption,
+        body.documentWithCaptionMessage?.message?.documentMessage?.caption,
+        body.buttonsResponseMessage?.selectedButtonId,
+        body.listResponseMessage?.singleSelectReply?.selectedRowId
+    ];
+    return uniqStrings(
+        candidates
+            .map((value) => sanitizeRichText(value || '', 4000))
+            .filter(Boolean)
+    );
+}
+
+function messageContainsGroupInvite(message) {
+    return extractInviteDetectionTexts(message).some((value) => hasGroupInviteLink(value));
 }
 
 function getCastorSignatureText() {
@@ -7209,7 +7235,7 @@ async function processIncomingMessage(sock, msg, runId) {
     } catch (error) {
     }
 
-    if (remoteJid.endsWith('@g.us') && text && hasGroupInviteLink(text) && !senderIsAdmin) {
+    if (remoteJid.endsWith('@g.us') && messageContainsGroupInvite(msg.message) && !senderIsAdmin) {
         try {
             await sock.sendMessage(remoteJid, { delete: msg.key });
         } catch (error) {
