@@ -940,6 +940,14 @@ function hasGroupInviteLink(text) {
     return GROUP_INVITE_REGEX.test(String(text || ''));
 }
 
+function buildGroupInviteUrl(inviteCode) {
+    const cleanCode = sanitizeRichText(inviteCode || '', 128).trim();
+    if (!cleanCode) {
+        return '';
+    }
+    return `https://chat.whatsapp.com/${cleanCode}`;
+}
+
 function extractInviteDetectionTexts(message) {
     const body = getMainMessageObject(message);
     if (!body) return [];
@@ -948,10 +956,15 @@ function extractInviteDetectionTexts(message) {
         body.extendedTextMessage?.text,
         body.extendedTextMessage?.matchedText,
         body.extendedTextMessage?.canonicalUrl,
+        body.extendedTextMessage?.contextInfo?.externalAdReply?.sourceUrl,
+        body.extendedTextMessage?.contextInfo?.externalAdReply?.mediaUrl,
         body.imageMessage?.caption,
         body.videoMessage?.caption,
         body.documentMessage?.caption,
         body.documentWithCaptionMessage?.message?.documentMessage?.caption,
+        body.groupInviteMessage?.caption,
+        body.groupInviteMessage?.groupName,
+        buildGroupInviteUrl(body.groupInviteMessage?.inviteCode),
         body.buttonsResponseMessage?.selectedButtonId,
         body.listResponseMessage?.singleSelectReply?.selectedRowId
     ];
@@ -963,6 +976,13 @@ function extractInviteDetectionTexts(message) {
 }
 
 function messageContainsGroupInvite(message) {
+    const body = getMainMessageObject(message);
+    if (!body) {
+        return false;
+    }
+    if (body.groupInviteMessage?.inviteCode) {
+        return true;
+    }
     return extractInviteDetectionTexts(message).some((value) => hasGroupInviteLink(value));
 }
 
@@ -7236,9 +7256,11 @@ async function processIncomingMessage(sock, msg, runId) {
     }
 
     if (remoteJid.endsWith('@g.us') && messageContainsGroupInvite(msg.message) && !senderIsAdmin) {
+        console.log(`[MODERACION] Invitación de WhatsApp detectada en ${remoteJid} por ${senderJid}.`);
         try {
             await sock.sendMessage(remoteJid, { delete: msg.key });
         } catch (error) {
+            console.error(`[MODERACION] No pude eliminar mensaje con invitación en ${remoteJid}:`, error?.message || error);
         }
         if (isStorageReady) {
             const autoWarnResult = await applyWarning(sock, senderJid, remoteJid, 'Invitación de grupo detectada automáticamente');
