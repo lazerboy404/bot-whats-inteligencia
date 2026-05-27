@@ -17,6 +17,7 @@
     "@google/generative-ai": "^0.24.1",
     "@whiskeysockets/baileys": "^6.6.0",
     "axios": "^1.13.5",
+    "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "pino": "^9.6.0",
     "qrcode-terminal": "^0.12.0",
