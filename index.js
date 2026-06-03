@@ -2774,12 +2774,6 @@ async function handleGifTestCommand(sock, msg, remoteJid) {
         return;
     }
 
-    const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
-    if (!isAuthorized) {
-        await sock.sendMessage(remoteJid, { text: 'Esta prueba es solo para admin, bro.' }, { quoted: msg });
-        return;
-    }
-
     const sources = shuffleList(getCastorMoodStickerSources());
     if (sources.length === 0) {
         await sock.sendMessage(remoteJid, { text: 'No hay GIFs/stickers configurados para probar.' }, { quoted: msg });
