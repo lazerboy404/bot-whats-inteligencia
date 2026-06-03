@@ -66,6 +66,7 @@ const incomingQueue = [];
 let isProcessingIncoming = false;
 let incomingBufferTimeout = null;
 const groupCompanionStateByGroup = new Map();
+const remoteMoodStickerCache = new Map();
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
 const GITHUB_DROP_FALLBACK_IMAGE_URL = process.env.GITHUB_DROP_FALLBACK_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/github-drop-fallback.png';
@@ -111,6 +112,20 @@ const LONELY_CASTOR_AFTER_BOT_GAP_MS = getEnvNumber('LONELY_CASTOR_AFTER_BOT_GAP
 const LONELY_CASTOR_MAX_PER_DAY = Math.floor(getEnvNumber('LONELY_CASTOR_MAX_PER_DAY', 2, 1, 8));
 const LONELY_CASTOR_NIGHT_START_HOUR = Math.floor(getEnvNumber('LONELY_CASTOR_NIGHT_START_HOUR', 1, 0, 23));
 const LONELY_CASTOR_NIGHT_END_HOUR = Math.floor(getEnvNumber('LONELY_CASTOR_NIGHT_END_HOUR', 8, 0, 23));
+const CASTOR_MOOD_STICKERS_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.CASTOR_MOOD_STICKERS_ENABLED || 'true').toLowerCase());
+const CASTOR_MOOD_STICKER_URLS = (process.env.CASTOR_MOOD_STICKER_URLS || 'https://tenor.com/es-419/view/%D1%81%D0%BE%D0%B1%D0%B0%D0%BA%D0%B0-gif-10104501972735095572')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+const CASTOR_MOOD_STICKER_AFTER_REPLY_CHANCE = getEnvNumber('CASTOR_MOOD_STICKER_AFTER_REPLY_CHANCE', 0.18, 0, 1);
+const CASTOR_MOOD_STICKER_AFTER_LONELY_CHANCE = getEnvNumber('CASTOR_MOOD_STICKER_AFTER_LONELY_CHANCE', 0.45, 0, 1);
+const CASTOR_MOOD_STICKER_MIN_GAP_MS = getEnvNumber('CASTOR_MOOD_STICKER_MIN_GAP_MS', 30 * 60 * 1000, 60 * 1000, 24 * 60 * 60 * 1000);
+const CASTOR_MOOD_STICKER_MAX_PER_DAY = Math.floor(getEnvNumber('CASTOR_MOOD_STICKER_MAX_PER_DAY', 4, 1, 20));
+const CASTOR_MOOD_STICKER_RANDOM_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.CASTOR_MOOD_STICKER_RANDOM_ENABLED || 'true').toLowerCase());
+const CASTOR_MOOD_STICKER_RANDOM_INACTIVITY_MS = getEnvNumber('CASTOR_MOOD_STICKER_RANDOM_INACTIVITY_MS', 6 * 60 * 60 * 1000, 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
+const CASTOR_MOOD_STICKER_RANDOM_MIN_GAP_MS = getEnvNumber('CASTOR_MOOD_STICKER_RANDOM_MIN_GAP_MS', 12 * 60 * 60 * 1000, 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
+const CASTOR_REMOTE_STICKER_CACHE_MS = getEnvNumber('CASTOR_REMOTE_STICKER_CACHE_MS', 24 * 60 * 60 * 1000, 60 * 1000, 7 * 24 * 60 * 60 * 1000);
+const CASTOR_REMOTE_STICKER_MAX_BYTES = Math.floor(getEnvNumber('CASTOR_REMOTE_STICKER_MAX_BYTES', 5 * 1024 * 1024, 128 * 1024, 20 * 1024 * 1024));
 const PROACTIVE_PROMPT_INTERVAL_MS = Number(process.env.PROACTIVE_PROMPT_INTERVAL_MS || (60 * 1000));
 const PROACTIVE_RANDOM_USER_INTERVAL_MS = Number(process.env.PROACTIVE_RANDOM_USER_INTERVAL_MS || (24 * 60 * 60 * 1000));
 const PROACTIVE_SHOWCASE_DAILY_HOUR = Number(process.env.PROACTIVE_SHOWCASE_DAILY_HOUR || 9);
@@ -632,6 +647,10 @@ function getDefaultProactiveState() {
         lonelyCastorDailyKey: '',
         lonelyCastorDailyCount: 0,
         lonelyCastorMessageIndex: 0,
+        lastMoodStickerSentAt: '',
+        lastMoodStickerActivityAt: '',
+        moodStickerDailyKey: '',
+        moodStickerDailyCount: 0,
         netsecTracking: [],
         showcaseLockSlot: '',
         showcaseLockExpiresAt: '',
@@ -663,6 +682,10 @@ function normalizeProactiveState(state) {
         lonelyCastorDailyKey: typeof state.lonelyCastorDailyKey === 'string' ? state.lonelyCastorDailyKey : '',
         lonelyCastorDailyCount: Math.max(0, Number(state.lonelyCastorDailyCount) || 0),
         lonelyCastorMessageIndex: Math.max(0, Number(state.lonelyCastorMessageIndex) || 0),
+        lastMoodStickerSentAt: typeof state.lastMoodStickerSentAt === 'string' ? state.lastMoodStickerSentAt : '',
+        lastMoodStickerActivityAt: typeof state.lastMoodStickerActivityAt === 'string' ? state.lastMoodStickerActivityAt : '',
+        moodStickerDailyKey: typeof state.moodStickerDailyKey === 'string' ? state.moodStickerDailyKey : '',
+        moodStickerDailyCount: Math.max(0, Number(state.moodStickerDailyCount) || 0),
         netsecTracking: normalizeStringTrackingList(state.netsecTracking, 50),
         showcaseLockSlot: typeof state.showcaseLockSlot === 'string' ? state.showcaseLockSlot : '',
         showcaseLockExpiresAt: typeof state.showcaseLockExpiresAt === 'string' ? state.showcaseLockExpiresAt : '',
@@ -2431,6 +2454,238 @@ async function sendReactionSticker(sock, remoteJid, stickerFileName) {
     await sock.sendMessage(remoteJid, { sticker: fs.readFileSync(stickerPath) });
 }
 
+function isHttpUrl(value) {
+    return /^https?:\/\//i.test(String(value || '').trim());
+}
+
+function isSupportedRemoteStickerImageUrl(value) {
+    return /\.(?:webp|gif|png|jpe?g)(?:[?#].*)?$/i.test(String(value || '').trim());
+}
+
+function getCastorMoodStickerSources() {
+    return uniqStrings([...CASTOR_MOOD_STICKER_URLS, ...GROUP_COMPANION_STICKERS])
+        .filter((source) => isHttpUrl(source) || /^[\w.-]+\.webp$/i.test(source));
+}
+
+async function fetchBufferWithLimit(url, timeoutMs = 15000) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(url, {
+            redirect: 'follow',
+            headers: { 'User-Agent': 'CastorBot/1.0 WhatsApp sticker resolver' },
+            signal: controller.signal
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        const contentLength = Number(response.headers.get('content-length') || 0);
+        if (contentLength > CASTOR_REMOTE_STICKER_MAX_BYTES) {
+            throw new Error(`archivo remoto demasiado grande (${contentLength} bytes)`);
+        }
+        const buffer = Buffer.from(await response.arrayBuffer());
+        if (buffer.length > CASTOR_REMOTE_STICKER_MAX_BYTES) {
+            throw new Error(`archivo remoto demasiado grande (${buffer.length} bytes)`);
+        }
+        return {
+            buffer,
+            contentType: String(response.headers.get('content-type') || '').toLowerCase(),
+            finalUrl: response.url || url
+        };
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+function extractRemoteStickerCandidatesFromHtml(html) {
+    const source = String(html || '');
+    const ordered = [];
+    const addMatches = (regex) => {
+        for (const match of source.matchAll(regex)) {
+            const candidate = decodeHtmlEntities(String(match[1] || match[0] || '').trim());
+            if (candidate && isSupportedRemoteStickerImageUrl(candidate)) {
+                ordered.push(candidate);
+            }
+        }
+    };
+
+    addMatches(/https:\/\/media\.tenor\.com\/[^"' <>)]+/gi);
+    addMatches(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]+content=["']([^"']+)["']/gi);
+    addMatches(/<img[^>]+src=["']([^"']+)["']/gi);
+    addMatches(/https?:\/\/[^"' <>)]+\.(?:webp|gif|png|jpe?g)(?:[?#][^"' <>)]+)?/gi);
+
+    return uniqStrings(ordered);
+}
+
+async function fetchRemoteStickerImage(sourceUrl) {
+    const first = await fetchBufferWithLimit(sourceUrl);
+    const isHtml = first.contentType.includes('text/html') || first.buffer.slice(0, 300).toString('utf8').includes('<html');
+    const isImage = first.contentType.startsWith('image/') || isSupportedRemoteStickerImageUrl(first.finalUrl);
+    if (isImage && !isHtml) {
+        return first;
+    }
+    if (!isHtml) {
+        throw new Error(`contenido remoto no soportado: ${first.contentType || 'desconocido'}`);
+    }
+
+    const html = first.buffer.toString('utf8');
+    const candidates = extractRemoteStickerCandidatesFromHtml(html);
+    for (const candidate of candidates) {
+        try {
+            const media = await fetchBufferWithLimit(candidate);
+            if (media.contentType.startsWith('image/') || isSupportedRemoteStickerImageUrl(media.finalUrl)) {
+                return media;
+            }
+        } catch (error) {
+        }
+    }
+    throw new Error('no encontre media compatible dentro de la pagina');
+}
+
+async function convertRemoteImageToStickerBuffer(imageBuffer, sourceUrl = '', contentType = '') {
+    if (!imageBuffer || !Buffer.isBuffer(imageBuffer) || imageBuffer.length === 0) {
+        return null;
+    }
+    if (!sharp) {
+        return /image\/webp/i.test(contentType) ? imageBuffer : null;
+    }
+
+    const animatedCandidate = /(?:gif|webp)/i.test(contentType) || /\.(?:gif|webp)(?:[?#].*)?$/i.test(sourceUrl);
+    if (animatedCandidate) {
+        for (const quality of [72, 62, 52, 42, 34]) {
+            try {
+                const candidate = await sharp(imageBuffer, { animated: true, limitInputPixels: false, failOn: 'none' })
+                    .resize(512, 512, {
+                        fit: 'contain',
+                        background: { r: 0, g: 0, b: 0, alpha: 0 }
+                    })
+                    .webp({
+                        quality,
+                        effort: 4,
+                        loop: 0,
+                        smartSubsample: true
+                    })
+                    .toBuffer();
+                if (candidate.length <= 256 * 1024) {
+                    return candidate;
+                }
+            } catch (error) {
+                break;
+            }
+        }
+    }
+
+    return convertImageToStickerBuffer(imageBuffer);
+}
+
+async function getRemoteMoodStickerBuffer(sourceUrl) {
+    const cacheKey = String(sourceUrl || '').trim();
+    const cached = remoteMoodStickerCache.get(cacheKey);
+    const now = Date.now();
+    if (cached?.buffer && cached.expiresAt > now) {
+        return cached.buffer;
+    }
+
+    const media = await fetchRemoteStickerImage(cacheKey);
+    const stickerBuffer = await convertRemoteImageToStickerBuffer(media.buffer, media.finalUrl, media.contentType);
+    if (!stickerBuffer || stickerBuffer.length === 0) {
+        throw new Error('no pude convertir el sticker remoto');
+    }
+    remoteMoodStickerCache.set(cacheKey, {
+        buffer: stickerBuffer,
+        expiresAt: now + CASTOR_REMOTE_STICKER_CACHE_MS
+    });
+    return stickerBuffer;
+}
+
+async function sendCastorMoodStickerSource(sock, remoteJid, source) {
+    if (isHttpUrl(source)) {
+        const stickerBuffer = await getRemoteMoodStickerBuffer(source);
+        await sock.sendMessage(remoteJid, { sticker: stickerBuffer });
+        return true;
+    }
+
+    if (/^[\w.-]+\.webp$/i.test(source)) {
+        const stickerPath = path.join(process.cwd(), 'stickers', source);
+        if (!fs.existsSync(stickerPath)) {
+            return false;
+        }
+        await sock.sendMessage(remoteJid, { sticker: fs.readFileSync(stickerPath) });
+        return true;
+    }
+
+    return false;
+}
+
+function getMoodStickerDailyCount(state, todayKey) {
+    return state.moodStickerDailyKey === todayKey
+        ? Math.max(0, Number(state.moodStickerDailyCount) || 0)
+        : 0;
+}
+
+async function maybeSendCastorMoodSticker(sock, remoteJid, options = {}) {
+    const {
+        chance = 1,
+        currentState = null,
+        nowMs = Date.now(),
+        todayKey = getMexicoDateKey(getMexicoNow()),
+        activityMs = 0,
+        minGapMs = CASTOR_MOOD_STICKER_MIN_GAP_MS,
+        force = false,
+        reason = 'mood'
+    } = options;
+
+    if (!CASTOR_MOOD_STICKERS_ENABLED || !remoteJid || !remoteJid.endsWith('@g.us')) {
+        return false;
+    }
+    if (!force && Math.random() > chance) {
+        return false;
+    }
+
+    const sources = getCastorMoodStickerSources();
+    if (sources.length === 0) {
+        return false;
+    }
+
+    const state = normalizeProactiveState(currentState || getProactiveState());
+    const dailyCount = getMoodStickerDailyCount(state, todayKey);
+    if (dailyCount >= CASTOR_MOOD_STICKER_MAX_PER_DAY) {
+        return false;
+    }
+
+    const lastSentMs = new Date(state.lastMoodStickerSentAt || '').getTime();
+    if (!force && Number.isFinite(lastSentMs) && lastSentMs > 0 && (nowMs - lastSentMs) < minGapMs) {
+        return false;
+    }
+
+    if (activityMs > 0) {
+        const lastHandledActivityMs = new Date(state.lastMoodStickerActivityAt || '').getTime();
+        if (Number.isFinite(lastHandledActivityMs) && lastHandledActivityMs >= activityMs) {
+            return false;
+        }
+    }
+
+    const shuffledSources = shuffleList(sources);
+    for (const source of shuffledSources) {
+        try {
+            const sent = await sendCastorMoodStickerSource(sock, remoteJid, source);
+            if (!sent) continue;
+            updateProactiveState({
+                lastMoodStickerSentAt: new Date(nowMs).toISOString(),
+                ...(activityMs > 0 ? { lastMoodStickerActivityAt: new Date(activityMs).toISOString() } : {}),
+                moodStickerDailyKey: todayKey,
+                moodStickerDailyCount: dailyCount + 1
+            });
+            console.log(`[STICKER-MOOD] Enviado (${reason}) en ${remoteJid}: ${source}`);
+            return true;
+        } catch (error) {
+            console.error(`[STICKER-MOOD] No pude enviar ${source}:`, error?.message || error);
+        }
+    }
+
+    return false;
+}
+
 async function applyWarning(sock, targetJid, groupJid, reason) {
     const record = await upsertModRecord(targetJid, {
         $inc: { advertencias: 1 },
@@ -3807,7 +4062,15 @@ Escribe la respuesta que Castor debe enviar al grupo.`;
 
 async function maybeSendGroupCompanionSticker(sock, remoteJid, context) {
     if (!context.hasSticker || GROUP_COMPANION_STICKER_CHANCE <= 0 || Math.random() > GROUP_COMPANION_STICKER_CHANCE) {
-        return;
+        return false;
+    }
+    const sentMoodSticker = await maybeSendCastorMoodSticker(sock, remoteJid, {
+        chance: 1,
+        minGapMs: Math.min(5 * 60 * 1000, CASTOR_MOOD_STICKER_MIN_GAP_MS),
+        reason: 'respuesta-a-sticker'
+    });
+    if (sentMoodSticker) {
+        return true;
     }
     const availableStickers = GROUP_COMPANION_STICKERS.filter((fileName) => {
         if (!/^[\w.-]+\.webp$/i.test(fileName)) {
@@ -3816,12 +4079,14 @@ async function maybeSendGroupCompanionSticker(sock, remoteJid, context) {
         return fs.existsSync(path.join(process.cwd(), 'stickers', fileName));
     });
     if (availableStickers.length === 0) {
-        return;
+        return false;
     }
     const stickerFileName = availableStickers[Math.floor(Math.random() * availableStickers.length)];
     try {
         await sendReactionSticker(sock, remoteJid, stickerFileName);
+        return true;
     } catch (error) {
+        return false;
     }
 }
 
@@ -3862,7 +4127,7 @@ async function flushGroupCompanionQueue(sock, remoteJid) {
         return;
     }
 
-    await maybeSendGroupCompanionSticker(sock, remoteJid, context);
+    const preReplyStickerSent = await maybeSendGroupCompanionSticker(sock, remoteJid, context);
     const aiReply = await generateGroupCompanionReply(selectedEntries, context, state);
     const replyText = ensureGroupCompanionMentions(aiReply || buildGroupCompanionFallbackReply(selectedEntries, context), context.mentions);
     if (!replyText) {
@@ -3870,6 +4135,12 @@ async function flushGroupCompanionQueue(sock, remoteJid) {
     }
     const sendOptions = selectedEntries.length === 1 ? { quoted: selectedEntries[0].msg } : undefined;
     await sock.sendMessage(remoteJid, { text: replyText, mentions: context.mentions }, sendOptions);
+    if (!preReplyStickerSent) {
+        await maybeSendCastorMoodSticker(sock, remoteJid, {
+            chance: CASTOR_MOOD_STICKER_AFTER_REPLY_CHANCE,
+            reason: 'despues-de-respuesta'
+        });
+    }
 
     const sentAt = Date.now();
     state.lastBotReplyAt = sentAt;
@@ -7421,6 +7692,14 @@ async function maybeSendLonelyCastorNudge(sock, currentState, nowMs, mexicoNow, 
         try {
             await sock.sendMessage(groupJid, { text });
             deliveredGroups += 1;
+            await maybeSendCastorMoodSticker(sock, groupJid, {
+                chance: CASTOR_MOOD_STICKER_AFTER_LONELY_CHANCE,
+                currentState,
+                nowMs,
+                todayKey,
+                activityMs: lastUserActivityMs,
+                reason: 'castor-solito'
+            });
         } catch (groupError) {
             console.error(`[PROACTIVO] Error enviando Castor solito a ${groupJid}:`, groupError?.message || groupError);
         }
@@ -7442,6 +7721,49 @@ async function maybeSendLonelyCastorNudge(sock, currentState, nowMs, mexicoNow, 
     });
     console.log(`[PROACTIVO] Castor solito enviado tras ${Math.round((nowMs - lastUserActivityMs) / 60000)} min sin actividad de usuarios.`);
     return true;
+}
+
+async function maybeSendAmbientMoodSticker(sock, currentState, nowMs, mexicoNow, todayKey) {
+    if (!CASTOR_MOOD_STICKER_RANDOM_ENABLED || !CASTOR_MOOD_STICKERS_ENABLED || PROACTIVE_GROUP_JIDS.length === 0) {
+        return false;
+    }
+    if (isWithinLonelyCastorQuietHours(mexicoNow)) {
+        return false;
+    }
+
+    const savedActivityMs = new Date(currentState.lastGroupActivityAt || '').getTime();
+    const lastUserActivityMs = Math.max(
+        lastGroupActivityAt || 0,
+        Number.isFinite(savedActivityMs) ? savedActivityMs : 0
+    );
+    if (!lastUserActivityMs || (nowMs - lastUserActivityMs) < CASTOR_MOOD_STICKER_RANDOM_INACTIVITY_MS) {
+        return false;
+    }
+
+    const lastBotSendMs = Math.max(...PROACTIVE_GROUP_JIDS.map((groupJid) => lastSentAtByJid.get(groupJid) || 0), 0);
+    if (lastBotSendMs > 0 && (nowMs - lastBotSendMs) < LONELY_CASTOR_AFTER_BOT_GAP_MS) {
+        return false;
+    }
+
+    let deliveredGroups = 0;
+    for (const groupJid of PROACTIVE_GROUP_JIDS) {
+        const sent = await maybeSendCastorMoodSticker(sock, groupJid, {
+            chance: 1,
+            currentState,
+            nowMs,
+            todayKey,
+            activityMs: lastUserActivityMs,
+            minGapMs: CASTOR_MOOD_STICKER_RANDOM_MIN_GAP_MS,
+            reason: 'random-de-la-nada'
+        });
+        if (sent) {
+            deliveredGroups += 1;
+        }
+        if (PROACTIVE_GROUP_JIDS.length > 1) {
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+    }
+    return deliveredGroups > 0;
 }
 
 function startProactiveScheduler(sock) {
@@ -7586,6 +7908,10 @@ function startProactiveScheduler(sock) {
             }
             const lonelySent = await maybeSendLonelyCastorNudge(sock, currentState, now, mexicoNow, todayKey);
             if (lonelySent) {
+                return;
+            }
+            const ambientStickerSent = await maybeSendAmbientMoodSticker(sock, currentState, now, mexicoNow, todayKey);
+            if (ambientStickerSent) {
                 return;
             }
             // En modo horario fijo, no dispares envíos por intervalo.
