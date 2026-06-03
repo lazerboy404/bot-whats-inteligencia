@@ -3698,15 +3698,15 @@ function buildGroupCompanionFallbackReply(entries, context) {
     const prefix = buildGroupCompanionMentionPrefix(context.mentions);
     const firstQuestion = entries.find((entry) => entry.hasQuestion && entry.text)?.text || '';
     if (context.hasSticker && !context.hasText) {
-        return `${prefix} jajaja ese sticker pide contexto. Cuenten que paso y le seguimos.`;
+        return `${prefix} jajaja si bro, ese sticker pide contexto. Cuenten que paso y le seguimos.`;
     }
     if (context.isDebate) {
-        return `${prefix} va, no los dejo en visto: pongan la idea principal de cada lado y lo aterrizamos en una conclusion util para todos.`;
+        return `${prefix} ok bro, no los dejo en visto: pongan la idea principal de cada lado y lo aterrizamos chido.`;
     }
     if (firstQuestion) {
-        return `${prefix} va, no lo dejo en visto. Si me das un poco mas de contexto sobre "${sanitizeRichText(firstQuestion, 120)}", te respondo mas fino.`;
+        return `${prefix} si carnal, no lo dejo en visto. Dame tantito contexto sobre "${sanitizeRichText(firstQuestion, 120)}" y te respondo mas fino.`;
     }
-    return `${prefix} te leo. Para que no se quede volando: dime que quieres resolver y lo aterrizamos rapido.`;
+    return `${prefix} si bro, te leo. Dime que quieres resolver y lo aterrizamos rapido.`;
 }
 
 async function generateGroupCompanionReply(entries, context, state) {
@@ -3723,7 +3723,9 @@ async function generateGroupCompanionReply(entries, context, state) {
     const systemPrompt = [
         'Eres Castor Bot en un grupo de WhatsApp sobre IA, automatizacion, tecnologia y comunidad.',
         'Objetivo: que nadie se quede sin respuesta, sin hacer spam ni sonar invasivo.',
-        'Responde en espanol de Mexico, casual, claro y util.',
+        'Responde en espanol de Mexico con vibra de compa: natural, relajado, util y con humor ligero.',
+        'Puedes usar frases como "si bro", "ok bro", "si carnal" o "jajaja", pero maximo una por respuesta y solo si queda natural.',
+        'No suenes corporativo, maestro de escuela ni robot; que parezca Castor echando paro en el grupo.',
         'Si hay varias personas, responde agrupado y menciona con @numero solo a quienes toca.',
         'Si parece debate, resume el punto comun o la diferencia y propon una salida practica.',
         'Si hay sticker, no finjas ver su contenido exacto; responde con humor ligero o pide contexto.',
