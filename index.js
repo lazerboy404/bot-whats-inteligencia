@@ -4582,17 +4582,17 @@ async function sendGithubDrop(sock) {
 
 function buildOsintSummaryFallback(repo) {
     return [
-        `${String(repo?.full_name || '').toUpperCase()} | músculo táctico para reconocimiento y pivoteo`,
+        `${String(repo?.full_name || '').toUpperCase()} | mapa rápido de superficie`,
         '',
-        `¿Qué hace?: ${repo?.full_name || 'Este repo'} sirve para mover más rápido tareas de reconocimiento, enumeración y análisis técnico sin arrancar desde cero. Aporta valor porque te deja mapear superficie, correlacionar señales y montar flujos más útiles para laboratorio o evaluación controlada.`,
+        `En corto: ${repo?.full_name || 'Este repo'} ayuda a revisar señales técnicas de seguridad sin empezar desde cero. Sirve para entender mejor qué hay expuesto y decidir por dónde investigar primero.`,
         '',
-        `Arsenal:`,
-        `- Automatiza parte de la enumeración y la recolección de señales útiles.`,
-        `- Te da una base reutilizable para labs, PoC y validaciones con enfoque ofensivo controlado.`,
-        `- Ayuda a mapear superficie, perfilar objetivos y pivotear hallazgos con más contexto.`,
+        `Qué aporta:`,
+        `- Ahorra tiempo en reconocimiento inicial.`,
+        `- Ordena señales útiles para labs o auditorías controladas.`,
+        `- Ayuda a mapear superficie y priorizar hallazgos.`,
         '',
-        `🎯 Escenario: Ideal para: Footprinting, Bug Bounty.`,
-        `Disclaimer: Úsalo solo con autorización; meterlo contra sistemas ajenos o fuera de alcance es ilegal.`
+        `Úsalo para: Footprinting, Bug Bounty, mapeo de superficie.`,
+        `Cuidado: Solo úsalo en sistemas propios o con permiso. Usarlo fuera de alcance es ilegal.`
     ].join('\n');
 }
 
@@ -4638,6 +4638,63 @@ function splitInlineOsintBullets(line) {
     return { lead, bullets };
 }
 
+function compactOsintText(value, maxLength = 280) {
+    const clean = normalizeOsintChunk(stripLeadingOsintEmoji(value));
+    if (!clean) return '';
+    if (clean.length <= maxLength) return clean;
+
+    const sentences = clean.match(/[^.!?]+[.!?]+/g) || [];
+    let compact = '';
+    for (const sentence of sentences) {
+        const next = `${compact} ${sentence}`.trim();
+        if (next.length > maxLength) break;
+        compact = next;
+    }
+    if (compact) return compact;
+    return `${clean.slice(0, Math.max(0, maxLength - 3)).trim()}...`;
+}
+
+function simplifyOsintWhatText(value) {
+    let clean = normalizeOsintChunk(stripLeadingOsintEmoji(value))
+        .replace(/\s+Su capacidad\b.+$/i, '')
+        .replace(/\s+su capacidad\b.+$/i, '')
+        .replace(/,?\s+y cuenta con un amplio rango de [^.]+/i, '')
+        .replace(/\bpermite identificar\b/i, 'identifica')
+        .replace(/\bpermite revisar\b/i, 'revisa')
+        .replace(/,\s*apoyad[ao]\s+en protocolos\s+/i, ' usando ')
+        .replace(/\s+de manera rápida y eficiente/ig, ' rápido')
+        .replace(/\s+de manera rapida y eficiente/ig, ' rápido')
+        .trim();
+    return compactOsintText(clean, 240);
+}
+
+function normalizeReadableOsintBullet(value, maxLength = 150) {
+    let clean = normalizeOsintChunk(stripLeadingOsintEmoji(value))
+        .replace(/^[-•]\s*/u, '')
+        .replace(/\s+:\s*/g, ': ')
+        .replace(/:\s*$/, '')
+        .replace(/^La herramienta\s+/i, '')
+        .replace(/^Esta herramienta\s+/i, '')
+        .replace(/\bpermite realizar pruebas de conectividad en masa para identificar servicios expuestos en la red\b/i, 'detecta servicios expuestos en varios hosts')
+        .replace(/\bsoporta los protocolos\b/i, 'soporta')
+        .replace(/\s*,?\s*lo que la hace útil.*$/i, '')
+        .replace(/\s*,?\s*lo que la hace util.*$/i, '')
+        .trim();
+    if (!clean) return '';
+    clean = clean.charAt(0).toUpperCase() + clean.slice(1);
+    return compactOsintText(clean, maxLength);
+}
+
+function splitOsintScenarioItems(value) {
+    return normalizeOsintChunk(value)
+        .replace(/^(Ideal para:\s*)+/i, '')
+        .replace(/^(Ideal para\s+)+/i, '')
+        .split(/[,;|]/)
+        .map((item) => normalizeOsintChunk(item))
+        .filter(Boolean)
+        .slice(0, 3);
+}
+
 function formatOsintSummaryText(text, repoFullName = '') {
     const source = cleanModelOutputText(text)
         .replace(/\r/g, '')
@@ -4681,8 +4738,8 @@ function formatOsintSummaryText(text, repoFullName = '') {
             continue;
         }
 
-        if (/^(?:[^\p{L}\p{N}]|\s)*¿Qué hace\??\s*:/iu.test(line)) {
-            const { lead, bullets } = splitInlineOsintBullets(line.replace(/^(?:[^\p{L}\p{N}]|\s)*¿Qué hace\??\s*:\s*/iu, '').trim());
+        if (/^(?:[^\p{L}\p{N}]|\s)*(?:¿Qué hace\??|Que hace\??|En corto)\s*:/iu.test(line)) {
+            const { lead, bullets } = splitInlineOsintBullets(line.replace(/^(?:[^\p{L}\p{N}]|\s)*(?:¿Qué hace\??|Que hace\??|En corto)\s*:\s*/iu, '').trim());
             if (lead) {
                 whatDoes = lead;
             }
@@ -4695,19 +4752,19 @@ function formatOsintSummaryText(text, repoFullName = '') {
             continue;
         }
 
-        if (/^(?:[^\p{L}\p{N}]|\s)*Arsenal\s*:/iu.test(line)) {
+        if (/^(?:[^\p{L}\p{N}]|\s)*(?:Arsenal|Qué aporta|Que aporta)\s*:/iu.test(line)) {
             section = 'arsenal';
             continue;
         }
 
-        if (/^(?:[^\p{L}\p{N}]|\s)*(Escenario|Ideal para)\s*:/iu.test(line)) {
-            scenario = line.replace(/^(?:[^\p{L}\p{N}]|\s)*(Escenario|Ideal para)\s*:\s*/iu, '').trim();
+        if (/^(?:[^\p{L}\p{N}]|\s)*(Escenario|Ideal para|Úsalo para|Usalo para)\s*:/iu.test(line)) {
+            scenario = line.replace(/^(?:[^\p{L}\p{N}]|\s)*(Escenario|Ideal para|Úsalo para|Usalo para)\s*:\s*/iu, '').trim();
             section = 'scenario';
             continue;
         }
 
-        if (/^(?:[^\p{L}\p{N}]|\s)*(?:Disclaimer|Nota ética|Nota etica|Advertencia ética|Advertencia etica|Uso ético|Uso etico|⚠️|☠️)/iu.test(line)) {
-            disclaimer = line.replace(/^(?:[^\p{L}\p{N}]|\s)*(?:Disclaimer(?:\s+ÉTICO OBLIGATORIO)?|Nota ética(?:\s+importante)?|Nota etica(?:\s+importante)?|Advertencia ética|Advertencia etica|Uso ético|Uso etico|⚠️|☠️)\s*:?\s*/iu, '').trim();
+        if (/^(?:[^\p{L}\p{N}]|\s)*(?:Disclaimer|Cuidado|Nota ética|Nota etica|Advertencia ética|Advertencia etica|Uso ético|Uso etico|⚠️|☠️)/iu.test(line)) {
+            disclaimer = line.replace(/^(?:[^\p{L}\p{N}]|\s)*(?:Disclaimer(?:\s+ÉTICO OBLIGATORIO)?|Cuidado|Nota ética(?:\s+importante)?|Nota etica(?:\s+importante)?|Advertencia ética|Advertencia etica|Uso ético|Uso etico|⚠️|☠️)\s*:?\s*/iu, '').trim();
             section = 'disclaimer';
             continue;
         }
@@ -4754,12 +4811,16 @@ function formatOsintSummaryText(text, repoFullName = '') {
         return '';
     }
 
-    const cleanedArsenal = arsenal
-        .map((item) => stripLeadingOsintEmoji(normalizeOsintChunk(item)))
+    let cleanedArsenal = arsenal
+        .map((item) => normalizeReadableOsintBullet(item))
         .filter((item) => item.length >= 10)
         .filter((item) => !/^[^a-záéíóúñ0-9]*$/i.test(item))
         .filter(Boolean)
         .slice(0, 3);
+    if (cleanedArsenal.some((item) => /\b(?:TCP|UDP|SCTP)\b/i.test(item))) {
+        cleanedArsenal = cleanedArsenal.filter((item) => !/^Soporte para m[úu]ltiples protocolos$/i.test(item));
+    }
+    cleanedArsenal = [...new Set(cleanedArsenal)].slice(0, 3);
     let scenarioText = scenario ? scenario.replace(/^Ideal para:\s*/i, '').trim() : '';
     const scenarioDisclaimerMatch = scenarioText.match(/(.+?)(?:\.\s*)?(?:aviso ético|aviso etico|nota ética(?:\s+importante)?|nota etica(?:\s+importante)?|disclaimer|advertencia ética|advertencia etica)\s*:?\s*(.+)$/i);
     if (scenarioDisclaimerMatch) {
@@ -4777,27 +4838,35 @@ function formatOsintSummaryText(text, repoFullName = '') {
         .replace(/\s+,/g, ',')
         .trim();
 
-    const normalizedScenario = scenarioText
-        ? scenarioText
-        : 'Bug Bounty, Footprinting.';
+    const normalizedScenarioItems = splitOsintScenarioItems(scenarioText)
+        .filter((item) => item.length >= 3);
     const normalizedDisclaimer = disclaimer
-        ? disclaimer.replace(/\s+/g, ' ').trim()
-        : 'Úsalo solo con autorización; emplearlo contra sistemas ajenos es ilegal.';
+        ? compactOsintText(disclaimer.replace(/\s+/g, ' ').trim(), 220)
+        : 'Solo úsalo en sistemas propios o con permiso. Usarlo fuera de alcance es ilegal.';
+    const [titleNameRaw, ...titleRest] = title.split('|');
+    const titleName = normalizeOsintChunk(titleNameRaw || repoFullName || title).toUpperCase();
+    const titleTagline = compactOsintText(titleRest.join('|') || 'herramienta útil para investigación de seguridad', 90);
 
     return [
-        title,
+        `*${titleName}*`,
+        titleTagline ? `_${titleTagline}_` : '',
         '',
-        `¿Qué hace?: ${whatDoes.replace(/\s+/g, ' ').trim()}`,
+        '🔎 *En corto*',
+        simplifyOsintWhatText(whatDoes.replace(/\s+/g, ' ').trim()),
         '',
-        'Arsenal:',
+        '🧰 *Qué aporta*',
         ...(cleanedArsenal.length > 0 ? cleanedArsenal.map((item) => `- ${item}`) : [
-            '- Automatiza parte del reconocimiento y la recolección técnica.',
-            '- Sirve como base reutilizable para laboratorios, PoC o auditorías controladas.',
-            '- Puede apoyar procesos de análisis, mapeo de superficie o validación operativa.'
+            '- Ahorra tiempo en reconocimiento inicial.',
+            '- Ordena señales útiles para labs o auditorías controladas.',
+            '- Ayuda a mapear superficie y priorizar hallazgos.'
         ]),
         '',
-        `🎯 Escenario: Ideal para: ${normalizedScenario}`,
-        `⚠️ ☠️ Disclaimer: ${normalizedDisclaimer}`
+        '🎯 *Úsalo para*',
+        ...((normalizedScenarioItems.length > 0 ? normalizedScenarioItems : ['Footprinting', 'Bug Bounty', 'mapeo de superficie'])
+            .map((item) => `- ${item}`)),
+        '',
+        '⚠️ *Cuidado*',
+        normalizedDisclaimer
     ].join('\n');
 }
 
@@ -4805,10 +4874,10 @@ function isWeakOsintRepoSummary(text) {
     const value = String(text || '').trim();
     if (!value) return true;
     if (value.length < 120) return true;
-    if (!value.includes('¿Qué hace?:')) return true;
-    if (!value.includes('Arsenal:')) return true;
-    if (!value.includes('Escenario:')) return true;
-    if (!value.includes('Disclaimer:')) return true;
+    if (!value.includes('*En corto*')) return true;
+    if (!value.includes('*Qué aporta*')) return true;
+    if (!value.includes('*Úsalo para*')) return true;
+    if (!value.includes('*Cuidado*')) return true;
     if (!/(?:^|\n)-\s+/m.test(value)) return true;
     const weakPatterns = [
         /lista estructurada/i,
@@ -4827,8 +4896,8 @@ function isWeakOsintRepoSummary(text) {
 }
 
 async function generateOsintRepoSummary(repo) {
-    const systemPrompt = "Eres un operador red team, Pentester Senior y analista OSINT para un grupo de WhatsApp. REGLA ABSOLUTA: Tu respuesta DEBE estar en español de México. TONO OBLIGATORIO: táctico, directo, de operador a operador; no suenes corporativo, académico ni de marketing. NO inventes expansiones para siglas como RAG, OSINT, EDR, XSS o SSRF: déjalas tal cual. No metas el disclaimer dentro de Escenario. FORMATO ESTRICTO: 1. Título: '[Nombre Repo] | [Su ventaja táctica]'. 2. ¿Qué hace?: 2 líneas explicando su función técnica y por qué da ventaja operativa. 3. Arsenal: 3 viñetas técnicas concretas con lo que incluye, cada una con emoji. 4. Escenario: 'Ideal para: [2 casos tácticos reales, ej. Footprinting, Enumeración, Bug Bounty, Surface Mapping]'. 5. Disclaimer ÉTICO OBLIGATORIO: advierte brevemente que usarlo sin autorización es ilegal. 6. Cero comillas.";
-    const userPrompt = "Analiza este repositorio de ciberseguridad y devuelve la reseña táctica en el formato estricto. Evita sonar corporativo o genérico; enfócate en reconocimiento, enumeración, pivotear hallazgos y valor operativo real. No traduzcas ni inventes el significado de siglas técnicas. Si el repo es una colección de writeups, prompts o skills, dilo con honestidad sin venderlo como scanner o exploit framework.\n\nRepo: " + repo.full_name + "\nInfo: " + repo.description;
+    const systemPrompt = "Eres editor técnico para un grupo de WhatsApp de ciberseguridad. REGLA ABSOLUTA: responde en español de México, claro y fácil de leer. No suenes corporativo, académico ni exagerado. Evita párrafos largos: frases cortas, máximo 2 líneas por sección. Si usas jerga como fingerprinting, enumeración, OSINT, XSS o SSRF, no la expliques con definiciones largas; aterrízala con una frase simple. No inventes capacidades. FORMATO ESTRICTO: 1. Título: '[Nombre Repo] | [beneficio en 4 a 7 palabras]'. 2. En corto: 1 o 2 frases sobre qué hace y por qué importa. 3. Qué aporta: 3 bullets breves, concretos y legibles. 4. Úsalo para: 2 o 3 casos separados por coma. 5. Cuidado: una advertencia breve de uso autorizado. Cero comillas.";
+    const userPrompt = "Analiza este repositorio de ciberseguridad para gente que quiere entender rápido si le sirve. Hazlo menos técnico y menos pesado que una ficha de herramienta. Prioriza claridad, utilidad real y lectura rápida. Si el repo es una colección de writeups, prompts o skills, dilo con honestidad sin venderlo como scanner o exploit framework.\n\nRepo: " + repo.full_name + "\nInfo: " + repo.description;
 
     for (let attempt = 0; attempt < 3; attempt++) {
         const rawSummary = await generateAIContent(systemPrompt, userPrompt, 350);
@@ -4941,8 +5010,8 @@ async function buildOsintDropContent(state) {
         '',
         summary,
         '',
-        `⭐ Estrellas: ${repo.stargazers_count}`,
-        repo.html_url
+        `⭐ ${repo.stargazers_count} estrellas`,
+        `🔗 ${repo.html_url}`
     ].join('\n');
 
     return {
