@@ -104,6 +104,13 @@ const GROUP_COMPANION_MAX_HISTORY = Math.floor(getEnvNumber('GROUP_COMPANION_MAX
 const GROUP_COMPANION_MAX_TURNS = Math.floor(getEnvNumber('GROUP_COMPANION_MAX_TURNS', 4, 1, 10));
 const GROUP_COMPANION_STICKER_CHANCE = getEnvNumber('GROUP_COMPANION_STICKER_CHANCE', 0.25, 0, 1);
 const GROUP_COMPANION_STICKERS = (process.env.GROUP_COMPANION_STICKERS || 'abrir.webp').split(',').map(s => s.trim()).filter(Boolean);
+const LONELY_CASTOR_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.LONELY_CASTOR_ENABLED || 'true').toLowerCase());
+const LONELY_CASTOR_INACTIVITY_MS = getEnvNumber('LONELY_CASTOR_INACTIVITY_MS', 4 * 60 * 60 * 1000, 30 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
+const LONELY_CASTOR_MIN_GAP_MS = getEnvNumber('LONELY_CASTOR_MIN_GAP_MS', 8 * 60 * 60 * 1000, 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
+const LONELY_CASTOR_AFTER_BOT_GAP_MS = getEnvNumber('LONELY_CASTOR_AFTER_BOT_GAP_MS', 45 * 60 * 1000, 5 * 60 * 1000, 24 * 60 * 60 * 1000);
+const LONELY_CASTOR_MAX_PER_DAY = Math.floor(getEnvNumber('LONELY_CASTOR_MAX_PER_DAY', 2, 1, 8));
+const LONELY_CASTOR_NIGHT_START_HOUR = Math.floor(getEnvNumber('LONELY_CASTOR_NIGHT_START_HOUR', 1, 0, 23));
+const LONELY_CASTOR_NIGHT_END_HOUR = Math.floor(getEnvNumber('LONELY_CASTOR_NIGHT_END_HOUR', 8, 0, 23));
 const PROACTIVE_PROMPT_INTERVAL_MS = Number(process.env.PROACTIVE_PROMPT_INTERVAL_MS || (60 * 1000));
 const PROACTIVE_RANDOM_USER_INTERVAL_MS = Number(process.env.PROACTIVE_RANDOM_USER_INTERVAL_MS || (24 * 60 * 60 * 1000));
 const PROACTIVE_SHOWCASE_DAILY_HOUR = Number(process.env.PROACTIVE_SHOWCASE_DAILY_HOUR || 9);
@@ -463,17 +470,13 @@ const PROACTIVE_RANDOM_DUEL_SEEDS = [
     'Reto de criterio: cada quien diga qué modelo usaría hoy para la misma tarea y por qué.'
 ];
 
-const PROACTIVE_REACTIVATION_MESSAGES = [
-    '¿Siguen vivos o ya se secó el dique? 😴\n\nCompartan algo de IA para revivir el estanque 👇',
-    'Detecto poca actividad...\n\nCompartan un prompt que hayan usado hoy 👇',
-    'El estanque está muy tranquilo... 🌊\n\n¿Alguien ha probado alguna herramienta de IA nueva?',
-    '¡Castores! El dique necesita actividad 🪵\n\n¿Qué es lo último que le pidieron a una IA?',
-    'Aquí no ha pasado nada en un buen rato...\n\n¿Alguien tiene un prompt interesante para compartir? 🤖',
-    'El río está detenido 🌿\n\nCuéntenme: ¿para qué usaron IA hoy?',
-    '¿Se quedaron sin prompts? 🤔\n\nTiren uno que les haya funcionado esta semana',
-    'El grupo necesita leña... digo, troncos 🪵\n\n¡Compartan algo sobre IA!',
-    'Esto está más callado que servidor sin internet 🔇\n\n¿Nadie tiene un descubrimiento de IA que compartir?',
-    'Últiiiima llamada para castores activos 📢\n\n¿Qué herramienta de IA han estado usando?'
+const LONELY_CASTOR_MESSAGES = [
+    'si bro... Castor anda viendo el estanque bien callado y se siente abandonado jajaja\n\nAlguien rompa el silencio con una duda, prompt o descubrimiento de IA.',
+    'ok carnales, el dique esta tan solo que Castor ya empezo a platicar con los troncos\n\nTiren una idea o una herramienta que hayan visto hoy.',
+    'Castor reportandose: me dejaron cuidando el estanque solito jajaja\n\nQuien trae una pregunta, prompt o chisme de IA para revivir esto?',
+    'si bro, aqui sigo. El grupo anda muy quieto y Castor se siente medio abandonado\n\nCuenten que han probado con IA hoy.',
+    'El estanque esta silencioso y Castor ya se puso sentimental jajaja\n\nAlguien mande una duda, prompt o algo chingon que haya encontrado.',
+    'Castor anda solito en el dique, banda\n\nSaquen una pregunta rapida o un prompt para que no se nos apague el estanque.'
 ];
 const KNOWLEDGE_DROP_CATEGORIES = ['github', 'osint', 'launch'];
 
@@ -624,6 +627,11 @@ function getDefaultProactiveState() {
         randomUserNextModeByGroup: {},
         randomUserRotationByGroup: {},
         pendingRandomUserFollowUps: [],
+        lastLonelyCastorSentAt: '',
+        lastLonelyCastorActivityAt: '',
+        lonelyCastorDailyKey: '',
+        lonelyCastorDailyCount: 0,
+        lonelyCastorMessageIndex: 0,
         netsecTracking: [],
         showcaseLockSlot: '',
         showcaseLockExpiresAt: '',
@@ -650,6 +658,11 @@ function normalizeProactiveState(state) {
         randomUserNextModeByGroup: normalizeRandomUserNextModeByGroup(state.randomUserNextModeByGroup),
         randomUserRotationByGroup: normalizeRandomUserRotationByGroup(state.randomUserRotationByGroup),
         pendingRandomUserFollowUps: normalizeRandomUserFollowUps(state.pendingRandomUserFollowUps),
+        lastLonelyCastorSentAt: typeof state.lastLonelyCastorSentAt === 'string' ? state.lastLonelyCastorSentAt : '',
+        lastLonelyCastorActivityAt: typeof state.lastLonelyCastorActivityAt === 'string' ? state.lastLonelyCastorActivityAt : '',
+        lonelyCastorDailyKey: typeof state.lonelyCastorDailyKey === 'string' ? state.lonelyCastorDailyKey : '',
+        lonelyCastorDailyCount: Math.max(0, Number(state.lonelyCastorDailyCount) || 0),
+        lonelyCastorMessageIndex: Math.max(0, Number(state.lonelyCastorMessageIndex) || 0),
         netsecTracking: normalizeStringTrackingList(state.netsecTracking, 50),
         showcaseLockSlot: typeof state.showcaseLockSlot === 'string' ? state.showcaseLockSlot : '',
         showcaseLockExpiresAt: typeof state.showcaseLockExpiresAt === 'string' ? state.showcaseLockExpiresAt : '',
@@ -7351,6 +7364,86 @@ async function sendRandomUserSelection(sock) {
     return true;
 }
 
+function isWithinLonelyCastorQuietHours(mexicoNow) {
+    const hour = mexicoNow.getHours();
+    if (LONELY_CASTOR_NIGHT_START_HOUR === LONELY_CASTOR_NIGHT_END_HOUR) {
+        return false;
+    }
+    if (LONELY_CASTOR_NIGHT_START_HOUR < LONELY_CASTOR_NIGHT_END_HOUR) {
+        return hour >= LONELY_CASTOR_NIGHT_START_HOUR && hour < LONELY_CASTOR_NIGHT_END_HOUR;
+    }
+    return hour >= LONELY_CASTOR_NIGHT_START_HOUR || hour < LONELY_CASTOR_NIGHT_END_HOUR;
+}
+
+async function maybeSendLonelyCastorNudge(sock, currentState, nowMs, mexicoNow, todayKey) {
+    if (!LONELY_CASTOR_ENABLED || PROACTIVE_GROUP_JIDS.length === 0 || LONELY_CASTOR_MESSAGES.length === 0) {
+        return false;
+    }
+    if (isWithinLonelyCastorQuietHours(mexicoNow)) {
+        return false;
+    }
+
+    const savedActivityMs = new Date(currentState.lastGroupActivityAt || '').getTime();
+    const lastUserActivityMs = Math.max(
+        lastGroupActivityAt || 0,
+        Number.isFinite(savedActivityMs) ? savedActivityMs : 0
+    );
+    if (!lastUserActivityMs || (nowMs - lastUserActivityMs) < LONELY_CASTOR_INACTIVITY_MS) {
+        return false;
+    }
+
+    const lastBotSendMs = Math.max(...PROACTIVE_GROUP_JIDS.map((groupJid) => lastSentAtByJid.get(groupJid) || 0), 0);
+    if (lastBotSendMs > 0 && (nowMs - lastBotSendMs) < LONELY_CASTOR_AFTER_BOT_GAP_MS) {
+        return false;
+    }
+
+    const lastSentMs = new Date(currentState.lastLonelyCastorSentAt || '').getTime();
+    if (Number.isFinite(lastSentMs) && lastSentMs > 0 && (nowMs - lastSentMs) < LONELY_CASTOR_MIN_GAP_MS) {
+        return false;
+    }
+
+    const alreadyHandledActivityMs = new Date(currentState.lastLonelyCastorActivityAt || '').getTime();
+    if (Number.isFinite(alreadyHandledActivityMs) && alreadyHandledActivityMs >= lastUserActivityMs) {
+        return false;
+    }
+
+    const dailyCount = currentState.lonelyCastorDailyKey === todayKey
+        ? Math.max(0, Number(currentState.lonelyCastorDailyCount) || 0)
+        : 0;
+    if (dailyCount >= LONELY_CASTOR_MAX_PER_DAY) {
+        return false;
+    }
+
+    const messageIndex = Math.max(0, Number(currentState.lonelyCastorMessageIndex) || 0) % LONELY_CASTOR_MESSAGES.length;
+    const text = LONELY_CASTOR_MESSAGES[messageIndex];
+    let deliveredGroups = 0;
+    for (const groupJid of PROACTIVE_GROUP_JIDS) {
+        try {
+            await sock.sendMessage(groupJid, { text });
+            deliveredGroups += 1;
+        } catch (groupError) {
+            console.error(`[PROACTIVO] Error enviando Castor solito a ${groupJid}:`, groupError?.message || groupError);
+        }
+        if (PROACTIVE_GROUP_JIDS.length > 1) {
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+    }
+
+    if (deliveredGroups === 0) {
+        return false;
+    }
+
+    updateProactiveState({
+        lastLonelyCastorSentAt: new Date(nowMs).toISOString(),
+        lastLonelyCastorActivityAt: new Date(lastUserActivityMs).toISOString(),
+        lonelyCastorDailyKey: todayKey,
+        lonelyCastorDailyCount: dailyCount + 1,
+        lonelyCastorMessageIndex: (messageIndex + 1) % LONELY_CASTOR_MESSAGES.length
+    });
+    console.log(`[PROACTIVO] Castor solito enviado tras ${Math.round((nowMs - lastUserActivityMs) / 60000)} min sin actividad de usuarios.`);
+    return true;
+}
+
 function startProactiveScheduler(sock) {
     if (!PROACTIVE_ENABLED || PROACTIVE_GROUP_JIDS.length === 0) {
         console.log('[PROACTIVO] Sistema deshabilitado o sin grupo configurado.');
@@ -7489,6 +7582,10 @@ function startProactiveScheduler(sock) {
                         console.log('[PROACTIVO] Drop de la tarde no se marcó porque no hubo envío real.');
                     }
                 }
+                return;
+            }
+            const lonelySent = await maybeSendLonelyCastorNudge(sock, currentState, now, mexicoNow, todayKey);
+            if (lonelySent) {
                 return;
             }
             // En modo horario fijo, no dispares envíos por intervalo.
