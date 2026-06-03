@@ -161,8 +161,9 @@ const CASTOR_MOOD_STICKER_RANDOM_MIN_GAP_MS = getEnvNumber('CASTOR_MOOD_STICKER_
 const CASTOR_REMOTE_STICKER_CACHE_MS = getEnvNumber('CASTOR_REMOTE_STICKER_CACHE_MS', 24 * 60 * 60 * 1000, 60 * 1000, 7 * 24 * 60 * 60 * 1000);
 const CASTOR_REMOTE_STICKER_MAX_BYTES = Math.floor(getEnvNumber('CASTOR_REMOTE_STICKER_MAX_BYTES', 5 * 1024 * 1024, 128 * 1024, 20 * 1024 * 1024));
 const CASTOR_ANIMATED_STICKER_MAX_BYTES = Math.floor(getEnvNumber('CASTOR_ANIMATED_STICKER_MAX_BYTES', 256 * 1024, 64 * 1024, 1024 * 1024));
-const CASTOR_ANIMATED_STICKER_MAX_INPUT_BYTES = Math.floor(getEnvNumber('CASTOR_ANIMATED_STICKER_MAX_INPUT_BYTES', 2 * 1024 * 1024, 128 * 1024, 10 * 1024 * 1024));
-const CASTOR_ANIMATED_STICKER_MAX_PAGES = Math.floor(getEnvNumber('CASTOR_ANIMATED_STICKER_MAX_PAGES', 80, 2, 300));
+const CASTOR_ANIMATED_STICKER_MAX_INPUT_BYTES = Math.floor(getEnvNumber('CASTOR_ANIMATED_STICKER_MAX_INPUT_BYTES', 5 * 1024 * 1024, 128 * 1024, 10 * 1024 * 1024));
+const CASTOR_ANIMATED_STICKER_MAX_PAGES = Math.floor(getEnvNumber('CASTOR_ANIMATED_STICKER_MAX_PAGES', 120, 2, 300));
+const CASTOR_ANIMATED_STICKER_TARGET_SIZE = Math.floor(getEnvNumber('CASTOR_ANIMATED_STICKER_TARGET_SIZE', 256, 128, 512));
 const PROACTIVE_PROMPT_INTERVAL_MS = Number(process.env.PROACTIVE_PROMPT_INTERVAL_MS || (60 * 1000));
 const PROACTIVE_RANDOM_USER_INTERVAL_MS = Number(process.env.PROACTIVE_RANDOM_USER_INTERVAL_MS || (24 * 60 * 60 * 1000));
 const PROACTIVE_SHOWCASE_DAILY_HOUR = Number(process.env.PROACTIVE_SHOWCASE_DAILY_HOUR || 9);
@@ -2503,6 +2504,43 @@ function isSupportedRemoteStickerVideoUrl(value) {
     return /\.(?:mp4|webm)(?:[?#].*)?$/i.test(String(value || '').trim());
 }
 
+function getTenorMediaKey(value) {
+    const match = String(value || '').match(/media\d*\.tenor\.com\/(?:m\/)?([^/]+)/i);
+    if (!match) {
+        return '';
+    }
+    const rawKey = match[1];
+    const baseMatch = rawKey.match(/^(.+?)(?:AAAA|AAAP)/);
+    return baseMatch ? baseMatch[1] : rawKey;
+}
+
+function getTenorVariantWeight(value) {
+    const url = String(value || '');
+    if (/AAAAd\//i.test(url)) return 0;
+    if (/AAAAC\//i.test(url)) return 1;
+    if (/AAAA1\//i.test(url)) return 2;
+    if (/AAAAj\//i.test(url)) return 3;
+    if (/AAAAM\//i.test(url)) return 4;
+    return 5;
+}
+
+function getPreferredRemoteStickerImages(images, videoUrl = '') {
+    const uniqueImages = uniqStrings(images);
+    const preferredKey = getTenorMediaKey(videoUrl);
+    const matchingImages = preferredKey
+        ? uniqueImages.filter((imageUrl) => getTenorMediaKey(imageUrl) === preferredKey)
+        : [];
+    const candidates = matchingImages.length > 0 ? matchingImages : uniqueImages;
+    return candidates.sort((a, b) => {
+        const variantDelta = getTenorVariantWeight(a) - getTenorVariantWeight(b);
+        if (variantDelta !== 0) return variantDelta;
+        const extensionDelta = (/\.webp(?:[?#].*)?$/i.test(a) ? 0 : /\.gif(?:[?#].*)?$/i.test(a) ? 1 : 2)
+            - (/\.webp(?:[?#].*)?$/i.test(b) ? 0 : /\.gif(?:[?#].*)?$/i.test(b) ? 1 : 2);
+        if (extensionDelta !== 0) return extensionDelta;
+        return a.length - b.length;
+    });
+}
+
 function getCastorMoodStickerSources() {
     return uniqStrings([...CASTOR_MOOD_STICKER_URLS, ...GROUP_COMPANION_STICKERS])
         .filter((source) => isHttpUrl(source) || /^[\w.-]+\.webp$/i.test(source));
@@ -2596,22 +2634,20 @@ async function fetchRemoteStickerMedia(sourceUrl) {
 
     const html = first.buffer.toString('utf8');
     const candidates = extractRemoteStickerCandidatesFromHtml(html);
-    if (/tenor\.com\/.+\/view\//i.test(first.finalUrl || sourceUrl) && candidates.videos.length > 0) {
-        return { image: null, videoUrl: candidates.videos[0], counts: candidates };
-    }
-
-    for (const candidate of candidates.images) {
+    const videoUrl = candidates.videos[0] || '';
+    const imageCandidates = getPreferredRemoteStickerImages(candidates.images, videoUrl);
+    for (const candidate of imageCandidates) {
         try {
             const media = await fetchBufferWithLimit(candidate);
             if (media.contentType.startsWith('image/') || isSupportedRemoteStickerImageUrl(media.finalUrl)) {
-                return { image: media, videoUrl: candidates.videos[0] || '' };
+                return { image: media, videoUrl, counts: candidates };
             }
         } catch (error) {
         }
     }
 
-    if (candidates.videos.length > 0) {
-        return { image: null, videoUrl: candidates.videos[0] };
+    if (videoUrl) {
+        return { image: null, videoUrl, counts: candidates };
     }
     throw new Error('no encontre media compatible dentro de la pagina');
 }
@@ -2645,8 +2681,12 @@ async function convertAnimatedImageToStickerBuffer(imageBuffer) {
         return null;
     }
 
-    const sizes = [384, 320, 256];
-    const qualities = [62, 48, 36];
+    const sizes = uniqStrings([
+        String(CASTOR_ANIMATED_STICKER_TARGET_SIZE),
+        String(Math.round(CASTOR_ANIMATED_STICKER_TARGET_SIZE * 0.875)),
+        String(Math.round(CASTOR_ANIMATED_STICKER_TARGET_SIZE * 0.75))
+    ]).map((size) => Math.max(128, Number(size) || 256));
+    const qualities = [56, 46, 36, 28];
     for (const size of sizes) {
         for (const quality of qualities) {
             try {
@@ -2657,7 +2697,7 @@ async function convertAnimatedImageToStickerBuffer(imageBuffer) {
                     })
                     .webp({
                         quality,
-                        effort: 4,
+                        effort: 3,
                         loop: 0,
                         smartSubsample: true
                     })
@@ -2698,16 +2738,16 @@ async function buildRemoteMoodStickerPayload(sourceUrl) {
         const { buffer, finalUrl, contentType } = mediaSet.image;
         const isAnimated = await detectRemoteImageAnimation(buffer, finalUrl, contentType);
         if (isAnimated) {
-            const videoPayload = await buildGifVideoPayload(mediaSet.videoUrl);
-            if (videoPayload) {
-                return videoPayload;
-            }
             const animatedStickerBuffer = await convertAnimatedImageToStickerBuffer(buffer);
             if (animatedStickerBuffer) {
                 return {
                     content: { sticker: animatedStickerBuffer },
                     kind: 'animated-sticker'
                 };
+            }
+            const videoPayload = await buildGifVideoPayload(mediaSet.videoUrl);
+            if (videoPayload) {
+                return videoPayload;
             }
             return null;
         }
