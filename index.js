@@ -3627,6 +3627,7 @@ function selectGroupCompanionEntries(entries) {
 
 function analyzeGroupCompanionContext(entries, state, nowMs = Date.now()) {
     const senderJids = uniqStrings(entries.map((entry) => entry.senderJid));
+    const combinedText = normalizeCompanionText(entries.map((entry) => entry.text).join(' '));
     const hasQuestion = entries.some((entry) => entry.hasQuestion);
     const hasSticker = entries.some((entry) => entry.kind === 'sticker');
     const hasText = entries.some((entry) => !!entry.text);
@@ -3634,7 +3635,8 @@ function analyzeGroupCompanionContext(entries, state, nowMs = Date.now()) {
     const isActiveThread = state.activeUntil > nowMs && entries.some((entry) => state.activeParticipants.has(entry.senderJid) || entry.mentionsBot || entry.quotesBot);
     const isDebate = senderJids.length >= 2 && entries.filter((entry) => entry.text).length >= 2;
     const hasSubstantiveText = entries.some((entry) => normalizeCompanionText(entry.text).length >= 8);
-    const shouldReply = hasDirectBotSignal || hasQuestion || hasSticker || isDebate || isActiveThread || hasSubstantiveText;
+    const hasCasualGreeting = /\bhola|buenas|buenos dias|buenas tardes|buenas noches|como estan|que onda|que chingon|chingon|gracias\b/i.test(combinedText);
+    const shouldReply = hasDirectBotSignal || hasQuestion || hasSticker || isDebate || isActiveThread || hasSubstantiveText || hasCasualGreeting;
     return {
         senderJids,
         mentions: senderJids.slice(0, GROUP_COMPANION_MAX_BATCH),
@@ -3644,6 +3646,7 @@ function analyzeGroupCompanionContext(entries, state, nowMs = Date.now()) {
         hasDirectBotSignal,
         isActiveThread,
         isDebate,
+        hasCasualGreeting,
         shouldReply
     };
 }
@@ -3697,6 +3700,22 @@ function cleanGroupCompanionReply(value) {
 function buildGroupCompanionFallbackReply(entries, context) {
     const prefix = buildGroupCompanionMentionPrefix(context.mentions);
     const firstQuestion = entries.find((entry) => entry.hasQuestion && entry.text)?.text || '';
+    const combinedText = normalizeCompanionText(entries.map((entry) => entry.text).join(' '));
+    if (/\btronco|troncos|puntos|ranking|top\b/i.test(combinedText)) {
+        return `${prefix} si bro, los troncos se ganan cuando tus mensajes reciben reacciones positivas de otros. Usa *.troncos* para ver los tuyos, *.top* para el ranking y *.dinamica* para la explicacion completa.`;
+    }
+    if (/\badmin|admins|administrador|moderador\b/i.test(combinedText)) {
+        return `${prefix} ok bro, no invento nombres de admins: revisa la info del grupo en WhatsApp. Para comandos del bot usa *.comandos* y para reglas usa *.reglas*.`;
+    }
+    if (/\bcomando|comandos|regla|reglas|bot|castor|sticker|stickers\b/i.test(combinedText)) {
+        return `${prefix} si carnal, para ver todo lo del bot usa *.comandos*. Tambien tienes *.reglas*, *.sticker*, *.reportar*, *.troncos*, *.top* y *.dinamica*.`;
+    }
+    if (/\bprompt|promt|showcase|imagen|ia\b/i.test(combinedText)) {
+        return `${prefix} si bro, dime el tema, estilo y formato que quieres y te armo un prompt mas fino. Si hablas de un showcase, puedo ayudarte a adaptarlo.`;
+    }
+    if (/\bhola|buenas|buenos dias|buenas tardes|buenas noches|como estan|que onda|que chingon|chingon|gracias\b/i.test(combinedText)) {
+        return `${prefix} que onda bro, aqui ando. Si traen duda o quieren armar algo, lo vemos.`;
+    }
     if (context.hasSticker && !context.hasText) {
         return `${prefix} jajaja si bro, ese sticker pide contexto. Cuenten que paso y le seguimos.`;
     }
@@ -3709,14 +3728,37 @@ function buildGroupCompanionFallbackReply(entries, context) {
     return `${prefix} si bro, te leo. Dime que quieres resolver y lo aterrizamos rapido.`;
 }
 
+function buildGroupCompanionBotKnowledge(entries) {
+    const combinedText = normalizeCompanionText(entries.map((entry) => entry.text).join(' '));
+    const facts = [];
+    if (/\btronco|troncos|puntos|ranking|top\b/i.test(combinedText)) {
+        facts.push('- Troncos: son la moneda del grupo. Se ganan cuando un mensaje recibe reacciones positivas de otras personas. Reaccionarte a ti mismo no cuenta. Quitar y poner la reaccion no suma mas. Usa .troncos para ver tus troncos, .top para ranking y .dinamica para la explicacion completa.');
+    }
+    if (/\badmin|admins|administrador|moderador\b/i.test(combinedText)) {
+        facts.push('- Admins: no inventes nombres, numeros ni contactos. Si preguntan quien es admin, di que se revise la info del grupo en WhatsApp. .setadmin vincula el chat admin solo para el admin principal; .miid ayuda a detectar el ID.');
+    }
+    if (/\bcomando|comandos|regla|reglas|bot|castor|sticker|stickers|reportar|ban|advertir|cerrar|abrir\b/i.test(combinedText)) {
+        facts.push('- Comandos utiles: .comandos muestra la lista; .reglas muestra reglas; .sticker crea sticker respondiendo a una imagen; .reportar reporta un mensaje; .troncos consulta tus troncos; .top muestra ranking; .dinamica explica troncos; .ping confirma si Castor esta activo.');
+    }
+    if (/\bprompt|promt|showcase|imagen|ia|generar|crear\b/i.test(combinedText)) {
+        facts.push('- Prompts/showcase: los showcases de 9am y 3pm son ejemplos visuales para copiar, adaptar y probar. Si piden un prompt, pide tema, estilo, formato y objetivo cuando falte contexto; si ya hay contexto, entrega un prompt claro y usable.');
+    }
+    if (/\bhola|buenas|buenos dias|buenas noches|como estan|que chingon|chingon|gracias\b/i.test(combinedText)) {
+        facts.push('- Saludos y comentarios casuales: responde breve, natural y con vibra de compa. No conviertas un saludo simple en explicacion larga.');
+    }
+    return facts.join('\n');
+}
+
 async function generateGroupCompanionReply(entries, context, state) {
     const recentHistory = state.history.slice(-8).map(formatGroupCompanionEntry).join('\n');
     const selectedMessages = entries.map(formatGroupCompanionEntry).join('\n');
+    const botKnowledge = buildGroupCompanionBotKnowledge(entries);
     const situation = [
         context.hasDirectBotSignal ? 'alguien le hablo al bot' : '',
         context.hasQuestion ? 'hay pregunta o duda' : '',
         context.isDebate ? 'hay posible debate entre usuarios' : '',
         context.hasSticker ? 'hay sticker' : '',
+        context.hasCasualGreeting ? 'hay saludo o comentario casual' : '',
         context.isActiveThread ? 'es continuacion de una charla reciente del bot' : ''
     ].filter(Boolean).join('; ') || 'mensaje del grupo sin respuesta';
 
@@ -3726,6 +3768,7 @@ async function generateGroupCompanionReply(entries, context, state) {
         'Responde en espanol de Mexico con vibra de compa: natural, relajado, util y con humor ligero.',
         'Puedes usar frases como "si bro", "ok bro", "si carnal" o "jajaja", pero maximo una por respuesta y solo si queda natural.',
         'No suenes corporativo, maestro de escuela ni robot; que parezca Castor echando paro en el grupo.',
+        'Si preguntan sobre Castor, comandos, troncos, admins, reglas, stickers o showcases, usa el contexto interno y no inventes datos privados.',
         'Si hay varias personas, responde agrupado y menciona con @numero solo a quienes toca.',
         'Si parece debate, resume el punto comun o la diferencia y propon una salida practica.',
         'Si hay sticker, no finjas ver su contenido exacto; responde con humor ligero o pide contexto.',
@@ -3736,6 +3779,9 @@ async function generateGroupCompanionReply(entries, context, state) {
 
 Mensajes a responder:
 ${selectedMessages}
+
+Contexto interno de Castor:
+${botKnowledge || 'sin datos internos relevantes para estos mensajes'}
 
 Contexto reciente:
 ${recentHistory || 'sin contexto previo'}
