@@ -4494,6 +4494,73 @@ function buildPremiumShowcaseDescription(title, prompt) {
     return `${subject} ${framing}, ${detailText}.`;
 }
 
+function compactShowcaseLine(value, maxLength = 160) {
+    const clean = sanitizeRichText(value || '', maxLength + 40)
+        .replace(/\s+/g, ' ')
+        .replace(/^[-*\u2022]\s*/u, '')
+        .trim();
+    if (clean.length <= maxLength) {
+        return clean;
+    }
+    return `${clean.slice(0, Math.max(0, maxLength - 3)).trim()}...`;
+}
+
+function buildShowcaseUsageLines(value) {
+    const lines = cleanStructuredLines(value)
+        .map((line) => compactShowcaseLine(line, 145))
+        .filter((line) => line.length >= 8)
+        .slice(0, 4);
+    if (lines.length === 0) {
+        return [];
+    }
+    return lines.map((line) => `- ${line}`);
+}
+
+function buildReadableShowcaseCaption({ title, author, description, prompt, usage, isLongPrompt }) {
+    const cleanTitle = sanitizeRichText(title || 'Prompt visual', 160);
+    const cleanAuthor = sanitizeRichText(author || '', 100);
+    const cleanDescription = compactShowcaseLine(description || 'Un ejemplo visual para copiar, adaptar y probar en tu generador favorito.', 280);
+    const usageLines = buildShowcaseUsageLines(usage);
+    const captionLines = [
+        `${CASTOR_EMOJI} *Showcase Visual*`,
+        '',
+        `*${cleanTitle}*`
+    ];
+
+    if (cleanAuthor) {
+        captionLines.push(`_por ${cleanAuthor}_`);
+    }
+
+    captionLines.push(
+        '',
+        '*En corto*',
+        cleanDescription,
+        '',
+        '*Prompt base*'
+    );
+
+    if (!isLongPrompt) {
+        const promptText = sanitizeRichText(prompt || 'Prompt no disponible.', SHOWCASE_PROMPT_INLINE_MAX_LENGTH).replace(/```/g, "'''");
+        captionLines.push(`\`\`\`${promptText}\`\`\``);
+    } else {
+        captionLines.push('El prompt completo va como archivo adjunto para no saturar el chat.');
+    }
+
+    if (usageLines.length > 0) {
+        captionLines.push('', '*Como probarlo*', ...usageLines);
+    } else {
+        captionLines.push('', '*Como probarlo*', '- Copialo tal cual primero.', '- Luego cambia sujeto, estilo o formato y compara resultados.');
+    }
+
+    captionLines.push(
+        '',
+        '*Reto Castor*',
+        'Pruebalo, cambia un detalle y comparte el resultado que mas te gusto.'
+    );
+
+    return captionLines.join('\n');
+}
+
 async function fetchShowcaseData(repoDef) {
     try {
         const controller = new AbortController();
@@ -6865,25 +6932,14 @@ async function sendPromptShowcase(sock) {
                 finalUsage = translatedUsage.replace(/^"""|"""$/g, '').trim();
             }
         }
-        const captionLines = [
-            `${CASTOR_EMOJI} *✨ Showcase del Día*`,
-            '',
-            `📌 *${finalTitle}*`,
-            `👤 por ${showcase.author}`,
-        ];
-
-        captionLines.push(`ℹ️ ${finalDescription}`);
-
-        if (!isLongPrompt) {
-            captionLines.push('', '📝 *Prompt:*', finalPrompt);
-        } else {
-            captionLines.push('', '📝 El prompt completo se envía como archivo adjunto ⬇️');
-        }
-        if (finalUsage) {
-            captionLines.push('', '🛠️ *Instrucciones de uso:*', finalUsage);
-        }
-        captionLines.push('', '💡 ¡Prueba este prompt en tu IA favorita y comparte el resultado! 👇');
-        const captionText = captionLines.join('\n');
+        const captionText = buildReadableShowcaseCaption({
+            title: finalTitle,
+            author: showcase.author,
+            description: finalDescription,
+            prompt: finalPrompt,
+            usage: finalUsage,
+            isLongPrompt
+        });
         
         const showcaseImageUrls = [...new Set((showcase.imageUrls || []).filter((url) => typeof url === 'string' && url.trim()))];
         const limitedImageUrls = showcaseImageUrls.slice(0, SHOWCASE_MAX_IMAGES_PER_DROP);
