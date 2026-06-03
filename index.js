@@ -140,12 +140,14 @@ const DEFAULT_CASTOR_MOOD_STICKER_URLS = [
     'https://tenor.com/es-419/view/monkey-chill-monkey-funny-monkey-monkey-relax-monkey-gangster-gif-7880154508083827354'
 ];
 const LONELY_CASTOR_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.LONELY_CASTOR_ENABLED || 'true').toLowerCase());
-const LONELY_CASTOR_INACTIVITY_MS = getEnvNumber('LONELY_CASTOR_INACTIVITY_MS', 4 * 60 * 60 * 1000, 30 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
-const LONELY_CASTOR_MIN_GAP_MS = getEnvNumber('LONELY_CASTOR_MIN_GAP_MS', 8 * 60 * 60 * 1000, 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
+const LONELY_CASTOR_INACTIVITY_MS = getEnvNumber('LONELY_CASTOR_INACTIVITY_MS', 24 * 60 * 60 * 1000, 30 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
+const LONELY_CASTOR_MIN_GAP_MS = getEnvNumber('LONELY_CASTOR_MIN_GAP_MS', 24 * 60 * 60 * 1000, 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
 const LONELY_CASTOR_AFTER_BOT_GAP_MS = getEnvNumber('LONELY_CASTOR_AFTER_BOT_GAP_MS', 45 * 60 * 1000, 5 * 60 * 1000, 24 * 60 * 60 * 1000);
 const LONELY_CASTOR_MAX_PER_DAY = Math.floor(getEnvNumber('LONELY_CASTOR_MAX_PER_DAY', 2, 1, 8));
-const LONELY_CASTOR_NIGHT_START_HOUR = Math.floor(getEnvNumber('LONELY_CASTOR_NIGHT_START_HOUR', 1, 0, 23));
-const LONELY_CASTOR_NIGHT_END_HOUR = Math.floor(getEnvNumber('LONELY_CASTOR_NIGHT_END_HOUR', 8, 0, 23));
+const LONELY_CASTOR_NIGHT_START_HOUR = Math.floor(getEnvNumber('LONELY_CASTOR_NIGHT_START_HOUR', 22, 0, 23));
+const LONELY_CASTOR_NIGHT_START_MINUTE = Math.floor(getEnvNumber('LONELY_CASTOR_NIGHT_START_MINUTE', 0, 0, 59));
+const LONELY_CASTOR_NIGHT_END_HOUR = Math.floor(getEnvNumber('LONELY_CASTOR_NIGHT_END_HOUR', 9, 0, 23));
+const LONELY_CASTOR_NIGHT_END_MINUTE = Math.floor(getEnvNumber('LONELY_CASTOR_NIGHT_END_MINUTE', 30, 0, 59));
 const CASTOR_MOOD_STICKERS_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.CASTOR_MOOD_STICKERS_ENABLED || 'true').toLowerCase());
 const CASTOR_MOOD_STICKER_URLS = (process.env.CASTOR_MOOD_STICKER_URLS || DEFAULT_CASTOR_MOOD_STICKER_URLS.join(','))
     .split(',')
@@ -4647,6 +4649,57 @@ function isWeakShowcaseDescription(text) {
     return weakPatterns.some((pattern) => pattern.test(value));
 }
 
+function isGenericPhotoTransformPrompt(title, prompt) {
+    const source = `${title || ''} ${prompt || ''}`
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+    const referencesInputImage = /\b(this|the|input|uploaded|reference|original)\s+(photo|image|picture|pic)\b/i.test(source)
+        || /\b(foto|imagen)\s+(original|subida|de referencia|base)\b/i.test(source)
+        || /\b(redraw|recreate|transform|convert|turn|restyle|remake|edit|change)\b[^.]{0,80}\b(photo|image|picture|pic)\b/i.test(source)
+        || /\b(photo|image|picture|pic)\b[^.]{0,80}\b(redraw|recreate|transform|convert|turn|restyle|remake|edit|change)\b/i.test(source);
+    const asksForStyle = /\b(style|estilo|ghibli|anime|manga|pixar|disney|lego|cyberpunk|watercolor|acuarela|oil painting|pintura|cartoon)\b/i.test(source);
+    return referencesInputImage && asksForStyle;
+}
+
+function getShowcaseStyleLabel(title, prompt) {
+    const source = `${title || ''} ${prompt || ''}`.toLowerCase();
+    const styleRules = [
+        { regex: /\bstudio\s+ghibli\b|\bghibli\b/i, label: 'estilo Ghibli' },
+        { regex: /\banime\b/i, label: 'estilo anime' },
+        { regex: /\bmanga\b/i, label: 'estilo manga' },
+        { regex: /\bpixar\b/i, label: 'estilo Pixar' },
+        { regex: /\bdisney\b/i, label: 'estilo Disney' },
+        { regex: /\blego\b/i, label: 'estilo LEGO' },
+        { regex: /\bcyberpunk\b/i, label: 'estilo cyberpunk' },
+        { regex: /\bwatercolor\b|\bacuarela\b/i, label: 'estilo acuarela' },
+        { regex: /\boil painting\b|\bpintura al oleo\b|\bpintura al óleo\b/i, label: 'estilo pintura al oleo' },
+        { regex: /\bcartoon\b|\bdibujo animado\b/i, label: 'estilo cartoon' }
+    ];
+    for (const rule of styleRules) {
+        if (rule.regex.test(source)) {
+            return rule.label;
+        }
+    }
+
+    const promptText = String(prompt || '');
+    const match = promptText.match(/\b(?:in|into|as|with)\s+([a-z0-9 -]{2,40}?style)\b/i)
+        || promptText.match(/\b(?:estilo)\s+([a-z0-9 -]{2,40})\b/i);
+    if (match?.[1]) {
+        return `estilo ${match[1].replace(/\bstyle\b/i, '').trim()}`.replace(/\s+/g, ' ').trim();
+    }
+    return 'un estilo visual nuevo';
+}
+
+function buildPromptGroundedShowcaseDescription(title, prompt) {
+    if (!isGenericPhotoTransformPrompt(title, prompt)) {
+        return '';
+    }
+    const styleLabel = getShowcaseStyleLabel(title, prompt);
+    const stylePhrase = styleLabel.startsWith('estilo ') ? `al ${styleLabel}` : `a ${styleLabel}`;
+    return `Transforma una foto existente ${stylePhrase}, manteniendo el sujeto base y probando un acabado visual diferente sin cambiar la escena principal.`;
+}
+
 function cleanModelOutputText(text) {
     return String(text || '')
         .replace(/```json|```/gi, '')
@@ -4947,6 +5000,11 @@ function isUsablePremiumShowcaseDescription(text, cues = []) {
 }
 
 async function generatePremiumShowcaseDescription(title, prompt) {
+    const groundedDescription = buildPromptGroundedShowcaseDescription(title, prompt);
+    if (groundedDescription) {
+        return { text: groundedDescription, source: 'prompt_grounded', reason: 'generic_photo_transform', rawLen: groundedDescription.length };
+    }
+
     const systemPrompt = "Eres un curador visual para un grupo de WhatsApp sobre IA. REGLA ABSOLUTA: responde solo en español de México. Describe el resultado como una pieza visual llamativa, con vibra de render premium o coleccionable.";
     const userPrompt = `Describe la imagen resultante de este prompt en español de México.
 
@@ -4984,6 +5042,11 @@ Prompt: ${prompt}`;
 }
 
 function buildPremiumShowcaseDescription(title, prompt) {
+    const groundedDescription = buildPromptGroundedShowcaseDescription(title, prompt);
+    if (groundedDescription) {
+        return groundedDescription;
+    }
+
     const cleanTitle = String(title || '').replace(/[*_`#>\[\]]/g, '').trim();
     const cleanPrompt = String(prompt || '')
         .replace(/[`*_#>]/g, ' ')
@@ -5081,10 +5144,10 @@ function buildReadableShowcaseCaption({ title, author, description, prompt, usag
 
     captionLines.push(
         '',
-        '*En corto*',
+        '📝 *Resumen*',
         cleanDescription,
         '',
-        '*Prompt base*'
+        '📌 *Prompt base*'
     );
 
     if (!isLongPrompt) {
@@ -5095,14 +5158,14 @@ function buildReadableShowcaseCaption({ title, author, description, prompt, usag
     }
 
     if (usageLines.length > 0) {
-        captionLines.push('', '*Como probarlo*', ...usageLines);
+        captionLines.push('', '🧪 *Como probarlo*', ...usageLines);
     } else {
-        captionLines.push('', '*Como probarlo*', '- Copialo tal cual primero.', '- Luego cambia sujeto, estilo o formato y compara resultados.');
+        captionLines.push('', '🧪 *Como probarlo*', '- Copialo tal cual primero.', '- Luego cambia sujeto, estilo o formato y compara resultados.');
     }
 
     captionLines.push(
         '',
-        '*Reto Castor*',
+        '🎯 *Reto Castor*',
         'Pruebalo, cambia un detalle y comparte el resultado que mas te gusto.'
     );
 
@@ -5581,7 +5644,7 @@ function buildOsintSummaryFallback(repo) {
     return [
         `${String(repo?.full_name || '').toUpperCase()} | mapa rápido de superficie`,
         '',
-        `En corto: ${repo?.full_name || 'Este repo'} ayuda a revisar señales técnicas de seguridad sin empezar desde cero. Sirve para entender mejor qué hay expuesto y decidir por dónde investigar primero.`,
+        `Resumen: ${repo?.full_name || 'Este repo'} ayuda a revisar señales técnicas de seguridad sin empezar desde cero. Sirve para entender mejor qué hay expuesto y decidir por dónde investigar primero.`,
         '',
         `Qué aporta:`,
         `- Ahorra tiempo en reconocimiento inicial.`,
@@ -5735,8 +5798,8 @@ function formatOsintSummaryText(text, repoFullName = '') {
             continue;
         }
 
-        if (/^(?:[^\p{L}\p{N}]|\s)*(?:¿Qué hace\??|Que hace\??|En corto)\s*:/iu.test(line)) {
-            const { lead, bullets } = splitInlineOsintBullets(line.replace(/^(?:[^\p{L}\p{N}]|\s)*(?:¿Qué hace\??|Que hace\??|En corto)\s*:\s*/iu, '').trim());
+        if (/^(?:[^\p{L}\p{N}]|\s)*(?:¿Qué hace\??|Que hace\??|En corto|Resumen)\s*:/iu.test(line)) {
+            const { lead, bullets } = splitInlineOsintBullets(line.replace(/^(?:[^\p{L}\p{N}]|\s)*(?:¿Qué hace\??|Que hace\??|En corto|Resumen)\s*:\s*/iu, '').trim());
             if (lead) {
                 whatDoes = lead;
             }
@@ -5848,7 +5911,7 @@ function formatOsintSummaryText(text, repoFullName = '') {
         `*${titleName}*`,
         titleTagline ? `_${titleTagline}_` : '',
         '',
-        '🔎 *En corto*',
+        '🧠 *Resumen*',
         simplifyOsintWhatText(whatDoes.replace(/\s+/g, ' ').trim()),
         '',
         '🧰 *Qué aporta*',
@@ -5871,7 +5934,7 @@ function isWeakOsintRepoSummary(text) {
     const value = String(text || '').trim();
     if (!value) return true;
     if (value.length < 120) return true;
-    if (!value.includes('*En corto*')) return true;
+    if (!value.includes('*Resumen*')) return true;
     if (!value.includes('*Qué aporta*')) return true;
     if (!value.includes('*Úsalo para*')) return true;
     if (!value.includes('*Cuidado*')) return true;
@@ -5893,7 +5956,7 @@ function isWeakOsintRepoSummary(text) {
 }
 
 async function generateOsintRepoSummary(repo) {
-    const systemPrompt = "Eres editor técnico para un grupo de WhatsApp de ciberseguridad. REGLA ABSOLUTA: responde en español de México, claro y fácil de leer. No suenes corporativo, académico ni exagerado. Evita párrafos largos: frases cortas, máximo 2 líneas por sección. Si usas jerga como fingerprinting, enumeración, OSINT, XSS o SSRF, no la expliques con definiciones largas; aterrízala con una frase simple. No inventes capacidades. FORMATO ESTRICTO: 1. Título: '[Nombre Repo] | [beneficio en 4 a 7 palabras]'. 2. En corto: 1 o 2 frases sobre qué hace y por qué importa. 3. Qué aporta: 3 bullets breves, concretos y legibles. 4. Úsalo para: 2 o 3 casos separados por coma. 5. Cuidado: una advertencia breve de uso autorizado. Cero comillas.";
+    const systemPrompt = "Eres editor técnico para un grupo de WhatsApp de ciberseguridad. REGLA ABSOLUTA: responde en español de México, claro y fácil de leer. No suenes corporativo, académico ni exagerado. Evita párrafos largos: frases cortas, máximo 2 líneas por sección. Si usas jerga como fingerprinting, enumeración, OSINT, XSS o SSRF, no la expliques con definiciones largas; aterrízala con una frase simple. No inventes capacidades. FORMATO ESTRICTO: 1. Título: '[Nombre Repo] | [beneficio en 4 a 7 palabras]'. 2. Resumen: 1 o 2 frases sobre qué hace y por qué importa. 3. Qué aporta: 3 bullets breves, concretos y legibles. 4. Úsalo para: 2 o 3 casos separados por coma. 5. Cuidado: una advertencia breve de uso autorizado. Cero comillas.";
     const userPrompt = "Analiza este repositorio de ciberseguridad para gente que quiere entender rápido si le sirve. Hazlo menos técnico y menos pesado que una ficha de herramienta. Prioriza claridad, utilidad real y lectura rápida. Si el repo es una colección de writeups, prompts o skills, dilo con honestidad sin venderlo como scanner o exploit framework.\n\nRepo: " + repo.full_name + "\nInfo: " + repo.description;
 
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -6918,7 +6981,7 @@ function normalizePaperSummaryText(text, paperTitle = '') {
     let section = '';
 
     for (const line of lines) {
-        if (!title && !/^(?:Hallazgo|En corto|Puntos clave|Claves|Lo interesante|Por quÃ© importa|Porque importa)\s*:/i.test(line)) {
+        if (!title && !/^(?:Hallazgo|En corto|Resumen|Puntos clave|Claves|Lo interesante|Por quÃ© importa|Porque importa)\s*:/i.test(line)) {
             title = line;
             continue;
         }
@@ -6968,7 +7031,7 @@ function normalizePaperSummaryText(text, paperTitle = '') {
     return [
         title || paperTitle || 'Paper reciente que vale radar',
         '',
-        `En corto: ${finding.replace(/\s+/g, ' ').trim()}`,
+        `Resumen: ${finding.replace(/\s+/g, ' ').trim()}`,
         '',
         'Lo interesante:',
         ...(cleanKeys.length > 0 ? cleanKeys.map((item) => `- ${item}`) : [
@@ -6985,7 +7048,7 @@ function isWeakPaperSummary(text) {
     const value = String(text || '').trim();
     if (!value) return true;
     if (value.length < 140) return true;
-    if (!value.includes('En corto:')) return true;
+    if (!value.includes('Resumen:')) return true;
     if (!value.includes('Lo interesante:')) return true;
     if (!value.includes('Por quÃ© importa:')) return true;
     return false;
@@ -6995,7 +7058,7 @@ function buildPaperSummaryFallback(paper) {
     return [
         paper?.title || 'Paper reciente que vale radar',
         '',
-        `En corto: ${paper?.summary || 'Este paper propone una idea nueva sobre IA y la aterriza de una forma que sÃ­ puede influir en producto o herramientas reales.'}`,
+        `Resumen: ${paper?.summary || 'Este paper propone una idea nueva sobre IA y la aterriza de una forma que sÃ­ puede influir en producto o herramientas reales.'}`,
         '',
         'Lo interesante:',
         '- No se queda en teorÃ­a; deja pistas de uso para gente que construye con IA.',
@@ -7007,7 +7070,7 @@ function buildPaperSummaryFallback(paper) {
 }
 
 async function generatePaperSummary(paper) {
-    const systemPrompt = "Eres un divulgador tech que aterriza papers de IA para un grupo de WhatsApp. REGLA ABSOLUTA: responde solo en espaÃ±ol de MÃ©xico. OBJETIVO: explÃ­calo para gente curiosa que sigue IA, no para un equipo de research. Usa lenguaje claro, evita jerga innecesaria y si aparece una sigla tÃ©cnica explÃ­cala en palabras simples o sustitÃºyela por una idea entendible. FORMATO ESTRICTO: 1. TÃ­tulo con el nombre del paper. 2. En corto: 2 lÃ­neas explicando de quÃ© va en lenguaje humano. 3. Lo interesante: 3 viÃ±etas simples y claras. 4. Por quÃ© importa: 1 lÃ­nea conectÃ¡ndolo con producto, herramientas o uso real. Cero comillas.";
+    const systemPrompt = "Eres un divulgador tech que aterriza papers de IA para un grupo de WhatsApp. REGLA ABSOLUTA: responde solo en espaÃ±ol de MÃ©xico. OBJETIVO: explÃ­calo para gente curiosa que sigue IA, no para un equipo de research. Usa lenguaje claro, evita jerga innecesaria y si aparece una sigla tÃ©cnica explÃ­cala en palabras simples o sustitÃºyela por una idea entendible. FORMATO ESTRICTO: 1. TÃ­tulo con el nombre del paper. 2. Resumen: 2 lÃ­neas explicando de quÃ© va en lenguaje humano. 3. Lo interesante: 3 viÃ±etas simples y claras. 4. Por quÃ© importa: 1 lÃ­nea conectÃ¡ndolo con producto, herramientas o uso real. Cero comillas.";
     const userPrompt = `Resume este paper para que alguien del grupo lo entienda rÃ¡pido aunque no sea investigador.\n\nTÃ­tulo: ${paper.title}\nResumen: ${paper.summary}`;
 
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -7034,12 +7097,12 @@ function normalizeBenchmarkSummaryText(text, benchmarkTitle = '') {
     let section = '';
 
     for (const line of lines) {
-        if (!title && !/^(?:QuÃ© midiÃ³|Â¿QuÃ© midiÃ³\??|En corto|Lectura rÃ¡pida|Lo que deja ver|Por quÃ© importa|Porque importa)\s*:/i.test(line)) {
+        if (!title && !/^(?:QuÃ© midiÃ³|Â¿QuÃ© midiÃ³\??|En corto|Resumen|Lectura rÃ¡pida|Lo que deja ver|Por quÃ© importa|Porque importa)\s*:/i.test(line)) {
             title = line;
             continue;
         }
-        if (/^(?:QuÃ© midiÃ³|Â¿QuÃ© midiÃ³\??|En corto|Lectura del benchmark)\s*:/i.test(line)) {
-            measured = line.replace(/^(?:QuÃ© midiÃ³|Â¿QuÃ© midiÃ³\??|En corto|Lectura del benchmark)\s*:\s*/i, '').trim();
+        if (/^(?:QuÃ© midiÃ³|Â¿QuÃ© midiÃ³\??|En corto|Resumen|Lectura del benchmark)\s*:/i.test(line)) {
+            measured = line.replace(/^(?:QuÃ© midiÃ³|Â¿QuÃ© midiÃ³\??|En corto|Resumen|Lectura del benchmark)\s*:\s*/i, '').trim();
             section = 'measured';
             continue;
         }
@@ -7084,7 +7147,7 @@ function normalizeBenchmarkSummaryText(text, benchmarkTitle = '') {
     return [
         title || benchmarkTitle || 'Benchmark nuevo que vale radar',
         '',
-        `En corto: ${measured.replace(/\s+/g, ' ').trim()}`,
+        `Resumen: ${measured.replace(/\s+/g, ' ').trim()}`,
         '',
         'Lo que deja ver:',
         ...(cleanQuickRead.length > 0 ? cleanQuickRead.map((item) => `- ${item}`) : [
@@ -7101,7 +7164,7 @@ function isWeakBenchmarkSummary(text) {
     const value = String(text || '').trim();
     if (!value) return true;
     if (value.length < 140) return true;
-    if (!value.includes('En corto:')) return true;
+    if (!value.includes('Resumen:')) return true;
     if (!value.includes('Lo que deja ver:')) return true;
     if (!value.includes('Por quÃ© importa:')) return true;
     return false;
@@ -7111,7 +7174,7 @@ function buildBenchmarkSummaryFallback(benchmark) {
     return [
         benchmark?.title || 'Benchmark nuevo que vale radar',
         '',
-        `En corto: ${benchmark?.summary || 'Este benchmark compara opciones de IA para mostrar quÃ© tanto rinden en tareas reales y quÃ© tan confiables se ven fuera del marketing.'}`,
+        `Resumen: ${benchmark?.summary || 'Este benchmark compara opciones de IA para mostrar quÃ© tanto rinden en tareas reales y quÃ© tan confiables se ven fuera del marketing.'}`,
         '',
         'Lo que deja ver:',
         '- Sirve para comparar con mÃ¡s calma y menos humo las opciones que suenan fuerte.',
@@ -7123,7 +7186,7 @@ function buildBenchmarkSummaryFallback(benchmark) {
 }
 
 async function generateBenchmarkSummary(benchmark) {
-    const systemPrompt = "Eres un analista tech que aterriza benchmarks de IA para un grupo de WhatsApp. REGLA ABSOLUTA: responde solo en espaÃ±ol de MÃ©xico. OBJETIVO: explicarlo para gente que sigue IA pero no vive leyendo papers. Usa lenguaje claro, evita jerga innecesaria y no te pongas acadÃ©mico. FORMATO ESTRICTO: 1. TÃ­tulo con el nombre del benchmark o paper. 2. En corto: 2 lÃ­neas diciendo quÃ© comparÃ³ o evaluÃ³ en palabras simples. 3. Lo que deja ver: 3 viÃ±etas claras. 4. Por quÃ© importa: 1 lÃ­nea conectÃ¡ndolo con decisiones reales de producto, modelos o stack. Cero comillas.";
+    const systemPrompt = "Eres un analista tech que aterriza benchmarks de IA para un grupo de WhatsApp. REGLA ABSOLUTA: responde solo en espaÃ±ol de MÃ©xico. OBJETIVO: explicarlo para gente que sigue IA pero no vive leyendo papers. Usa lenguaje claro, evita jerga innecesaria y no te pongas acadÃ©mico. FORMATO ESTRICTO: 1. TÃ­tulo con el nombre del benchmark o paper. 2. Resumen: 2 lÃ­neas diciendo quÃ© comparÃ³ o evaluÃ³ en palabras simples. 3. Lo que deja ver: 3 viÃ±etas claras. 4. Por quÃ© importa: 1 lÃ­nea conectÃ¡ndolo con decisiones reales de producto, modelos o stack. Cero comillas.";
     const userPrompt = `Resume este benchmark para que alguien del grupo entienda rÃ¡pido quÃ© comparÃ³ y por quÃ© deberÃ­a importarle.\n\nTÃ­tulo: ${benchmark.title}\nResumen: ${benchmark.summary}`;
 
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -7854,14 +7917,16 @@ async function sendRandomUserSelection(sock) {
 }
 
 function isWithinLonelyCastorQuietHours(mexicoNow) {
-    const hour = mexicoNow.getHours();
-    if (LONELY_CASTOR_NIGHT_START_HOUR === LONELY_CASTOR_NIGHT_END_HOUR) {
+    const currentMinute = (mexicoNow.getHours() * 60) + mexicoNow.getMinutes();
+    const startMinute = (LONELY_CASTOR_NIGHT_START_HOUR * 60) + LONELY_CASTOR_NIGHT_START_MINUTE;
+    const endMinute = (LONELY_CASTOR_NIGHT_END_HOUR * 60) + LONELY_CASTOR_NIGHT_END_MINUTE;
+    if (startMinute === endMinute) {
         return false;
     }
-    if (LONELY_CASTOR_NIGHT_START_HOUR < LONELY_CASTOR_NIGHT_END_HOUR) {
-        return hour >= LONELY_CASTOR_NIGHT_START_HOUR && hour < LONELY_CASTOR_NIGHT_END_HOUR;
+    if (startMinute < endMinute) {
+        return currentMinute >= startMinute && currentMinute < endMinute;
     }
-    return hour >= LONELY_CASTOR_NIGHT_START_HOUR || hour < LONELY_CASTOR_NIGHT_END_HOUR;
+    return currentMinute >= startMinute || currentMinute < endMinute;
 }
 
 async function maybeSendLonelyCastorNudge(sock, currentState, nowMs, mexicoNow, todayKey) {
