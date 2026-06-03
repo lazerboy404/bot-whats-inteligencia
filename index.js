@@ -105,6 +105,40 @@ const GROUP_COMPANION_MAX_HISTORY = Math.floor(getEnvNumber('GROUP_COMPANION_MAX
 const GROUP_COMPANION_MAX_TURNS = Math.floor(getEnvNumber('GROUP_COMPANION_MAX_TURNS', 4, 1, 10));
 const GROUP_COMPANION_STICKER_CHANCE = getEnvNumber('GROUP_COMPANION_STICKER_CHANCE', 0.25, 0, 1);
 const GROUP_COMPANION_STICKERS = (process.env.GROUP_COMPANION_STICKERS || 'abrir.webp').split(',').map(s => s.trim()).filter(Boolean);
+const DEFAULT_CASTOR_MOOD_STICKER_URLS = [
+    'https://tenor.com/es-419/view/%D1%81%D0%BE%D0%B1%D0%B0%D0%BA%D0%B0-gif-10104501972735095572',
+    'https://tenor.com/es-419/view/grrr-angry-angry-dog-growling-growl-gif-16345017163953633442',
+    'https://tenor.com/es-419/view/cat-angry-angry-mad-cat-meme-gif-17719456655395931550',
+    'https://tenor.com/es-419/view/t%E1%BB%A9c-gi%E1%BA%ADn-gif-7420873232229821020',
+    'https://tenor.com/es-419/view/stick-out-tongue-feral-anime-nekohime-gif-4153179211723866975',
+    'https://tenor.com/es-419/view/doggie-gif-17852550656102249853',
+    'https://tenor.com/es-419/view/crazy-dancing-dog-gif-2921585872813920974',
+    'https://tenor.com/es-419/view/dance-ai-animal-dancing-animal-dancing-dog-gwangju-gif-2899542974656349023',
+    'https://tenor.com/es-419/view/ekoi-ekoi-dancekid-dancekid-gif-10799637110820905144',
+    'https://tenor.com/es-419/view/dance-victro-gif-8379198151680035306',
+    'https://tenor.com/es-419/view/shrek-meme-gif-15118149598085357912',
+    'https://tenor.com/es-419/view/shrekdam-gif-17007032784192084969',
+    'https://tenor.com/es-419/view/shrek-mike-wazowski-bitterkofte-gif-10289623651517333465',
+    'https://tenor.com/es-419/view/kirby-human-face-running-transparent-gif-23828137',
+    'https://tenor.com/es-419/view/wat-gif-11843300400893651832',
+    'https://tenor.com/es-419/view/chat-pouce-pouce-en-l%27air-pouce-lev%C3%A9-triste-gif-14803757566134191506',
+    'https://tenor.com/es-419/view/betterttv-cat-meme-yes-gif-912244315996749520',
+    'https://tenor.com/es-419/view/huh-twitch-bttv-gif-9449110409142548099',
+    'https://tenor.com/es-419/view/xd-gif-26401413',
+    'https://tenor.com/es-419/view/cat-cat-sad-gif-1752707108709240658',
+    'https://tenor.com/es-419/view/vergonhw-gif-20005752',
+    'https://tenor.com/es-419/view/dog-staring-embarrassed-stan-twitter-dog-meme-gif-7553891005816701694',
+    'https://tenor.com/es-419/view/dog-rolling-up-window-dog-window-rolling-up-the-window-golden-retriever-dog-in-car-gif-17710980273798773852',
+    'https://tenor.com/es-419/view/scared-dog-gif-14874418230209766021',
+    'https://tenor.com/es-419/view/bellebows-tiktok-dog-funny-silly-gif-26293491',
+    'https://tenor.com/es-419/view/sytuty-dog-puppy-scared-shaking-gif-15314570280441475740',
+    'https://tenor.com/es-419/view/dog-hiding-scared-shoe-gif-3598331221766255638',
+    'https://tenor.com/es-419/view/stan-twitter-twitter-stan-tiktok-gif-4180037205826660918',
+    'https://tenor.com/es-419/view/sad-meme-stupid-filter-gif-8194695298434751251',
+    'https://tenor.com/es-419/view/star-tamil-chat-sanjay-chat-star-chat-tamil-chat-dog-sad-gif-1122084852060402697',
+    'https://tenor.com/es-419/view/monkey-phone-call-listening-long-yeet-gif-11764220',
+    'https://tenor.com/es-419/view/monkey-chill-monkey-funny-monkey-monkey-relax-monkey-gangster-gif-7880154508083827354'
+];
 const LONELY_CASTOR_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.LONELY_CASTOR_ENABLED || 'true').toLowerCase());
 const LONELY_CASTOR_INACTIVITY_MS = getEnvNumber('LONELY_CASTOR_INACTIVITY_MS', 4 * 60 * 60 * 1000, 30 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
 const LONELY_CASTOR_MIN_GAP_MS = getEnvNumber('LONELY_CASTOR_MIN_GAP_MS', 8 * 60 * 60 * 1000, 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
@@ -113,7 +147,7 @@ const LONELY_CASTOR_MAX_PER_DAY = Math.floor(getEnvNumber('LONELY_CASTOR_MAX_PER
 const LONELY_CASTOR_NIGHT_START_HOUR = Math.floor(getEnvNumber('LONELY_CASTOR_NIGHT_START_HOUR', 1, 0, 23));
 const LONELY_CASTOR_NIGHT_END_HOUR = Math.floor(getEnvNumber('LONELY_CASTOR_NIGHT_END_HOUR', 8, 0, 23));
 const CASTOR_MOOD_STICKERS_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.CASTOR_MOOD_STICKERS_ENABLED || 'true').toLowerCase());
-const CASTOR_MOOD_STICKER_URLS = (process.env.CASTOR_MOOD_STICKER_URLS || 'https://tenor.com/es-419/view/%D1%81%D0%BE%D0%B1%D0%B0%D0%BA%D0%B0-gif-10104501972735095572')
+const CASTOR_MOOD_STICKER_URLS = (process.env.CASTOR_MOOD_STICKER_URLS || DEFAULT_CASTOR_MOOD_STICKER_URLS.join(','))
     .split(',')
     .map(s => s.trim())
     .filter(Boolean);
@@ -126,6 +160,9 @@ const CASTOR_MOOD_STICKER_RANDOM_INACTIVITY_MS = getEnvNumber('CASTOR_MOOD_STICK
 const CASTOR_MOOD_STICKER_RANDOM_MIN_GAP_MS = getEnvNumber('CASTOR_MOOD_STICKER_RANDOM_MIN_GAP_MS', 12 * 60 * 60 * 1000, 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
 const CASTOR_REMOTE_STICKER_CACHE_MS = getEnvNumber('CASTOR_REMOTE_STICKER_CACHE_MS', 24 * 60 * 60 * 1000, 60 * 1000, 7 * 24 * 60 * 60 * 1000);
 const CASTOR_REMOTE_STICKER_MAX_BYTES = Math.floor(getEnvNumber('CASTOR_REMOTE_STICKER_MAX_BYTES', 5 * 1024 * 1024, 128 * 1024, 20 * 1024 * 1024));
+const CASTOR_ANIMATED_STICKER_MAX_BYTES = Math.floor(getEnvNumber('CASTOR_ANIMATED_STICKER_MAX_BYTES', 256 * 1024, 64 * 1024, 1024 * 1024));
+const CASTOR_ANIMATED_STICKER_MAX_INPUT_BYTES = Math.floor(getEnvNumber('CASTOR_ANIMATED_STICKER_MAX_INPUT_BYTES', 2 * 1024 * 1024, 128 * 1024, 10 * 1024 * 1024));
+const CASTOR_ANIMATED_STICKER_MAX_PAGES = Math.floor(getEnvNumber('CASTOR_ANIMATED_STICKER_MAX_PAGES', 80, 2, 300));
 const PROACTIVE_PROMPT_INTERVAL_MS = Number(process.env.PROACTIVE_PROMPT_INTERVAL_MS || (60 * 1000));
 const PROACTIVE_RANDOM_USER_INTERVAL_MS = Number(process.env.PROACTIVE_RANDOM_USER_INTERVAL_MS || (24 * 60 * 60 * 1000));
 const PROACTIVE_SHOWCASE_DAILY_HOUR = Number(process.env.PROACTIVE_SHOWCASE_DAILY_HOUR || 9);
@@ -2462,6 +2499,10 @@ function isSupportedRemoteStickerImageUrl(value) {
     return /\.(?:webp|gif|png|jpe?g)(?:[?#].*)?$/i.test(String(value || '').trim());
 }
 
+function isSupportedRemoteStickerVideoUrl(value) {
+    return /\.(?:mp4|webm)(?:[?#].*)?$/i.test(String(value || '').trim());
+}
+
 function getCastorMoodStickerSources() {
     return uniqStrings([...CASTOR_MOOD_STICKER_URLS, ...GROUP_COMPANION_STICKERS])
         .filter((source) => isHttpUrl(source) || /^[\w.-]+\.webp$/i.test(source));
@@ -2499,12 +2540,18 @@ async function fetchBufferWithLimit(url, timeoutMs = 15000) {
 
 function extractRemoteStickerCandidatesFromHtml(html) {
     const source = String(html || '');
-    const ordered = [];
+    const images = [];
+    const videos = [];
     const addMatches = (regex) => {
         for (const match of source.matchAll(regex)) {
             const candidate = decodeHtmlEntities(String(match[1] || match[0] || '').trim());
-            if (candidate && isSupportedRemoteStickerImageUrl(candidate)) {
-                ordered.push(candidate);
+            if (!candidate) {
+                continue;
+            }
+            if (isSupportedRemoteStickerImageUrl(candidate)) {
+                images.push(candidate);
+            } else if (isSupportedRemoteStickerVideoUrl(candidate)) {
+                videos.push(candidate);
             }
         }
     };
@@ -2512,17 +2559,36 @@ function extractRemoteStickerCandidatesFromHtml(html) {
     addMatches(/https:\/\/media\.tenor\.com\/[^"' <>)]+/gi);
     addMatches(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]+content=["']([^"']+)["']/gi);
     addMatches(/<img[^>]+src=["']([^"']+)["']/gi);
-    addMatches(/https?:\/\/[^"' <>)]+\.(?:webp|gif|png|jpe?g)(?:[?#][^"' <>)]+)?/gi);
+    addMatches(/https?:\/\/[^"' <>)]+\.(?:webp|gif|png|jpe?g|mp4|webm)(?:[?#][^"' <>)]+)?/gi);
 
-    return uniqStrings(ordered);
+    const imageWeight = (url) => {
+        if (/\.gif(?:[?#].*)?$/i.test(url)) return 0;
+        if (/\.webp(?:[?#].*)?$/i.test(url)) return 1;
+        if (/\.(?:png|jpe?g)(?:[?#].*)?$/i.test(url)) return 2;
+        return 3;
+    };
+    const videoWeight = (url) => {
+        if (/\.mp4(?:[?#].*)?$/i.test(url)) return 0;
+        if (/\.webm(?:[?#].*)?$/i.test(url)) return 1;
+        return 2;
+    };
+
+    return {
+        images: uniqStrings(images).sort((a, b) => imageWeight(a) - imageWeight(b)),
+        videos: uniqStrings(videos).sort((a, b) => videoWeight(a) - videoWeight(b))
+    };
 }
 
-async function fetchRemoteStickerImage(sourceUrl) {
+async function fetchRemoteStickerMedia(sourceUrl) {
     const first = await fetchBufferWithLimit(sourceUrl);
     const isHtml = first.contentType.includes('text/html') || first.buffer.slice(0, 300).toString('utf8').includes('<html');
     const isImage = first.contentType.startsWith('image/') || isSupportedRemoteStickerImageUrl(first.finalUrl);
+    const isVideo = first.contentType.startsWith('video/') || isSupportedRemoteStickerVideoUrl(first.finalUrl);
     if (isImage && !isHtml) {
-        return first;
+        return { image: first, videoUrl: '' };
+    }
+    if (isVideo && !isHtml) {
+        return { image: null, videoUrl: first.finalUrl, video: first };
     }
     if (!isHtml) {
         throw new Error(`contenido remoto no soportado: ${first.contentType || 'desconocido'}`);
@@ -2530,32 +2596,62 @@ async function fetchRemoteStickerImage(sourceUrl) {
 
     const html = first.buffer.toString('utf8');
     const candidates = extractRemoteStickerCandidatesFromHtml(html);
-    for (const candidate of candidates) {
+    if (/tenor\.com\/.+\/view\//i.test(first.finalUrl || sourceUrl) && candidates.videos.length > 0) {
+        return { image: null, videoUrl: candidates.videos[0], counts: candidates };
+    }
+
+    for (const candidate of candidates.images) {
         try {
             const media = await fetchBufferWithLimit(candidate);
             if (media.contentType.startsWith('image/') || isSupportedRemoteStickerImageUrl(media.finalUrl)) {
-                return media;
+                return { image: media, videoUrl: candidates.videos[0] || '' };
             }
         } catch (error) {
         }
     }
+
+    if (candidates.videos.length > 0) {
+        return { image: null, videoUrl: candidates.videos[0] };
+    }
     throw new Error('no encontre media compatible dentro de la pagina');
 }
 
-async function convertRemoteImageToStickerBuffer(imageBuffer, sourceUrl = '', contentType = '') {
-    if (!imageBuffer || !Buffer.isBuffer(imageBuffer) || imageBuffer.length === 0) {
+async function detectRemoteImageAnimation(imageBuffer, sourceUrl = '', contentType = '') {
+    const likelyAnimated = /image\/gif/i.test(contentType) || /\.(?:gif)(?:[?#].*)?$/i.test(sourceUrl);
+    if (!sharp) {
+        return likelyAnimated;
+    }
+    try {
+        const metadata = await sharp(imageBuffer, { animated: true, limitInputPixels: false, failOn: 'none' }).metadata();
+        return Number(metadata.pages || 1) > 1 || (Array.isArray(metadata.delay) && metadata.delay.length > 1);
+    } catch (error) {
+        return likelyAnimated;
+    }
+}
+
+async function convertAnimatedImageToStickerBuffer(imageBuffer) {
+    if (!sharp) {
         return null;
     }
-    if (!sharp) {
-        return /image\/webp/i.test(contentType) ? imageBuffer : null;
+    if (imageBuffer.length > CASTOR_ANIMATED_STICKER_MAX_INPUT_BYTES) {
+        return null;
+    }
+    try {
+        const metadata = await sharp(imageBuffer, { animated: true, limitInputPixels: false, failOn: 'none' }).metadata();
+        if (Number(metadata.pages || 1) > CASTOR_ANIMATED_STICKER_MAX_PAGES) {
+            return null;
+        }
+    } catch (error) {
+        return null;
     }
 
-    const animatedCandidate = /(?:gif|webp)/i.test(contentType) || /\.(?:gif|webp)(?:[?#].*)?$/i.test(sourceUrl);
-    if (animatedCandidate) {
-        for (const quality of [72, 62, 52, 42, 34]) {
+    const sizes = [384, 320, 256];
+    const qualities = [62, 48, 36];
+    for (const size of sizes) {
+        for (const quality of qualities) {
             try {
                 const candidate = await sharp(imageBuffer, { animated: true, limitInputPixels: false, failOn: 'none' })
-                    .resize(512, 512, {
+                    .resize(size, size, {
                         fit: 'contain',
                         background: { r: 0, g: 0, b: 0, alpha: 0 }
                     })
@@ -2566,42 +2662,98 @@ async function convertRemoteImageToStickerBuffer(imageBuffer, sourceUrl = '', co
                         smartSubsample: true
                     })
                     .toBuffer();
-                if (candidate.length <= 256 * 1024) {
+                if (candidate.length <= CASTOR_ANIMATED_STICKER_MAX_BYTES) {
                     return candidate;
                 }
             } catch (error) {
-                break;
+                return null;
             }
         }
     }
-
-    return convertImageToStickerBuffer(imageBuffer);
+    return null;
 }
 
-async function getRemoteMoodStickerBuffer(sourceUrl) {
+async function buildGifVideoPayload(videoUrl, prefetchedVideo = null) {
+    if (!videoUrl && !prefetchedVideo) {
+        return null;
+    }
+    const media = prefetchedVideo || await fetchBufferWithLimit(videoUrl);
+    if (!media.buffer || media.buffer.length === 0) {
+        return null;
+    }
+    const mimetype = media.contentType?.startsWith('video/') ? media.contentType.split(';')[0] : 'video/mp4';
+    return {
+        content: {
+            video: media.buffer,
+            mimetype,
+            gifPlayback: true
+        },
+        kind: 'gif-video'
+    };
+}
+
+async function buildRemoteMoodStickerPayload(sourceUrl) {
+    const mediaSet = await fetchRemoteStickerMedia(sourceUrl);
+    if (mediaSet.image) {
+        const { buffer, finalUrl, contentType } = mediaSet.image;
+        const isAnimated = await detectRemoteImageAnimation(buffer, finalUrl, contentType);
+        if (isAnimated) {
+            const videoPayload = await buildGifVideoPayload(mediaSet.videoUrl);
+            if (videoPayload) {
+                return videoPayload;
+            }
+            const animatedStickerBuffer = await convertAnimatedImageToStickerBuffer(buffer);
+            if (animatedStickerBuffer) {
+                return {
+                    content: { sticker: animatedStickerBuffer },
+                    kind: 'animated-sticker'
+                };
+            }
+            return null;
+        }
+
+        const staticStickerBuffer = await convertImageToStickerBuffer(buffer);
+        if (staticStickerBuffer) {
+            return {
+                content: { sticker: staticStickerBuffer },
+                kind: isAnimated ? 'static-fallback-sticker' : 'static-sticker'
+            };
+        }
+    }
+
+    if (mediaSet.video || mediaSet.videoUrl) {
+        const videoPayload = await buildGifVideoPayload(mediaSet.videoUrl, mediaSet.video);
+        if (videoPayload) {
+            return videoPayload;
+        }
+    }
+
+    return null;
+}
+
+async function getRemoteMoodStickerPayload(sourceUrl) {
     const cacheKey = String(sourceUrl || '').trim();
     const cached = remoteMoodStickerCache.get(cacheKey);
     const now = Date.now();
-    if (cached?.buffer && cached.expiresAt > now) {
-        return cached.buffer;
+    if (cached?.payload && cached.expiresAt > now) {
+        return cached.payload;
     }
 
-    const media = await fetchRemoteStickerImage(cacheKey);
-    const stickerBuffer = await convertRemoteImageToStickerBuffer(media.buffer, media.finalUrl, media.contentType);
-    if (!stickerBuffer || stickerBuffer.length === 0) {
+    const payload = await buildRemoteMoodStickerPayload(cacheKey);
+    if (!payload?.content) {
         throw new Error('no pude convertir el sticker remoto');
     }
     remoteMoodStickerCache.set(cacheKey, {
-        buffer: stickerBuffer,
+        payload,
         expiresAt: now + CASTOR_REMOTE_STICKER_CACHE_MS
     });
-    return stickerBuffer;
+    return payload;
 }
 
 async function sendCastorMoodStickerSource(sock, remoteJid, source) {
     if (isHttpUrl(source)) {
-        const stickerBuffer = await getRemoteMoodStickerBuffer(source);
-        await sock.sendMessage(remoteJid, { sticker: stickerBuffer });
+        const payload = await getRemoteMoodStickerPayload(source);
+        await sock.sendMessage(remoteJid, payload.content);
         return true;
     }
 
