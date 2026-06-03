@@ -2769,6 +2769,38 @@ async function sendCastorMoodStickerSource(sock, remoteJid, source) {
     return false;
 }
 
+async function handleGifTestCommand(sock, msg, remoteJid) {
+    if (remoteJid.endsWith('@g.us')) {
+        return;
+    }
+
+    const isAuthorized = await senderIsAuthorizedAdmin(sock, msg, remoteJid);
+    if (!isAuthorized) {
+        await sock.sendMessage(remoteJid, { text: 'Esta prueba es solo para admin, bro.' }, { quoted: msg });
+        return;
+    }
+
+    const sources = shuffleList(getCastorMoodStickerSources());
+    if (sources.length === 0) {
+        await sock.sendMessage(remoteJid, { text: 'No hay GIFs/stickers configurados para probar.' }, { quoted: msg });
+        return;
+    }
+
+    for (const source of sources) {
+        try {
+            const sent = await sendCastorMoodStickerSource(sock, remoteJid, source);
+            if (sent) {
+                console.log(`[STICKER-MOOD-TEST] Prueba privada enviada a ${remoteJid}: ${source}`);
+                return;
+            }
+        } catch (error) {
+            console.error(`[STICKER-MOOD-TEST] No pude enviar ${source}:`, error?.message || error);
+        }
+    }
+
+    await sock.sendMessage(remoteJid, { text: 'No pude mandar una muestra ahorita, bro. Intenta otra vez en unos segundos.' }, { quoted: msg });
+}
+
 function getMoodStickerDailyCount(state, todayKey) {
     return state.moodStickerDailyKey === todayKey
         ? Math.max(0, Number(state.moodStickerDailyCount) || 0)
@@ -8445,6 +8477,8 @@ async function processIncomingMessage(sock, msg, runId) {
         await handleUnbanCommand(sock, msg, text, remoteJid);
     } else if (command === '.sticker') {
         await handleStickerCommand(sock, msg, remoteJid);
+    } else if (command === '.gif') {
+        await handleGifTestCommand(sock, msg, remoteJid);
     } else if (command === '.top') {
         await handleTopCommand(sock, msg, remoteJid);
     } else if (command === '.random') {
