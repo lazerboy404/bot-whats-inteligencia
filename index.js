@@ -109,7 +109,6 @@ const GROUP_COMPANION_MAX_BATCH = Math.floor(getEnvNumber('GROUP_COMPANION_MAX_B
 const GROUP_COMPANION_MAX_HISTORY = Math.floor(getEnvNumber('GROUP_COMPANION_MAX_HISTORY', 24, 8, 80));
 const GROUP_COMPANION_MAX_TURNS = Math.floor(getEnvNumber('GROUP_COMPANION_MAX_TURNS', 4, 1, 10));
 const GROUP_COMPANION_STICKER_CHANCE = getEnvNumber('GROUP_COMPANION_STICKER_CHANCE', 0.5, 0, 1);
-const GROUP_COMPANION_STICKERS = (process.env.GROUP_COMPANION_STICKERS || 'abrir.webp').split(',').map(s => s.trim()).filter(Boolean);
 const DEFAULT_CASTOR_MOOD_STICKER_URLS = [
     'https://tenor.com/es-419/view/%D1%81%D0%BE%D0%B1%D0%B0%D0%BA%D0%B0-gif-10104501972735095572',
     'https://tenor.com/es-419/view/grrr-angry-angry-dog-growling-growl-gif-16345017163953633442',
@@ -2589,7 +2588,6 @@ function getPreferredRemoteStickerImages(images, videoUrl = '') {
 function getCastorMoodStickerSources() {
     return uniqStrings([
         ...getLocalMoodStickerSources(),
-        ...GROUP_COMPANION_STICKERS,
         ...CASTOR_MOOD_STICKER_URLS
     ]).filter((source) => isHttpUrl(source) || isSafeLocalStickerSource(source));
 }
@@ -4405,22 +4403,7 @@ async function maybeSendGroupCompanionSticker(sock, remoteJid, context) {
     if (sentMoodSticker) {
         return true;
     }
-    const availableStickers = GROUP_COMPANION_STICKERS.filter((fileName) => {
-        if (!/^[\w.-]+\.webp$/i.test(fileName)) {
-            return false;
-        }
-        return fs.existsSync(path.join(process.cwd(), 'stickers', fileName));
-    });
-    if (availableStickers.length === 0) {
-        return false;
-    }
-    const stickerFileName = availableStickers[Math.floor(Math.random() * availableStickers.length)];
-    try {
-        await sendReactionSticker(sock, remoteJid, stickerFileName);
-        return true;
-    } catch (error) {
-        return false;
-    }
+    return false;
 }
 
 async function flushGroupCompanionQueue(sock, remoteJid) {
