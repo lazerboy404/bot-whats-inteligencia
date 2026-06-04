@@ -103,6 +103,8 @@ const GROUP_COMPANION_DIRECT_DELAY_MS = getEnvNumber('GROUP_COMPANION_DIRECT_DEL
 const GROUP_COMPANION_REPLY_WINDOW_MS = getEnvNumber('GROUP_COMPANION_REPLY_WINDOW_MS', 18 * 60 * 1000, 60 * 1000, 24 * 60 * 60 * 1000);
 const GROUP_COMPANION_MIN_GAP_MS = getEnvNumber('GROUP_COMPANION_MIN_GAP_MS', SAFE_MODE ? 4 * 60 * 1000 : 2 * 60 * 1000, 30 * 1000, 60 * 60 * 1000);
 const GROUP_COMPANION_DIRECT_MIN_GAP_MS = getEnvNumber('GROUP_COMPANION_DIRECT_MIN_GAP_MS', 15000, 5000, 10 * 60 * 1000);
+const GROUP_COMPANION_STALE_MESSAGE_MS = getEnvNumber('GROUP_COMPANION_STALE_MESSAGE_MS', GROUP_COMPANION_REPLY_WINDOW_MS, 2 * 60 * 1000, 24 * 60 * 60 * 1000);
+const GROUP_COMPANION_DEBUG = !['0', 'false', 'no', 'off'].includes(String(process.env.GROUP_COMPANION_DEBUG || 'true').toLowerCase());
 const GROUP_COMPANION_MAX_BATCH = Math.floor(getEnvNumber('GROUP_COMPANION_MAX_BATCH', 4, 1, 8));
 const GROUP_COMPANION_MAX_HISTORY = Math.floor(getEnvNumber('GROUP_COMPANION_MAX_HISTORY', 24, 8, 80));
 const GROUP_COMPANION_MAX_TURNS = Math.floor(getEnvNumber('GROUP_COMPANION_MAX_TURNS', 4, 1, 10));
@@ -4011,6 +4013,12 @@ function isKnownBotSentMessage(groupJid, messageId) {
     return botSentMessageIdsByChat.get(groupJid)?.has(cleanMessageId) || false;
 }
 
+function logGroupCompanion(message) {
+    if (GROUP_COMPANION_DEBUG) {
+        console.log(`[COMPANION] ${message}`);
+    }
+}
+
 function isGroupCompanionEnabledForGroup(groupJid) {
     if (!GROUP_COMPANION_ENABLED || !String(groupJid || '').endsWith('@g.us')) {
         return false;
@@ -4134,6 +4142,7 @@ function queueGroupCompanionObservation(sock, msg, remoteJid, senderJid, trimmed
     const entry = buildGroupCompanionEntry(sock, msg, remoteJid, senderJid, trimmedText);
     const recentBotThread = state.lastAnyBotMessageAt > 0 && (Date.now() - state.lastAnyBotMessageAt) <= GROUP_COMPANION_REPLY_WINDOW_MS;
     if (!trimmedText && kind !== 'sticker' && !entry.mentionsBot && !entry.quotesBot && !recentBotThread) {
+        logGroupCompanion(`omitido ${remoteJid} kind=${kind} motivo=sin_texto_ni_senal`);
         return false;
     }
     state.pending.push(entry);
@@ -4144,6 +4153,7 @@ function queueGroupCompanionObservation(sock, msg, remoteJid, senderJid, trimmed
     const delayMs = (entry.mentionsBot || entry.quotesBot || recentBotThread)
         ? GROUP_COMPANION_DIRECT_DELAY_MS
         : GROUP_COMPANION_DELAY_MS;
+    logGroupCompanion(`cola ${remoteJid} kind=${kind} text=${trimmedText ? 'si' : 'no'} pregunta=${entry.hasQuestion ? 'si' : 'no'} directa=${entry.mentionsBot || entry.quotesBot ? 'si' : 'no'} reciente=${recentBotThread ? 'si' : 'no'} delay=${delayMs}ms pendientes=${state.pending.length}`);
     scheduleGroupCompanionFlush(sock, remoteJid, delayMs);
     return true;
 }
@@ -4392,9 +4402,11 @@ async function flushGroupCompanionQueue(sock, remoteJid) {
     const selectedEntries = selectGroupCompanionEntries(pending);
     const context = analyzeGroupCompanionContext(selectedEntries, state, nowMs);
     if (!context.shouldReply) {
+        logGroupCompanion(`sin_respuesta ${remoteJid} motivo=contexto_no_requiere entries=${selectedEntries.length}`);
         return;
     }
     if ((context.isActiveThread || context.isRecentBotThread) && state.turns >= GROUP_COMPANION_MAX_TURNS && !context.hasDirectBotSignal && !context.hasQuestion) {
+        logGroupCompanion(`sin_respuesta ${remoteJid} motivo=max_turns turns=${state.turns}`);
         state.activeUntil = 0;
         state.activeParticipants = new Set();
         state.turns = 0;
@@ -4406,6 +4418,7 @@ async function flushGroupCompanionQueue(sock, remoteJid) {
         : GROUP_COMPANION_MIN_GAP_MS;
     const remainingGapMs = Math.max(0, minGap - (nowMs - state.lastBotReplyAt));
     if (remainingGapMs > 0) {
+        logGroupCompanion(`espera ${remoteJid} motivo=min_gap faltan=${remainingGapMs}ms entries=${pending.length}`);
         state.pending.unshift(...pending);
         scheduleGroupCompanionFlush(sock, remoteJid, remainingGapMs + getRandomDelay(1000, 4000));
         return;
@@ -4415,10 +4428,12 @@ async function flushGroupCompanionQueue(sock, remoteJid) {
     const aiReply = await generateGroupCompanionReply(selectedEntries, context, state);
     const replyText = ensureGroupCompanionMentions(aiReply || buildGroupCompanionFallbackReply(selectedEntries, context), context.mentions);
     if (!replyText) {
+        logGroupCompanion(`sin_respuesta ${remoteJid} motivo=respuesta_vacia entries=${selectedEntries.length}`);
         return;
     }
     const sendOptions = selectedEntries.length === 1 ? { quoted: selectedEntries[0].msg } : undefined;
     await sock.sendMessage(remoteJid, { text: replyText, mentions: context.mentions }, sendOptions);
+    logGroupCompanion(`enviado ${remoteJid} entries=${selectedEntries.length} menciones=${context.mentions.length} directa=${context.hasDirectBotSignal ? 'si' : 'no'} reciente=${context.isRecentBotThread ? 'si' : 'no'} debate=${context.isDebate ? 'si' : 'no'}`);
     if (!preReplyStickerSent) {
         await maybeSendCastorMoodSticker(sock, remoteJid, {
             chance: CASTOR_MOOD_STICKER_AFTER_REPLY_CHANCE,
@@ -8529,6 +8544,16 @@ function getMessageTimestampMs(msg) {
     return timestamp > 0 ? timestamp * 1000 : 0;
 }
 
+function getProcessedMessageKey(msg) {
+    const id = String(msg?.key?.id || '').trim();
+    if (!id) {
+        return '';
+    }
+    const remoteJid = String(msg?.key?.remoteJid || '').trim();
+    const participant = String(msg?.key?.participant || msg?.participant || '').trim();
+    return [remoteJid, participant, id].filter(Boolean).join('|');
+}
+
 async function processIncomingMessage(sock, msg, runId) {
     if (runId !== botRunId || !msg?.message) {
         return;
@@ -8544,24 +8569,33 @@ async function processIncomingMessage(sock, msg, runId) {
         return;
     }
 
-    const messageTime = getMessageTimestampMs(msg);
-    if (messageTime) {
-        const ageMs = Date.now() - messageTime;
-        if (ageMs > 2 * 60 * 1000) {
-            return;
-        }
-    }
-
     const remoteJid = msg.key.remoteJid;
     if (!remoteJid) {
         return;
+    }
+    const isGroupMessage = remoteJid.endsWith('@g.us');
+    const isCompanionGroup = isGroupMessage && isGroupCompanionEnabledForGroup(remoteJid);
+    const text = extractTextFromMessage(msg.message);
+    const trimmedText = text ? text.trim() : '';
+    const messageTime = getMessageTimestampMs(msg);
+    if (messageTime) {
+        const ageMs = Date.now() - messageTime;
+        const isTooOldForCompanion = !isCompanionGroup || trimmedText.startsWith('.') || ageMs > GROUP_COMPANION_STALE_MESSAGE_MS;
+        if (ageMs > 2 * 60 * 1000 && isTooOldForCompanion) {
+            if (isCompanionGroup) {
+                logGroupCompanion(`omitido ${remoteJid} motivo=mensaje_antiguo age=${ageMs}ms`);
+            }
+            return;
+        }
+        if (ageMs > 2 * 60 * 1000 && isCompanionGroup) {
+            logGroupCompanion(`acepta_retry_antiguo ${remoteJid} age=${ageMs}ms`);
+        }
     }
     const senderJid = msg.key.participant || msg.key.remoteJid;
     const senderDisplayName = sanitizeRichText(msg.pushName || msg.verifiedBizName || '', 120);
     if (senderDisplayName) {
         rememberParticipantName([senderJid], senderDisplayName);
     }
-    const text = extractTextFromMessage(msg.message);
     let senderIsAdmin = false;
     if (remoteJid.endsWith('@g.us')) {
         try {
@@ -8599,7 +8633,6 @@ async function processIncomingMessage(sock, msg, runId) {
         return;
     }
 
-    const trimmedText = text ? text.trim() : '';
     const malformedCommandMatch = getMalformedCommandMatch(trimmedText);
     if (malformedCommandMatch && !SAFE_DISABLE_COMMAND_REACT) {
         setTimeout(() => {
@@ -9039,10 +9072,21 @@ async function startBot() {
         }
         touchSocketActivity();
         for (const msg of messages) {
-            if (!msg?.key?.id || processedMessageIds.has(msg.key.id)) {
+            const processKey = getProcessedMessageKey(msg);
+            if (!processKey) {
                 continue;
             }
-            processedMessageIds.add(msg.key.id);
+            if (!msg?.message) {
+                const remoteJid = msg?.key?.remoteJid || '';
+                if (isGroupCompanionEnabledForGroup(remoteJid)) {
+                    logGroupCompanion(`mensaje_sin_contenido ${remoteJid} id=${msg?.key?.id || 'sin_id'} participante=${msg?.key?.participant || msg?.participant || 'desconocido'} esperando_retry`);
+                }
+                continue;
+            }
+            if (processedMessageIds.has(processKey)) {
+                continue;
+            }
+            processedMessageIds.add(processKey);
             incomingQueue.push(msg);
         }
         if (incomingBufferTimeout) {
