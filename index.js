@@ -66,6 +66,7 @@ const incomingQueue = [];
 let isProcessingIncoming = false;
 let incomingBufferTimeout = null;
 const groupCompanionStateByGroup = new Map();
+const botSentMessageIdsByChat = new Map();
 const remoteMoodStickerCache = new Map();
 const CASTOR_EMOJI = '🦫';
 const CASTOR_DEFAULT_IMAGE_URL = process.env.CASTOR_DEFAULT_IMAGE_URL || 'https://raw.githubusercontent.com/lazerboy404/bot-whats-inteligencia/main/bienvenida.png';
@@ -98,8 +99,10 @@ const PROACTIVE_GROUP_JIDS = (process.env.PROACTIVE_GROUP_JID || '').split(',').
 const GROUP_COMPANION_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.GROUP_COMPANION_ENABLED || 'true').toLowerCase());
 const GROUP_COMPANION_GROUP_JIDS = (process.env.GROUP_COMPANION_GROUP_JID || process.env.PROACTIVE_GROUP_JID || '').split(',').map(s => s.trim()).filter(Boolean);
 const GROUP_COMPANION_DELAY_MS = getEnvNumber('GROUP_COMPANION_DELAY_MS', SAFE_MODE ? 90000 : 45000, 8000, 10 * 60 * 1000);
+const GROUP_COMPANION_DIRECT_DELAY_MS = getEnvNumber('GROUP_COMPANION_DIRECT_DELAY_MS', SAFE_MODE ? 15000 : 8000, 3000, 2 * 60 * 1000);
 const GROUP_COMPANION_REPLY_WINDOW_MS = getEnvNumber('GROUP_COMPANION_REPLY_WINDOW_MS', 18 * 60 * 1000, 60 * 1000, 24 * 60 * 60 * 1000);
 const GROUP_COMPANION_MIN_GAP_MS = getEnvNumber('GROUP_COMPANION_MIN_GAP_MS', SAFE_MODE ? 4 * 60 * 1000 : 2 * 60 * 1000, 30 * 1000, 60 * 60 * 1000);
+const GROUP_COMPANION_DIRECT_MIN_GAP_MS = getEnvNumber('GROUP_COMPANION_DIRECT_MIN_GAP_MS', 15000, 5000, 10 * 60 * 1000);
 const GROUP_COMPANION_MAX_BATCH = Math.floor(getEnvNumber('GROUP_COMPANION_MAX_BATCH', 4, 1, 8));
 const GROUP_COMPANION_MAX_HISTORY = Math.floor(getEnvNumber('GROUP_COMPANION_MAX_HISTORY', 24, 8, 80));
 const GROUP_COMPANION_MAX_TURNS = Math.floor(getEnvNumber('GROUP_COMPANION_MAX_TURNS', 4, 1, 10));
@@ -140,8 +143,8 @@ const DEFAULT_CASTOR_MOOD_STICKER_URLS = [
     'https://tenor.com/es-419/view/monkey-chill-monkey-funny-monkey-monkey-relax-monkey-gangster-gif-7880154508083827354'
 ];
 const LONELY_CASTOR_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.LONELY_CASTOR_ENABLED || 'true').toLowerCase());
-const LONELY_CASTOR_INACTIVITY_MS = getEnvNumber('LONELY_CASTOR_INACTIVITY_MS', 24 * 60 * 60 * 1000, 30 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
-const LONELY_CASTOR_MIN_GAP_MS = getEnvNumber('LONELY_CASTOR_MIN_GAP_MS', 24 * 60 * 60 * 1000, 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
+const LONELY_CASTOR_INACTIVITY_MS = getEnvNumber('LONELY_CASTOR_INACTIVITY_MS', 48 * 60 * 60 * 1000, 30 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
+const LONELY_CASTOR_MIN_GAP_MS = getEnvNumber('LONELY_CASTOR_MIN_GAP_MS', 48 * 60 * 60 * 1000, 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
 const LONELY_CASTOR_AFTER_BOT_GAP_MS = getEnvNumber('LONELY_CASTOR_AFTER_BOT_GAP_MS', 45 * 60 * 1000, 5 * 60 * 1000, 24 * 60 * 60 * 1000);
 const LONELY_CASTOR_MAX_PER_DAY = Math.floor(getEnvNumber('LONELY_CASTOR_MAX_PER_DAY', 2, 1, 8));
 const LONELY_CASTOR_NIGHT_START_HOUR = Math.floor(getEnvNumber('LONELY_CASTOR_NIGHT_START_HOUR', 22, 0, 23));
@@ -3951,6 +3954,7 @@ function getGroupCompanionState(groupJid) {
             pending: [],
             timer: null,
             lastBotReplyAt: 0,
+            lastAnyBotMessageAt: 0,
             activeUntil: 0,
             activeParticipants: new Set(),
             turns: 0
@@ -3963,6 +3967,48 @@ function getGroupCompanionState(groupJid) {
         state.turns = 0;
     }
     return state;
+}
+
+function rememberBotSentMessage(groupJid, result) {
+    if (!String(groupJid || '').endsWith('@g.us')) {
+        return;
+    }
+    const nowMs = Date.now();
+    const state = getGroupCompanionState(groupJid);
+    state.lastAnyBotMessageAt = nowMs;
+
+    const messageId = String(result?.key?.id || '').trim();
+    if (!messageId) {
+        return;
+    }
+
+    let ids = botSentMessageIdsByChat.get(groupJid);
+    if (!ids) {
+        ids = new Map();
+        botSentMessageIdsByChat.set(groupJid, ids);
+    }
+    ids.set(messageId, nowMs);
+
+    const expiresBefore = nowMs - (24 * 60 * 60 * 1000);
+    for (const [id, at] of ids) {
+        if (at < expiresBefore) {
+            ids.delete(id);
+        }
+    }
+    if (ids.size > 500) {
+        const sortedIds = [...ids.entries()].sort((a, b) => a[1] - b[1]);
+        for (const [id] of sortedIds.slice(0, ids.size - 500)) {
+            ids.delete(id);
+        }
+    }
+}
+
+function isKnownBotSentMessage(groupJid, messageId) {
+    const cleanMessageId = String(messageId || '').trim();
+    if (!cleanMessageId) {
+        return false;
+    }
+    return botSentMessageIdsByChat.get(groupJid)?.has(cleanMessageId) || false;
 }
 
 function isGroupCompanionEnabledForGroup(groupJid) {
@@ -4031,11 +4077,18 @@ function messageMentionsBot(sock, message, text) {
     return new RegExp(`@${botNumber}(\\b|$)`).test(String(text || ''));
 }
 
-function messageQuotesBot(sock, message) {
+function messageQuotesBot(sock, message, remoteJid = '') {
     const botNumber = getBotNumber(sock);
-    if (!botNumber) return false;
     const quoted = getQuotedPayload(message);
-    return getNumberFromJid(quoted?.quotedParticipant || '') === botNumber;
+    if (isKnownBotSentMessage(remoteJid, quoted?.quotedStanzaId)) {
+        return true;
+    }
+    if (!botNumber) return false;
+    if (getNumberFromJid(quoted?.quotedParticipant || '') === botNumber) {
+        return true;
+    }
+    const quotedText = extractTextFromMessage(quoted?.quotedMessage || {});
+    return /\bCastor Bot\b|\bCastor\b|🦫/i.test(quotedText);
 }
 
 function buildGroupCompanionEntry(sock, msg, remoteJid, senderJid, trimmedText) {
@@ -4052,7 +4105,7 @@ function buildGroupCompanionEntry(sock, msg, remoteJid, senderJid, trimmedText) 
         kind,
         hasQuestion: isLikelyGroupQuestion(text),
         mentionsBot: messageMentionsBot(sock, msg.message, text),
-        quotesBot: messageQuotesBot(sock, msg.message),
+        quotesBot: messageQuotesBot(sock, msg.message, remoteJid),
         msg
     };
 }
@@ -4077,17 +4130,21 @@ function queueGroupCompanionObservation(sock, msg, remoteJid, senderJid, trimmed
         return false;
     }
     const kind = getMessageKindLabel(msg.message);
-    if (!trimmedText && kind !== 'sticker') {
-        return false;
-    }
     const state = getGroupCompanionState(remoteJid);
     const entry = buildGroupCompanionEntry(sock, msg, remoteJid, senderJid, trimmedText);
+    const recentBotThread = state.lastAnyBotMessageAt > 0 && (Date.now() - state.lastAnyBotMessageAt) <= GROUP_COMPANION_REPLY_WINDOW_MS;
+    if (!trimmedText && kind !== 'sticker' && !entry.mentionsBot && !entry.quotesBot && !recentBotThread) {
+        return false;
+    }
     state.pending.push(entry);
     state.history.push({ ...entry, msg: null });
     if (state.history.length > GROUP_COMPANION_MAX_HISTORY) {
         state.history = state.history.slice(-GROUP_COMPANION_MAX_HISTORY);
     }
-    scheduleGroupCompanionFlush(sock, remoteJid);
+    const delayMs = (entry.mentionsBot || entry.quotesBot || recentBotThread)
+        ? GROUP_COMPANION_DIRECT_DELAY_MS
+        : GROUP_COMPANION_DELAY_MS;
+    scheduleGroupCompanionFlush(sock, remoteJid, delayMs);
     return true;
 }
 
@@ -4121,10 +4178,13 @@ function analyzeGroupCompanionContext(entries, state, nowMs = Date.now()) {
     const hasText = entries.some((entry) => !!entry.text);
     const hasDirectBotSignal = entries.some((entry) => entry.mentionsBot || entry.quotesBot);
     const isActiveThread = state.activeUntil > nowMs && entries.some((entry) => state.activeParticipants.has(entry.senderJid) || entry.mentionsBot || entry.quotesBot);
+    const isRecentBotThread = state.lastAnyBotMessageAt > 0
+        && (nowMs - state.lastAnyBotMessageAt) <= GROUP_COMPANION_REPLY_WINDOW_MS
+        && entries.some((entry) => !!entry.text || !!entry.kind);
     const isDebate = senderJids.length >= 2 && entries.filter((entry) => entry.text).length >= 2;
     const hasSubstantiveText = entries.some((entry) => normalizeCompanionText(entry.text).length >= 8);
     const hasCasualGreeting = /\bhola|buenas|buenos dias|buenas tardes|buenas noches|como estan|que onda|que chingon|chingon|gracias\b/i.test(combinedText);
-    const shouldReply = hasDirectBotSignal || hasQuestion || hasSticker || isDebate || isActiveThread || hasSubstantiveText || hasCasualGreeting;
+    const shouldReply = hasDirectBotSignal || hasQuestion || hasSticker || isDebate || isActiveThread || isRecentBotThread || hasSubstantiveText || hasCasualGreeting;
     return {
         senderJids,
         mentions: senderJids.slice(0, GROUP_COMPANION_MAX_BATCH),
@@ -4133,6 +4193,7 @@ function analyzeGroupCompanionContext(entries, state, nowMs = Date.now()) {
         hasText,
         hasDirectBotSignal,
         isActiveThread,
+        isRecentBotThread,
         isDebate,
         hasCasualGreeting,
         shouldReply
@@ -4247,7 +4308,8 @@ async function generateGroupCompanionReply(entries, context, state) {
         context.isDebate ? 'hay posible debate entre usuarios' : '',
         context.hasSticker ? 'hay sticker' : '',
         context.hasCasualGreeting ? 'hay saludo o comentario casual' : '',
-        context.isActiveThread ? 'es continuacion de una charla reciente del bot' : ''
+        context.isActiveThread ? 'es continuacion de una charla reciente del bot' : '',
+        context.isRecentBotThread ? 'estan respondiendo a algo reciente que mando el bot' : ''
     ].filter(Boolean).join('; ') || 'mensaje del grupo sin respuesta';
 
     const systemPrompt = [
@@ -4332,14 +4394,16 @@ async function flushGroupCompanionQueue(sock, remoteJid) {
     if (!context.shouldReply) {
         return;
     }
-    if (context.isActiveThread && state.turns >= GROUP_COMPANION_MAX_TURNS && !context.hasDirectBotSignal && !context.hasQuestion) {
+    if ((context.isActiveThread || context.isRecentBotThread) && state.turns >= GROUP_COMPANION_MAX_TURNS && !context.hasDirectBotSignal && !context.hasQuestion) {
         state.activeUntil = 0;
         state.activeParticipants = new Set();
         state.turns = 0;
         return;
     }
 
-    const minGap = context.hasDirectBotSignal ? Math.min(30000, GROUP_COMPANION_MIN_GAP_MS) : GROUP_COMPANION_MIN_GAP_MS;
+    const minGap = (context.hasDirectBotSignal || context.isRecentBotThread)
+        ? Math.min(GROUP_COMPANION_DIRECT_MIN_GAP_MS, GROUP_COMPANION_MIN_GAP_MS)
+        : GROUP_COMPANION_MIN_GAP_MS;
     const remainingGapMs = Math.max(0, minGap - (nowMs - state.lastBotReplyAt));
     if (remainingGapMs > 0) {
         state.pending.unshift(...pending);
@@ -8551,8 +8615,15 @@ async function processIncomingMessage(sock, msg, runId) {
         }
     }
 
-    if (remoteJid.endsWith('@g.us') && !trimmedText.startsWith('.') && (trimmedText || getMessageKindLabel(msg.message) === 'sticker')) {
-        queueGroupCompanionObservation(sock, msg, remoteJid, senderJid, trimmedText);
+    if (remoteJid.endsWith('@g.us') && !trimmedText.startsWith('.')) {
+        const messageKind = getMessageKindLabel(msg.message);
+        const hasDirectBotSignal = messageMentionsBot(sock, msg.message, trimmedText) || messageQuotesBot(sock, msg.message, remoteJid);
+        const groupCompanionState = isGroupCompanionEnabledForGroup(remoteJid) ? getGroupCompanionState(remoteJid) : null;
+        const isRecentBotThread = groupCompanionState?.lastAnyBotMessageAt > 0
+            && (Date.now() - groupCompanionState.lastAnyBotMessageAt) <= GROUP_COMPANION_REPLY_WINDOW_MS;
+        if (trimmedText || messageKind === 'sticker' || hasDirectBotSignal || isRecentBotThread) {
+            queueGroupCompanionObservation(sock, msg, remoteJid, senderJid, trimmedText);
+        }
     }
 
     if (!trimmedText || !trimmedText.startsWith('.')) {
@@ -8796,6 +8867,7 @@ async function startBot() {
                 const result = await withTimeout(originalSendMessage(jid, normalizedContent, options), SEND_ACTION_TIMEOUT_MS, 'send_message');
                 touchSocketActivity();
                 lastSentAtByJid.set(jid, Date.now());
+                rememberBotSentMessage(jid, result);
                 return result;
             };
             const queuedResult = globalSendQueue.catch(() => null).then(task);
