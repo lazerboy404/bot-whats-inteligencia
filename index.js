@@ -154,7 +154,9 @@ const LONELY_CASTOR_NIGHT_START_MINUTE = Math.floor(getEnvNumber('LONELY_CASTOR_
 const LONELY_CASTOR_NIGHT_END_HOUR = Math.floor(getEnvNumber('LONELY_CASTOR_NIGHT_END_HOUR', 9, 0, 23));
 const LONELY_CASTOR_NIGHT_END_MINUTE = Math.floor(getEnvNumber('LONELY_CASTOR_NIGHT_END_MINUTE', 30, 0, 59));
 const CASTOR_MOOD_STICKERS_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.CASTOR_MOOD_STICKERS_ENABLED || 'true').toLowerCase());
-const CASTOR_MOOD_STICKER_URLS = (process.env.CASTOR_MOOD_STICKER_URLS || DEFAULT_CASTOR_MOOD_STICKER_URLS.join(','))
+const CASTOR_MOOD_STICKER_LOCAL_DIR = String(process.env.CASTOR_MOOD_STICKER_LOCAL_DIR || 'random').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+const CASTOR_MOOD_STICKER_REMOTE_FALLBACK = ['1', 'true', 'yes', 'on'].includes(String(process.env.CASTOR_MOOD_STICKER_REMOTE_FALLBACK || 'false').toLowerCase());
+const CASTOR_MOOD_STICKER_URLS = (process.env.CASTOR_MOOD_STICKER_URLS || (CASTOR_MOOD_STICKER_REMOTE_FALLBACK ? DEFAULT_CASTOR_MOOD_STICKER_URLS.join(',') : ''))
     .split(',')
     .map(s => s.trim())
     .filter(Boolean);
@@ -2511,6 +2513,42 @@ function isSupportedRemoteStickerVideoUrl(value) {
     return /\.(?:mp4|webm)(?:[?#].*)?$/i.test(String(value || '').trim());
 }
 
+function isSafeLocalStickerSource(value) {
+    return /^(?:[\w.-]+\/)?[\w.-]+\.webp$/i.test(String(value || '').trim().replace(/\\/g, '/'));
+}
+
+function resolveLocalStickerPath(source, fallbackDir = 'stickers') {
+    const cleanSource = String(source || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!isSafeLocalStickerSource(cleanSource)) {
+        return '';
+    }
+    const relativePath = cleanSource.includes('/')
+        ? cleanSource
+        : `${fallbackDir}/${cleanSource}`;
+    const cwd = path.resolve(process.cwd());
+    const resolved = path.resolve(cwd, relativePath);
+    return resolved.startsWith(`${cwd}${path.sep}`) ? resolved : '';
+}
+
+function getLocalMoodStickerSources() {
+    const localDir = CASTOR_MOOD_STICKER_LOCAL_DIR;
+    if (!/^[\w.-]+(?:\/[\w.-]+)*$/i.test(localDir)) {
+        return [];
+    }
+    const probePath = resolveLocalStickerPath(`${localDir}/placeholder.webp`);
+    const dirPath = probePath ? path.dirname(probePath) : '';
+    if (!dirPath || !fs.existsSync(dirPath)) {
+        return [];
+    }
+    try {
+        return fs.readdirSync(dirPath)
+            .filter((fileName) => /^[\w.-]+\.webp$/i.test(fileName))
+            .map((fileName) => `${localDir}/${fileName}`);
+    } catch (error) {
+        return [];
+    }
+}
+
 function getTenorMediaKey(value) {
     const match = String(value || '').match(/media\d*\.tenor\.com\/(?:m\/)?([^/]+)/i);
     if (!match) {
@@ -2549,8 +2587,11 @@ function getPreferredRemoteStickerImages(images, videoUrl = '') {
 }
 
 function getCastorMoodStickerSources() {
-    return uniqStrings([...CASTOR_MOOD_STICKER_URLS, ...GROUP_COMPANION_STICKERS])
-        .filter((source) => isHttpUrl(source) || /^[\w.-]+\.webp$/i.test(source));
+    return uniqStrings([
+        ...getLocalMoodStickerSources(),
+        ...GROUP_COMPANION_STICKERS,
+        ...CASTOR_MOOD_STICKER_URLS
+    ]).filter((source) => isHttpUrl(source) || isSafeLocalStickerSource(source));
 }
 
 async function fetchBufferWithLimit(url, timeoutMs = 15000) {
@@ -2804,8 +2845,8 @@ async function sendCastorMoodStickerSource(sock, remoteJid, source) {
         return true;
     }
 
-    if (/^[\w.-]+\.webp$/i.test(source)) {
-        const stickerPath = path.join(process.cwd(), 'stickers', source);
+    if (isSafeLocalStickerSource(source)) {
+        const stickerPath = resolveLocalStickerPath(source);
         if (!fs.existsSync(stickerPath)) {
             return false;
         }
