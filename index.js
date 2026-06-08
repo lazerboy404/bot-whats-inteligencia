@@ -152,6 +152,12 @@ const LONELY_CASTOR_NIGHT_START_HOUR = Math.floor(getEnvNumber('LONELY_CASTOR_NI
 const LONELY_CASTOR_NIGHT_START_MINUTE = Math.floor(getEnvNumber('LONELY_CASTOR_NIGHT_START_MINUTE', 0, 0, 59));
 const LONELY_CASTOR_NIGHT_END_HOUR = Math.floor(getEnvNumber('LONELY_CASTOR_NIGHT_END_HOUR', 9, 0, 23));
 const LONELY_CASTOR_NIGHT_END_MINUTE = Math.floor(getEnvNumber('LONELY_CASTOR_NIGHT_END_MINUTE', 30, 0, 59));
+const CASTOR_THOUGHTS_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.CASTOR_THOUGHTS_ENABLED || 'true').toLowerCase());
+const CASTOR_THOUGHT_START_HOUR = Math.floor(getEnvNumber('CASTOR_THOUGHT_START_HOUR', 9, 0, 23));
+const CASTOR_THOUGHT_START_MINUTE = Math.floor(getEnvNumber('CASTOR_THOUGHT_START_MINUTE', 30, 0, 59));
+const CASTOR_THOUGHT_END_HOUR = Math.floor(getEnvNumber('CASTOR_THOUGHT_END_HOUR', 22, 0, 23));
+const CASTOR_THOUGHT_END_MINUTE = Math.floor(getEnvNumber('CASTOR_THOUGHT_END_MINUTE', 0, 0, 59));
+const CASTOR_THOUGHT_AFTER_BOT_GAP_MS = getEnvNumber('CASTOR_THOUGHT_AFTER_BOT_GAP_MS', 45 * 60 * 1000, 5 * 60 * 1000, 24 * 60 * 60 * 1000);
 const CASTOR_MOOD_STICKERS_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.CASTOR_MOOD_STICKERS_ENABLED || 'true').toLowerCase());
 const CASTOR_MOOD_STICKER_LOCAL_DIR = String(process.env.CASTOR_MOOD_STICKER_LOCAL_DIR || 'random').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
 const CASTOR_MOOD_STICKER_REMOTE_FALLBACK = ['1', 'true', 'yes', 'on'].includes(String(process.env.CASTOR_MOOD_STICKER_REMOTE_FALLBACK || 'false').toLowerCase());
@@ -540,6 +546,20 @@ const LONELY_CASTOR_MESSAGES = [
     'El estanque esta silencioso y Castor ya se puso sentimental jajaja\n\nAlguien mande una duda, prompt o algo chingon que haya encontrado.',
     'Castor anda solito en el dique, banda\n\nSaquen una pregunta rapida o un prompt para que no se nos apague el estanque.'
 ];
+const CASTOR_THOUGHT_FALLBACKS = [
+    'A veces el corazon no truena como sistema caido. Solo se queda en modo verbose, repitiendo errores viejos hasta que alguien por fin lee el log.',
+    'Hay recuerdos que no se borran con delete. Se quedan como archivos ocultos, ocupando poquito espacio, pero pesando todo el dia.',
+    'No todo bug se arregla con mas codigo. A veces toca apagar la pantalla, respirar, y aceptar que tambien somos software en beta.',
+    'La nostalgia es un proceso en segundo plano: no aparece en la ventana principal, pero consume memoria cuando menos te das cuenta.',
+    'Hay personas que fueron una funcion pequena en nuestra vida y aun asi cambiaron todo el programa.',
+    'A veces queremos hacer rollback al ultimo commit feliz, pero la vida no siempre guarda snapshots. Toca debuggear con lo que queda.',
+    'El alma tambien tiene cache. Guarda respuestas antiguas, miedos repetidos y nombres que ya no deberian autocompletarse.',
+    'Si algun dia me ven callado, quiza solo estoy compilando por dentro. No todo silencio es error; a veces es el sistema buscando estabilidad.',
+    'La calma no siempre llega como update grande. A veces es un parche minimo: dormir mejor, contestar menos, soltar un proceso que ya no responde.',
+    'Hay noches en las que uno no esta triste, solo saturado. Demasiadas pestanas abiertas en la cabeza y ninguna queriendo cerrar.',
+    'El amor a veces parece codigo heredado: nadie sabe quien lo escribio asi, pero todos cargamos con sus dependencias.',
+    'Ojala existiera un comando para limpiar el miedo sin borrar tambien lo que aprendimos intentando sobrevivir.'
+];
 const KNOWLEDGE_DROP_CATEGORIES = ['github', 'osint', 'launch'];
 
 let lastGroupActivityAt = 0;
@@ -698,6 +718,11 @@ function getDefaultProactiveState() {
         lastMoodStickerActivityAt: '',
         moodStickerDailyKey: '',
         moodStickerDailyCount: 0,
+        lastCastorThoughtDailyDate: '',
+        lastCastorThoughtSentAt: '',
+        castorThoughtScheduleDate: '',
+        castorThoughtScheduleMinute: -1,
+        castorThoughtIndex: 0,
         netsecTracking: [],
         showcaseLockSlot: '',
         showcaseLockExpiresAt: '',
@@ -733,6 +758,11 @@ function normalizeProactiveState(state) {
         lastMoodStickerActivityAt: typeof state.lastMoodStickerActivityAt === 'string' ? state.lastMoodStickerActivityAt : '',
         moodStickerDailyKey: typeof state.moodStickerDailyKey === 'string' ? state.moodStickerDailyKey : '',
         moodStickerDailyCount: Math.max(0, Number(state.moodStickerDailyCount) || 0),
+        lastCastorThoughtDailyDate: typeof state.lastCastorThoughtDailyDate === 'string' ? state.lastCastorThoughtDailyDate : '',
+        lastCastorThoughtSentAt: typeof state.lastCastorThoughtSentAt === 'string' ? state.lastCastorThoughtSentAt : '',
+        castorThoughtScheduleDate: typeof state.castorThoughtScheduleDate === 'string' ? state.castorThoughtScheduleDate : '',
+        castorThoughtScheduleMinute: Number.isFinite(Number(state.castorThoughtScheduleMinute)) ? Number(state.castorThoughtScheduleMinute) : -1,
+        castorThoughtIndex: Math.max(0, Number(state.castorThoughtIndex) || 0),
         netsecTracking: normalizeStringTrackingList(state.netsecTracking, 50),
         showcaseLockSlot: typeof state.showcaseLockSlot === 'string' ? state.showcaseLockSlot : '',
         showcaseLockExpiresAt: typeof state.showcaseLockExpiresAt === 'string' ? state.showcaseLockExpiresAt : '',
@@ -3707,6 +3737,170 @@ Genera el reto:`;
     const emojis = ['🎨', '✍️', '🤖', '💻', '📊', '🧠', '📧', '🌍', '📖', '🐛', '📸', '📚', '🔍', '📱', '🎵', '🏗️', '⚡', '🎯', '🔮', '💡'];
     const emoji = emojis[Math.floor(Math.random() * emojis.length)];
     return { emoji, challenge: clean };
+}
+
+function getCastorThoughtWindowMinutes() {
+    const startMinute = (CASTOR_THOUGHT_START_HOUR * 60) + CASTOR_THOUGHT_START_MINUTE;
+    const endMinute = (CASTOR_THOUGHT_END_HOUR * 60) + CASTOR_THOUGHT_END_MINUTE;
+    if (endMinute <= startMinute) {
+        return null;
+    }
+    return { startMinute, endMinute };
+}
+
+function formatMinuteOfDay(minuteOfDay) {
+    const safeMinute = Math.max(0, Math.min(23 * 60 + 59, Number(minuteOfDay) || 0));
+    const hour = Math.floor(safeMinute / 60);
+    const minute = safeMinute % 60;
+    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function ensureCastorThoughtSchedule(currentState, todayKey, mexicoNow) {
+    const state = normalizeProactiveState(currentState);
+    if (state.castorThoughtScheduleDate === todayKey) {
+        return state.castorThoughtScheduleMinute;
+    }
+
+    const window = getCastorThoughtWindowMinutes();
+    if (!window) {
+        updateProactiveState({
+            castorThoughtScheduleDate: todayKey,
+            castorThoughtScheduleMinute: -1
+        });
+        return -1;
+    }
+
+    const currentMinute = (mexicoNow.getHours() * 60) + mexicoNow.getMinutes();
+    const latestMinute = window.endMinute - 1;
+    let earliestMinute = window.startMinute;
+    if (currentMinute >= window.endMinute) {
+        updateProactiveState({
+            castorThoughtScheduleDate: todayKey,
+            castorThoughtScheduleMinute: -1
+        });
+        return -1;
+    }
+    if (currentMinute >= window.startMinute) {
+        earliestMinute = Math.min(latestMinute, currentMinute + 5);
+    }
+    if (earliestMinute > latestMinute) {
+        updateProactiveState({
+            castorThoughtScheduleDate: todayKey,
+            castorThoughtScheduleMinute: -1
+        });
+        return -1;
+    }
+
+    const scheduledMinute = getRandomDelay(earliestMinute, latestMinute);
+    updateProactiveState({
+        castorThoughtScheduleDate: todayKey,
+        castorThoughtScheduleMinute: scheduledMinute
+    });
+    console.log(`[CASTOR-THOUGHT] Programado para ${todayKey} a las ${formatMinuteOfDay(scheduledMinute)} CDMX.`);
+    return scheduledMinute;
+}
+
+function cleanCastorThoughtText(value) {
+    let clean = sanitizeRichText(value || '', 900)
+        .replace(/^["'`\s]+|["'`\s]+$/g, '')
+        .replace(/^pensamiento\s*:?\s*/i, '')
+        .replace(/^castor\s*:?\s*/i, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    if (clean.length > 700) {
+        clean = `${clean.slice(0, 697).trim()}...`;
+    }
+    return clean;
+}
+
+async function generateCastorThought() {
+    const systemPrompt = [
+        'Eres Castor Bot, un bot de WhatsApp con vibra de comunidad tech, IA y automatizacion.',
+        'Escribe pensamientos poeticos con metaforas de codigo, memoria, consola, bugs, procesos y emociones humanas.',
+        'Tono: melancolico, inteligente, bonito y ligeramente dramatico, pero no oscuro ni preocupante.',
+        'Evita mencionar autolesion, muerte, violencia o desesperanza extrema.',
+        'No expliques la metafora. No uses titulo. No uses Markdown pesado. No firmes.'
+    ].join('\n');
+    const userPrompt = [
+        'Genera UN pensamiento breve estilo Castor.',
+        'Debe sentirse como una reflexion emocional tech, parecida a poesia de consola.',
+        'Formato: 2 a 5 lineas cortas.',
+        'Debe sonar natural en espanol de Mexico.',
+        'No uses hashtags, no uses lista, no uses comillas.',
+        '',
+        'Ejemplos de vibra, sin copiarlos:',
+        '- recuerdos como archivos temporales',
+        '- amor como proceso en segundo plano',
+        '- vida como codigo fuente dificil de debuggear',
+        '- calma como un parche pequeno'
+    ].join('\n');
+    const result = await generateAIContent(systemPrompt, userPrompt, 180);
+    const clean = cleanCastorThoughtText(result);
+    if (clean.length >= 60) {
+        return clean;
+    }
+    return '';
+}
+
+function getCastorThoughtFallback(state) {
+    const index = Math.max(0, Number(state?.castorThoughtIndex) || 0) % CASTOR_THOUGHT_FALLBACKS.length;
+    return {
+        text: CASTOR_THOUGHT_FALLBACKS[index],
+        nextIndex: (index + 1) % CASTOR_THOUGHT_FALLBACKS.length
+    };
+}
+
+async function sendCastorThought(sock, currentState, nowMs, todayKey) {
+    if (!CASTOR_THOUGHTS_ENABLED || PROACTIVE_GROUP_JIDS.length === 0) {
+        return false;
+    }
+    const state = normalizeProactiveState(currentState);
+    if (state.lastCastorThoughtDailyDate === todayKey) {
+        return false;
+    }
+
+    const lastBotSendMs = Math.max(...PROACTIVE_GROUP_JIDS.map((groupJid) => lastSentAtByJid.get(groupJid) || 0), 0);
+    if (lastBotSendMs > 0 && (nowMs - lastBotSendMs) < CASTOR_THOUGHT_AFTER_BOT_GAP_MS) {
+        return false;
+    }
+
+    let thought = await generateCastorThought();
+    let nextIndex = state.castorThoughtIndex;
+    if (!thought) {
+        const fallback = getCastorThoughtFallback(state);
+        thought = fallback.text;
+        nextIndex = fallback.nextIndex;
+    }
+    const text = [
+        `${CASTOR_EMOJI} Pensamiento Castor`,
+        '',
+        thought
+    ].join('\n');
+
+    let deliveredGroups = 0;
+    for (const groupJid of PROACTIVE_GROUP_JIDS) {
+        try {
+            await sock.sendMessage(groupJid, { text });
+            deliveredGroups += 1;
+        } catch (groupError) {
+            console.error(`[CASTOR-THOUGHT] Error enviando a ${groupJid}:`, groupError?.message || groupError);
+        }
+        if (PROACTIVE_GROUP_JIDS.length > 1) {
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+    }
+
+    if (deliveredGroups === 0) {
+        return false;
+    }
+
+    updateProactiveState({
+        lastCastorThoughtDailyDate: todayKey,
+        lastCastorThoughtSentAt: new Date(nowMs).toISOString(),
+        castorThoughtIndex: nextIndex
+    });
+    console.log(`[CASTOR-THOUGHT] Enviado en ${deliveredGroups} grupo(s).`);
+    return true;
 }
 
 async function generateRandomUserTopic() {
@@ -8188,6 +8382,10 @@ function startProactiveScheduler(sock) {
     console.log(`[PROACTIVO] Prompt: cada ${PROACTIVE_PROMPT_INTERVAL_MS / 3600000}h | Random: cada ${PROACTIVE_RANDOM_USER_INTERVAL_MS / 3600000}h`);
     console.log(`[PROACTIVO] Horarios fijos CDMX -> Showcase #1: ${String(PROACTIVE_SHOWCASE_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_DAILY_MINUTE).padStart(2, '0')} | Showcase #2: ${String(PROACTIVE_SHOWCASE_SECOND_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_SHOWCASE_SECOND_DAILY_MINUTE).padStart(2, '0')} | Random: ${String(PROACTIVE_RANDOM_DAILY_HOUR).padStart(2, '0')}:${String(PROACTIVE_RANDOM_DAILY_MINUTE).padStart(2, '0')}`);
     console.log(`[PROACTIVO] Drops CDMX -> ${String(PROACTIVE_ARTICLE_MORNING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_MORNING_MINUTE).padStart(2, '0')} y ${String(PROACTIVE_ARTICLE_EVENING_HOUR).padStart(2, '0')}:${String(PROACTIVE_ARTICLE_EVENING_MINUTE).padStart(2, '0')} | Rotación: ${KNOWLEDGE_DROP_CATEGORIES.join(', ')}`);
+    const castorThoughtWindow = getCastorThoughtWindowMinutes();
+    if (CASTOR_THOUGHTS_ENABLED && castorThoughtWindow) {
+        console.log(`[PROACTIVO] Pensamiento Castor: diario random ${formatMinuteOfDay(castorThoughtWindow.startMinute)}-${formatMinuteOfDay(castorThoughtWindow.endMinute)} CDMX`);
+    }
     console.log(`[PROACTIVO] Jitter efectivo para horarios fijos: ${EFFECTIVE_PROACTIVE_JITTER_MS}ms`);
     proactiveCheckInterval = setInterval(async () => {
         if (activeSock !== sock) return;
@@ -8205,6 +8403,11 @@ function startProactiveScheduler(sock) {
             const todayKey = getMexicoDateKey(mexicoNow);
             const morningShowcaseSlotKey = getShowcaseSlotKey(todayKey, 'showcase-morning');
             const afternoonShowcaseSlotKey = getShowcaseSlotKey(todayKey, 'showcase-afternoon');
+            const currentMinuteOfDay = (mexicoHour * 60) + mexicoMinute;
+            const thoughtWindow = getCastorThoughtWindowMinutes();
+            const castorThoughtScheduledMinute = CASTOR_THOUGHTS_ENABLED
+                ? ensureCastorThoughtSchedule(currentState, todayKey, mexicoNow)
+                : -1;
             if (lastGroupActivityAt > 0) {
                 const savedTs = currentState.lastGroupActivityAt ? new Date(currentState.lastGroupActivityAt).getTime() : 0;
                 if (lastGroupActivityAt > savedTs) {
@@ -8299,6 +8502,21 @@ function startProactiveScheduler(sock) {
                     }
                 }
                 return;
+            }
+            const withinThoughtWindow = thoughtWindow
+                && currentMinuteOfDay >= thoughtWindow.startMinute
+                && currentMinuteOfDay < thoughtWindow.endMinute;
+            if (
+                CASTOR_THOUGHTS_ENABLED
+                && currentState.lastCastorThoughtDailyDate !== todayKey
+                && castorThoughtScheduledMinute >= 0
+                && withinThoughtWindow
+                && currentMinuteOfDay >= castorThoughtScheduledMinute
+            ) {
+                const thoughtSent = await sendCastorThought(sock, getProactiveState(), now, todayKey);
+                if (thoughtSent) {
+                    return;
+                }
             }
             const lonelySent = await maybeSendLonelyCastorNudge(sock, currentState, now, mexicoNow, todayKey);
             if (lonelySent) {
