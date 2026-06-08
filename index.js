@@ -108,7 +108,7 @@ const GROUP_COMPANION_DEBUG = !['0', 'false', 'no', 'off'].includes(String(proce
 const GROUP_COMPANION_MAX_BATCH = Math.floor(getEnvNumber('GROUP_COMPANION_MAX_BATCH', 4, 1, 8));
 const GROUP_COMPANION_MAX_HISTORY = Math.floor(getEnvNumber('GROUP_COMPANION_MAX_HISTORY', 24, 8, 80));
 const GROUP_COMPANION_MAX_TURNS = Math.floor(getEnvNumber('GROUP_COMPANION_MAX_TURNS', 4, 1, 10));
-const GROUP_COMPANION_STICKER_CHANCE = getEnvNumber('GROUP_COMPANION_STICKER_CHANCE', 0.5, 0, 1);
+const GROUP_COMPANION_STICKER_CHANCE = getEnvNumber('GROUP_COMPANION_STICKER_CHANCE', 0.8, 0, 1);
 const DEFAULT_CASTOR_MOOD_STICKER_URLS = [
     'https://tenor.com/es-419/view/%D1%81%D0%BE%D0%B1%D0%B0%D0%BA%D0%B0-gif-10104501972735095572',
     'https://tenor.com/es-419/view/grrr-angry-angry-dog-growling-growl-gif-16345017163953633442',
@@ -159,13 +159,14 @@ const CASTOR_MOOD_STICKER_URLS = (process.env.CASTOR_MOOD_STICKER_URLS || (CASTO
     .split(',')
     .map(s => s.trim())
     .filter(Boolean);
-const CASTOR_MOOD_STICKER_AFTER_REPLY_CHANCE = getEnvNumber('CASTOR_MOOD_STICKER_AFTER_REPLY_CHANCE', 0.75, 0, 1);
-const CASTOR_MOOD_STICKER_AFTER_LONELY_CHANCE = getEnvNumber('CASTOR_MOOD_STICKER_AFTER_LONELY_CHANCE', 0.45, 0, 1);
+const CASTOR_MOOD_STICKER_AFTER_REPLY_CHANCE = getEnvNumber('CASTOR_MOOD_STICKER_AFTER_REPLY_CHANCE', 0.8, 0, 1);
+const CASTOR_MOOD_STICKER_AFTER_LONELY_CHANCE = getEnvNumber('CASTOR_MOOD_STICKER_AFTER_LONELY_CHANCE', 0.8, 0, 1);
 const CASTOR_MOOD_STICKER_MIN_GAP_MS = getEnvNumber('CASTOR_MOOD_STICKER_MIN_GAP_MS', 30 * 60 * 1000, 60 * 1000, 24 * 60 * 60 * 1000);
 const CASTOR_MOOD_STICKER_MAX_PER_DAY = Math.floor(getEnvNumber('CASTOR_MOOD_STICKER_MAX_PER_DAY', 4, 1, 20));
 const CASTOR_MOOD_STICKER_RANDOM_ENABLED = !['0', 'false', 'no', 'off'].includes(String(process.env.CASTOR_MOOD_STICKER_RANDOM_ENABLED || 'true').toLowerCase());
 const CASTOR_MOOD_STICKER_RANDOM_INACTIVITY_MS = getEnvNumber('CASTOR_MOOD_STICKER_RANDOM_INACTIVITY_MS', 6 * 60 * 60 * 1000, 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
 const CASTOR_MOOD_STICKER_RANDOM_MIN_GAP_MS = getEnvNumber('CASTOR_MOOD_STICKER_RANDOM_MIN_GAP_MS', 12 * 60 * 60 * 1000, 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
+const CASTOR_LOCAL_STICKER_MAX_BYTES = Math.floor(getEnvNumber('CASTOR_LOCAL_STICKER_MAX_BYTES', 500 * 1024, 64 * 1024, 5 * 1024 * 1024));
 const CASTOR_REMOTE_STICKER_CACHE_MS = getEnvNumber('CASTOR_REMOTE_STICKER_CACHE_MS', 24 * 60 * 60 * 1000, 60 * 1000, 7 * 24 * 60 * 60 * 1000);
 const CASTOR_REMOTE_STICKER_MAX_BYTES = Math.floor(getEnvNumber('CASTOR_REMOTE_STICKER_MAX_BYTES', 5 * 1024 * 1024, 128 * 1024, 20 * 1024 * 1024));
 const CASTOR_ANIMATED_STICKER_MAX_BYTES = Math.floor(getEnvNumber('CASTOR_ANIMATED_STICKER_MAX_BYTES', 256 * 1024, 64 * 1024, 1024 * 1024));
@@ -2542,6 +2543,13 @@ function getLocalMoodStickerSources() {
     try {
         return fs.readdirSync(dirPath)
             .filter((fileName) => /^[\w.-]+\.webp$/i.test(fileName))
+            .filter((fileName) => {
+                try {
+                    return fs.statSync(path.join(dirPath, fileName)).size <= CASTOR_LOCAL_STICKER_MAX_BYTES;
+                } catch (error) {
+                    return false;
+                }
+            })
             .map((fileName) => `${localDir}/${fileName}`);
     } catch (error) {
         return [];
